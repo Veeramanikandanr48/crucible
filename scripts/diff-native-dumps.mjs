@@ -22,7 +22,12 @@ function readDump(directory) {
   return calls;
 }
 
+// Timing fields differ on every run and say nothing about the kernel's result.
+// The dispatch budget splits a trace by measured speed, so tile sizes and dispatch counts follow timing too.
+const TIMING_PATH = /seconds|millis|duration|elapsed|timing|dispatchCount|samplesPerDispatch|tilePixels|tileCount/i;
+
 function collectLeaves(value, path, leaves) {
+  if (TIMING_PATH.test(path)) return;
   if (value === null || typeof value !== 'object') {
     leaves.set(path, value);
     return;
