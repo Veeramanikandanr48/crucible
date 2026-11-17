@@ -114,17 +114,27 @@ export function capabilityTopicNames(capabilities, outlineSources) {
   return names;
 }
 
-/** The index with no topic, or the detail of one topic. */
-export function answerCapabilities(capabilities, topic, outlineSources) {
-  const names = capabilityTopicNames(capabilities, outlineSources);
-  if (topic === undefined) {
-    return {
-      format: capabilities.scene.format, schemaVersion: capabilities.scene.schemaVersion,
-      phase: capabilities.phase, availableIn: capabilities.availableIn,
-      how: 'Call scene_capabilities with topic set to a name below. Tools list common fields; schemas names the full field list of a recipe part (meshEdit and meshStack also take <name>.<op>, geometries takes geometries.<type>). examples.<tool> is one complete call.',
-      topics: names,
-    };
+/** The most topics one scene_capabilities call may list. */
+export const MAX_TOPICS_PER_CALL = 8;
+
+/** Thrown when a topic name matches nothing; the note names the entry and what it may have meant. */
+class UnknownTopicError extends Error {
+  constructor(note, allNames) {
+    super(`${note} Topics: ${allNames.join(', ')}.`);
+    this.note = note;
   }
+}
+
+function indexAnswer(capabilities, names) {
+  return {
+    format: capabilities.scene.format, schemaVersion: capabilities.scene.schemaVersion,
+    phase: capabilities.phase, availableIn: capabilities.availableIn,
+    how: `Call scene_capabilities with topic set to a name below, or to a list of up to ${MAX_TOPICS_PER_CALL} names to read several at once. Tools list common fields; schemas names the full field list of a recipe part (meshEdit and meshStack also take <name>.<op>, geometries takes geometries.<type>). examples.<tool> is one complete call.`,
+    topics: names,
+  };
+}
+
+function answerOneTopic(capabilities, topic, names, outlineSources) {
   const allNames = [...names.scene, ...names.runtime, ...names.schemas];
   const parts = topic.split('.');
   // The index groups topics under scene, runtime and schemas; a caller may repeat the group as a prefix (schemas.geometries).
@@ -139,7 +149,7 @@ export function answerCapabilities(capabilities, topic, outlineSources) {
   if (!found) {
     const suggestions = suggestTopics(requestedName, allNames);
     const didYouMean = suggestions.length ? ` Did you mean ${suggestions.join(' or ')}?` : '';
-    throw new Error(`Unknown topic ${topic}.${didYouMean} Topics: ${allNames.join(', ')}.`);
+    throw new UnknownTopicError(`Unknown topic ${topic}.${didYouMean}`, allNames);
   }
   const answeredTopic = [name, branchName].filter(Boolean).join('.');
   if (source) return { topic: answeredTopic, ...(notes === undefined ? {} : { notes }), fields: outlineAnswer(name, branchName, source) };
@@ -147,4 +157,41 @@ export function answerCapabilities(capabilities, topic, outlineSources) {
   const entry = notes !== null && typeof notes === 'object' && branchName !== undefined && Object.hasOwn(notes, branchName);
   if (entry) return { topic: answeredTopic, value: notes[branchName] };
   return { topic: answeredTopic, value: notes ?? runtime };
+}
+
+function checkTopicList(topics) {
+  if (topics.length === 0 || topics.length > MAX_TOPICS_PER_CALL) {
+    throw new Error(`topic list has ${topics.length} entries; pass 1 to ${MAX_TOPICS_PER_CALL} names, or one string.`);
+  }
+  const repeated = topics.filter((topic, position) => topics.indexOf(topic) !== position);
+  if (repeated.length) throw new Error(`topic list repeats ${[...new Set(repeated)].join(', ')}; name each topic once.`);
+  const notStrings = topics.filter(topic => typeof topic !== 'string' || topic.length === 0 || topic.length > 64);
+  if (notStrings.length) throw new Error('topic list entries must be strings of 1 to 64 characters.');
+}
+
+function answerTopicList(capabilities, topics, names, outlineSources) {
+  checkTopicList(topics);
+  const answers = {};
+  const unknownNotes = [];
+  for (const topic of topics) {
+    try {
+      answers[topic] = answerOneTopic(capabilities, topic, names, outlineSources);
+    } catch (error) {
+      if (!(error instanceof UnknownTopicError)) throw error;
+      unknownNotes.push(error.note);
+    }
+  }
+  if (unknownNotes.length) {
+    const allNames = [...names.scene, ...names.runtime, ...names.schemas];
+    throw new Error(`${unknownNotes.join(' ')} Topics: ${allNames.join(', ')}.`);
+  }
+  return { answers };
+}
+
+/** The index with no topic, the detail of one topic, or { answers } keyed by name for a list of topics. */
+export function answerCapabilities(capabilities, topic, outlineSources) {
+  const names = capabilityTopicNames(capabilities, outlineSources);
+  if (topic === undefined) return indexAnswer(capabilities, names);
+  if (Array.isArray(topic)) return answerTopicList(capabilities, topic, names, outlineSources);
+  return answerOneTopic(capabilities, topic, names, outlineSources);
 }

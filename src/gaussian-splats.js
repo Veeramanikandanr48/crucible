@@ -98,7 +98,27 @@ void main() {
   outputColor = vec4(color * alpha, alpha);
 }`;
 
-const UNIFORM_NAMES = ['splatData', 'modelView', 'projection', 'focal', 'viewport', 'hdrEnabled', 'exposure'];
+// The opaque variant (alphaCut): a fragment whose gaussian alpha is under the cut is discarded, every other one writes its
+// colour at full strength. With depth write on, the nearest one wins and the order of the splats no longer matters.
+const OPAQUE_FRAGMENT_SOURCE = `#version 300 es
+precision highp float;
+uniform float hdrEnabled;
+uniform float exposure;
+uniform float alphaCut;
+in vec4 vertexColor;
+in vec2 vertexOffset;
+out vec4 outputColor;
+void main() {
+  float falloff = -dot(vertexOffset, vertexOffset);
+  if (falloff < -4.0) discard;
+  float alpha = exp(falloff) * vertexColor.a;
+  if (alpha < max(alphaCut, 1.0 / 255.0)) discard;
+  vec3 color = hdrEnabled > 0.5 ? pow(vertexColor.rgb, vec3(2.2)) * exposure : vertexColor.rgb;
+  outputColor = vec4(color, 1.0);
+}`;
+
+const UNIFORM_NAMES = ['splatData', 'modelView', 'projection', 'focal', 'viewport', 'hdrEnabled', 'exposure', 'alphaCut'];
+export const GAUSSIAN_SPLAT_SHADER_SOURCES = Object.freeze({ vertex: VERTEX_SOURCE, fragment: FRAGMENT_SOURCE, opaqueFragment: OPAQUE_FRAGMENT_SOURCE });
 
 function covarianceOf(scales, rotations, index) {
   const [w, x, y, z] = rotations.subarray(index * 4, index * 4 + 4);
@@ -144,24 +164,36 @@ function checkSplatInput(data, matrix, maximumCount, caller) {
   if (matrix.length !== 16 || !Array.from(matrix).every(Number.isFinite)) throw new TypeError('matrix must be 16 finite numbers');
 }
 
-function buildSplats(data, matrix, packed) {
+function resolveAlphaCut(alphaCut, caller) {
+  if (alphaCut === undefined || alphaCut === null) return null;
+  if (!(typeof alphaCut === 'number' && alphaCut >= 0 && alphaCut <= 1)) {
+    throw new RangeError(`${caller} alphaCut must be a number from 0 to 1 (a splat pixel whose alpha is below it is dropped, the rest are drawn opaque), or left out for soft blending, got ${String(alphaCut)}`);
+  }
+  return alphaCut;
+}
+
+function buildSplats(data, matrix, packed, alphaCut) {
   const sorter = createSplatSorter(data.positions, data.count, data.bounds);
   const statistics = { count: data.count, visibleCount: 0, sortMilliseconds: 0, gpuBytes: 0, cpuBytes: data.positions.byteLength + data.count * 8 };
-  return { count: data.count, matrix: mat4.clone(matrix), bounds: data.bounds, statistics, packed, sorter };
+  return { count: data.count, matrix: mat4.clone(matrix), bounds: data.bounds, statistics, packed, sorter, alphaCut };
 }
 
 /**
  * Splat data ready to draw, from `parseGaussianSplatPly`. `matrix` (a 16-number column-major array, default identity) places
  * the splat scene in the world; it may rotate, translate and scale uniformly. Many captures are y-down, so a flip is
  * usual. Throws a RangeError when `data.count` is over `maximumCount` (default 2,000,000, at most 4,000,000).
+ * `alphaCut` (a number from 0 to 1, default off) turns the blended look into hard opaque discs: a pixel whose gaussian alpha
+ * (falloff times the splat's opacity) is below it is dropped and every other pixel is written opaque, with depth, so
+ * neighbouring splats no longer mix their colours. These splats draw before the soft ones.
  * The returned object has `count`, `matrix`, `bounds` and `statistics` (`count`, `visibleCount`, `sortMilliseconds`,
  * `gpuBytes`, `cpuBytes`).
  */
-export function createGaussianSplats(data, { matrix = mat4.create(), maximumCount = GAUSSIAN_SPLAT_LIMITS.maximumCount } = {}) {
+export function createGaussianSplats(data, { matrix = mat4.create(), maximumCount = GAUSSIAN_SPLAT_LIMITS.maximumCount, alphaCut } = {}) {
   checkSplatInput(data, matrix, maximumCount, 'createGaussianSplats');
+  const resolvedAlphaCut = resolveAlphaCut(alphaCut, 'createGaussianSplats');
   const { packRange, packed } = createSplatPacker(data);
   packRange(0, data.count);
-  return buildSplats(data, matrix, packed);
+  return buildSplats(data, matrix, packed, resolvedAlphaCut);
 }
 
 /**
@@ -172,9 +204,10 @@ export function createGaussianSplats(data, { matrix = mat4.create(), maximumCoun
 export async function createGaussianSplatsAsync(data, options = {}) {
   const { matrix = mat4.create(), maximumCount = GAUSSIAN_SPLAT_LIMITS.maximumCount } = options;
   checkSplatInput(data, matrix, maximumCount, 'createGaussianSplatsAsync');
+  const alphaCut = resolveAlphaCut(options.alphaCut, 'createGaussianSplatsAsync');
   const { packRange, packed } = createSplatPacker(data);
   await runInChunks(data.count, options, 'createGaussianSplatsAsync', packRange);
-  return buildSplats(data, matrix, packed);
+  return buildSplats(data, matrix, packed, alphaCut);
 }
 
 function createGpuResources(context, splats) {
@@ -201,11 +234,15 @@ function createGpuResources(context, splats) {
 
 const attachments = new WeakMap();
 
+function createProgramInfo(context, fragmentSource) {
+  const program = compileProgram(context, VERTEX_SOURCE, fragmentSource);
+  const uniforms = Object.fromEntries(UNIFORM_NAMES.map(name => [name, context.getUniformLocation(program, name)]));
+  return { program, uniforms };
+}
+
 function createAttachment(renderer) {
   const context = renderer.context;
-  const program = compileProgram(context, VERTEX_SOURCE, FRAGMENT_SOURCE);
-  const uniforms = Object.fromEntries(UNIFORM_NAMES.map(name => [name, context.getUniformLocation(program, name)]));
-  const attachment = { program, uniforms, entries: new Set(), modelView: mat4.create(), original: null, disposeOriginal: null };
+  const attachment = { blended: createProgramInfo(context, FRAGMENT_SOURCE), opaque: null, entries: new Set(), modelView: mat4.create(), original: null, disposeOriginal: null };
   attachment.original = renderer.drawBlendBatches;
   attachment.disposeOriginal = renderer.dispose;
   renderer.drawBlendBatches = function drawBlendBatchesAndSplats(frame) {
@@ -228,31 +265,49 @@ function releaseEntry(context, entry) {
 function releaseAttachment(renderer, attachment) {
   for (const entry of attachment.entries) releaseEntry(renderer.context, entry);
   attachment.entries.clear();
-  renderer.context.deleteProgram(attachment.program);
+  renderer.context.deleteProgram(attachment.blended.program);
+  if (attachment.opaque) renderer.context.deleteProgram(attachment.opaque.program);
   renderer.drawBlendBatches = attachment.original;
   renderer.dispose = attachment.disposeOriginal;
   attachments.delete(renderer);
 }
 
-function prepareState(renderer, attachment, frame) {
+function prepareFrameState(renderer) {
+  const context = renderer.context;
+  context.bindFramebuffer(context.FRAMEBUFFER, renderer.multisampleFramebuffer);
+  context.viewport(0, 0, renderer.canvas.width, renderer.canvas.height);
+  context.enable(context.DEPTH_TEST);
+  context.disable(context.CULL_FACE);
+}
+
+function useProgram(renderer, programInfo, frame) {
   const context = renderer.context;
   const width = renderer.canvas.width;
   const height = renderer.canvas.height;
-  context.bindFramebuffer(context.FRAMEBUFFER, renderer.multisampleFramebuffer);
-  context.viewport(0, 0, width, height);
-  context.enable(context.DEPTH_TEST);
-  context.depthMask(false);
-  context.disable(context.CULL_FACE);
-  context.enable(context.BLEND);
-  context.blendFuncSeparate(context.ONE, context.ONE_MINUS_SRC_ALPHA, context.ONE, context.ONE_MINUS_SRC_ALPHA);
-  context.useProgram(attachment.program);
-  const { uniforms } = attachment;
+  context.useProgram(programInfo.program);
+  const { uniforms } = programInfo;
   context.uniformMatrix4fv(uniforms.projection, false, renderer.rasterProjection ?? renderer.projection);
   context.uniform2f(uniforms.focal, renderer.projection[0] * width * 0.5, renderer.projection[5] * height * 0.5);
   context.uniform2f(uniforms.viewport, width, height);
   context.uniform1f(uniforms.hdrEnabled, renderer.hdr ? 1 : 0);
   context.uniform1f(uniforms.exposure, frame.exposure ?? 1);
   context.uniform1i(uniforms.splatData, DATA_TEXTURE_UNIT);
+}
+
+function prepareBlendedState(renderer, attachment, frame) {
+  const context = renderer.context;
+  context.depthMask(false);
+  context.enable(context.BLEND);
+  context.blendFuncSeparate(context.ONE, context.ONE_MINUS_SRC_ALPHA, context.ONE, context.ONE_MINUS_SRC_ALPHA);
+  useProgram(renderer, attachment.blended, frame);
+}
+
+function prepareOpaqueState(renderer, attachment, frame) {
+  const context = renderer.context;
+  attachment.opaque ??= createProgramInfo(context, OPAQUE_FRAGMENT_SOURCE);
+  context.depthMask(true);
+  context.disable(context.BLEND);
+  useProgram(renderer, attachment.opaque, frame);
 }
 
 function restoreState(renderer) {
@@ -264,7 +319,7 @@ function restoreState(renderer) {
   context.activeTexture(context.TEXTURE0);
 }
 
-function drawEntry(renderer, attachment, entry) {
+function drawEntry(renderer, attachment, entry, programInfo) {
   const context = renderer.context;
   const { splats } = entry;
   mat4.multiply(attachment.modelView, renderer.view, splats.matrix);
@@ -277,7 +332,8 @@ function drawEntry(renderer, attachment, entry) {
   }
   splats.statistics.visibleCount = visibleCount;
   if (visibleCount === 0) return;
-  context.uniformMatrix4fv(attachment.uniforms.modelView, false, attachment.modelView);
+  context.uniformMatrix4fv(programInfo.uniforms.modelView, false, attachment.modelView);
+  if (splats.alphaCut !== null) context.uniform1f(programInfo.uniforms.alphaCut, splats.alphaCut);
   context.activeTexture(context.TEXTURE0 + DATA_TEXTURE_UNIT);
   context.bindTexture(context.TEXTURE_2D, entry.texture);
   context.bindVertexArray(entry.vertexArray);
@@ -287,9 +343,19 @@ function drawEntry(renderer, attachment, entry) {
 
 function drawEntries(renderer, attachment, frame) {
   if (attachment.entries.size === 0) return;
-  prepareState(renderer, attachment, frame);
-  const farToNear = [...attachment.entries].map(entry => ({ entry, distance: distanceToEye(entry.splats, frame.eye) })).sort((first, second) => second.distance - first.distance);
-  for (const { entry } of farToNear) drawEntry(renderer, attachment, entry);
+  prepareFrameState(renderer);
+  const entries = [...attachment.entries];
+  const opaqueEntries = entries.filter(entry => entry.splats.alphaCut !== null);
+  const blendedEntries = entries.filter(entry => entry.splats.alphaCut === null);
+  if (opaqueEntries.length > 0) {
+    prepareOpaqueState(renderer, attachment, frame);
+    for (const entry of opaqueEntries) drawEntry(renderer, attachment, entry, attachment.opaque);
+  }
+  if (blendedEntries.length > 0) {
+    prepareBlendedState(renderer, attachment, frame);
+    const farToNear = blendedEntries.map(entry => ({ entry, distance: distanceToEye(entry.splats, frame.eye) })).sort((first, second) => second.distance - first.distance);
+    for (const { entry } of farToNear) drawEntry(renderer, attachment, entry, attachment.blended);
+  }
   restoreState(renderer);
 }
 

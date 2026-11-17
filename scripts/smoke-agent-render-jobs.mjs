@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { createTexturedRigFixture } from './agent-asset-fixture.mjs';
+import { assertToolListMatchesServer } from './mcp-tool-list.mjs';
 import { inflateSync } from 'node:zlib';
 
 /** The alpha of each pixel in the first row of an 8-bit RGBA PNG; the first row has nothing above it, so only the left neighbour matters. */
@@ -78,7 +79,7 @@ async function close() {
 }
 try {
   await connect();
-  assert.equal((await client.listTools()).tools.length, 25);
+  await assertToolListMatchesServer(client);
   const catalog = (await call('scene_asset_catalog')).structuredContent;
   const created = (await call('scene_create_asset', { recipe: {
     format: 'crucible.asset', schemaVersion: 1, assetId: catalog.assets[0].assetId,

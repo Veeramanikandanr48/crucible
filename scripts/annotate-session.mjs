@@ -7,9 +7,9 @@ import { ANNOTATE_LIMITS, validateMarks, isBoundedPng } from '../src/agent-annot
 
 const MAXIMUM_BODY_BYTES = 2 * 1024 * 1024;
 
-function pageHtml({ prompt, width, height, maxMarks, maxNoteLength }) {
-  const escaped = prompt.replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]);
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mark the scene</title><style>
+// Shared with the inline MCP Apps view (scripts/annotate-app-view.mjs) so both look the same.
+export function annotateStyle(width) {
+  return `
 *{box-sizing:border-box}
 body{margin:0;min-height:100vh;background:#182126;color:#e8eef0;font:15px/1.4 system-ui,sans-serif;display:flex;flex-direction:column;gap:16px;padding:20px}
 h1{margin:0;font-size:18px;font-weight:600}
@@ -34,7 +34,12 @@ svg{width:18px;height:18px;flex:none}
 .done{display:flex;gap:10px;align-items:center;font-size:17px}
 .done svg{width:26px;height:26px}
 .ok{color:#58d68d}.stop{color:#f0b429}
-</style></head><body>
+`;
+}
+
+function pageHtml({ prompt, width, height, maxMarks, maxNoteLength }) {
+  const escaped = prompt.replace(/[&<>"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character]);
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Mark the scene</title><style>${annotateStyle(width)}</style></head><body>
 <h1>${escaped || 'Click the scene to mark what you mean'}</h1>
 <main>
 <div class="stage" id="stage"><img id="frame" src="frame.png" width="${width}" height="${height}" alt="Rendered scene"></div>

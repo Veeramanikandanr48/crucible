@@ -1,4 +1,4 @@
-import { answerCapabilities } from './capabilities-topics.mjs';
+import { answerCapabilities, MAX_TOPICS_PER_CALL } from './capabilities-topics.mjs';
 import { BRANCH_NAME_PATTERN } from '../src/agent-branches.js';
 import { TEXTURE_SEQUENCE_LIMITS } from '../src/texture-sequence-limits.js';
 import { readEnvironmentVariable } from '../src/environment-variable.js';
@@ -19,7 +19,7 @@ import { BUNDLED_ENVIRONMENT_NAMES, BUNDLED_CUBE_LOOK_NAMES, CATALOG_FILE_ID } f
 import { MATERIAL_PATTERN_TYPES, MATERIAL_MAPPINGS, LIGHTING_SETUP_NAMES, RENDER_PASS_NAMES, RENDER_OUTPUT_FORMATS, MAXIMUM_JOB_FPS, VIDEO_ENCODERS, MAXIMUM_JOB_SIDE, maximumMemoryMiB, memoryRangeError, MAXIMUM_STILLS_FRAMES } from '../src/agent-scene-capabilities.js';
 import { MATERIAL_LAYER_SCALAR_RANGES, MATERIAL_LAYER_COLOR_RANGES } from '../src/material-layers.js';
 import { SUBSURFACE_RANGES } from '../src/subsurface-limits.js';
-import { responseFormatField, chosenFormat, conciseReview, conciseJobStatus, conciseJobResult, withoutNotes } from './mcp-response-format.mjs';
+import { responseFormatField, chosenFormat, conciseReview, conciseJobStatus, conciseJobResult, conciseCapabilities } from './mcp-response-format.mjs';
 import { resolveAddons } from './mcp-addons.mjs';
 import { createCallLogger, CALL_LOG_ENVIRONMENT_VARIABLE } from './mcp-call-log.mjs';
 import { startUpdateCheck, updateNoticeText, describeUpdateCheck } from '../src/mcp-update-check.js';
@@ -28,6 +28,7 @@ import { setExplosionBakeStore } from '../src/explosion-grids.js';
 import { bakeCacheDirectory, createExplosionBakeCache } from '../src/explosion-bake-cache.js';
 import { MAX_POINT_LIGHTS, MAX_SPOT_LIGHTS, MAX_AREA_LIGHTS } from '../src/light-limits.js';
 import { currentFormatName, warnLegacyOnce } from '../src/legacy-names.js';
+import { annotateViewHtml, clientSupportsMcpApps, ANNOTATE_VIEW_URI, MCP_APPS_MIME_TYPE } from './annotate-app-view.mjs';
 import { MCP_OPTION_NAMES, mcpOptionSummary } from '../bin/crucible-mcp-flags.mjs';
 
 function acceptLegacyFormat(value) {
@@ -891,7 +892,7 @@ const destroy = { readOnlyHint: false, destructiveHint: true, idempotentHint: fa
 const TOOL_TITLES = {
   scene_capabilities: 'Scene capabilities', scene_create: 'Create scene', scene_asset_catalog: 'Asset catalog', scene_create_asset: 'Create scene from asset',
   scene_inspect: 'Inspect scene', scene_walkmap: 'Walkable map', mesh_inspect: 'Inspect meshes', mesh_edit: 'Edit mesh', mesh_stack: 'Set mesh modifiers',
-  scene_apply: 'Apply scene edits', scene_look: 'Look at scene', scene_ask_user: 'Ask the user to mark the scene', scene_review: 'Review camera samples', scene_checkpoint: 'Save checkpoint',
+  scene_apply: 'Apply scene edits', scene_look: 'Look at scene', scene_ask_user: 'Ask the user to mark the scene', scene_ask_user_submit: 'Send marks from the inline view', scene_review: 'Review camera samples', scene_checkpoint: 'Save checkpoint',
   scene_restore: 'Restore checkpoint', scene_release_checkpoint: 'Release checkpoint', scene_export_recipe: 'Export recipe', scene_export_glb: 'Export GLB', scene_export_web: 'Export web game',
   scene_dispose: 'Dispose scene', scene_render_submit: 'Submit render job', scene_render_status: 'Render job status', scene_render_cancel: 'Cancel render job',
   scene_render_result: 'Render job result', scene_render_release: 'Release render job',
@@ -995,8 +996,8 @@ export function createAgentMcpServer(runtime, { version = packageMetadata.versio
     const activeSessionId = runtime.activeSessionId();
     return activeSessionId ? { ...argumentsValue, sessionId: activeSessionId } : argumentsValue;
   }
-  function register(name, description, inputSchema, annotations, run) {
-    server.registerTool(name, { title: TOOL_TITLES[name], description, inputSchema, annotations: { title: TOOL_TITLES[name], ...annotations }, ...(OUTPUT_SCHEMAS[name] ? { outputSchema: OUTPUT_SCHEMAS[name] } : {}) }, async argumentsValue => {
+  function register(name, description, inputSchema, annotations, run, extraConfig = {}) {
+    return server.registerTool(name, { title: TOOL_TITLES[name], description, inputSchema, annotations: { title: TOOL_TITLES[name], ...annotations }, ...(OUTPUT_SCHEMAS[name] ? { outputSchema: OUTPUT_SCHEMAS[name] } : {}), ...extraConfig }, async argumentsValue => {
       const call = async () => {
       try {
         return await run(withActiveSession(argumentsValue, inputSchema));
@@ -1009,9 +1010,10 @@ export function createAgentMcpServer(runtime, { version = packageMetadata.versio
       return logCall ? logCall(name, call) : call();
     });
   }
-  register('scene_capabilities', 'Index of supported recipe features and runtime budgets; pass topic for the detail of one. Read it before authoring. Does not launch a browser.', z.strictObject({ topic: z.string().min(1).max(64).optional().describe('A name from the index, or name.branch such as meshEdit.bevel. Leave out for the index.'), response_format: responseFormatField }), readOnly, async ({ topic, response_format }) => {
+  const capabilitiesTopic = z.union([z.string().min(1).max(64), z.array(z.string()).max(MAX_TOPICS_PER_CALL)]).optional().describe('A name, name.branch (meshEdit.bevel) or a list of up to 8. Omit for the index.');
+  register('scene_capabilities', 'Index of supported recipe features and runtime budgets; pass topic for the detail of one. Read it before authoring. Does not launch a browser.', z.strictObject({ topic: capabilitiesTopic, response_format: responseFormatField }), readOnly, async ({ topic, response_format }) => {
     const answer = answerCapabilities(relations ? await runtime.capabilities() : withoutRelationsAdvice(await runtime.capabilities()), topic, outlineSources);
-    const shown = chosenFormat('scene_capabilities', response_format) === 'concise' && answer.fields !== undefined ? { ...answer, fields: withoutNotes(answer.fields) } : answer;
+    const shown = chosenFormat('scene_capabilities', response_format) === 'concise' ? conciseCapabilities(answer) : answer;
     // Once per server: the first answer carries the update offer, later ones stay unchanged.
     const pendingUpdate = updateReported ? null : updateAvailable();
     updateReported = updateReported || pendingUpdate !== null;
@@ -1033,10 +1035,34 @@ export function createAgentMcpServer(runtime, { version = packageMetadata.versio
     const metadata = findings ? lookMetadata : metadataWithoutFindings;
     return { content: [{ type: 'image', data, mimeType }, { type: 'text', text: JSON.stringify(metadata) }], structuredContent: metadata };
   });
-  register('scene_ask_user', 'Open the view in the browser so the person pins points with notes; waits for Send. Use for a change hard to say in words. Returns marks with partId, point, normal, note, and the marked PNG.', z.strictObject({ ...sessionFields, prompt: z.string().max(200).optional().describe('Line shown above the picture.'), maxMarks: z.number().int().min(1).max(16).default(16), timeoutSeconds: z.number().int().min(10).max(900).default(300) }), askUser, async argumentsValue => {
-    const { content, image } = await runtime.askUser(argumentsValue);
-    return { content: [...(image ? [{ type: 'image', data: image, mimeType: 'image/png' }] : []), { type: 'text', text: JSON.stringify(content) }] };
+  const askUserTool = register('scene_ask_user', 'Open the view in the browser so the person pins points with notes; waits for Send. Use for a change hard to say in words. Returns marks with partId, point, normal, note, and the marked PNG.', z.strictObject({ ...sessionFields, prompt: z.string().max(200).optional().describe('Line shown above the picture.'), maxMarks: z.number().int().min(1).max(16).default(16), timeoutSeconds: z.number().int().min(10).max(900).default(300) }), askUser, async argumentsValue => {
+    const { content, image, viewMeta } = await runtime.askUser(clientShowsApps ? { ...argumentsValue, inline: true } : argumentsValue);
+    return { content: [...(image ? [{ type: 'image', data: image, mimeType: 'image/png' }] : []), { type: 'text', text: JSON.stringify(content) }], ...(viewMeta ? { _meta: { 'crucible/annotate': viewMeta } } : {}) };
   });
+  // MCP Apps (#923): a host that advertises the extension shows the annotate view inline. The submit tool, the view resource and the
+  // tool's UI link stay off until the client says so, so every other host sees the same tool list and the same browser flow as before.
+  let clientShowsApps = false;
+  const annotateViewResource = server.registerResource('annotate_view', ANNOTATE_VIEW_URI, { title: 'Mark the scene', description: 'Inline view for scene_ask_user.', mimeType: MCP_APPS_MIME_TYPE },
+    async uri => ({ contents: [{ uri: uri.href, mimeType: MCP_APPS_MIME_TYPE, text: annotateViewHtml() }] }));
+  annotateViewResource.disable();
+  const submitAskUserTool = register('scene_ask_user_submit', 'Used by the inline annotate view only: send the pins the person placed. Not for the agent.', z.strictObject({
+    nonce: z.string().regex(/^[a-f0-9]{32}$/),
+    marks: z.array(z.strictObject({ x: z.number(), y: z.number(), note: z.string().max(280).optional() })).min(1).max(16),
+    image: z.string().max(1500000),
+  }), askUser, async argumentsValue => {
+    const { content, image } = await runtime.submitAskUser(argumentsValue);
+    return { content: [...(image ? [{ type: 'image', data: image, mimeType: 'image/png' }] : []), { type: 'text', text: JSON.stringify(content) }] };
+  }, { _meta: { ui: { visibility: ['app'] } } });
+  submitAskUserTool.disable();
+  const previousInitialized = server.server.oninitialized;
+  server.server.oninitialized = () => {
+    previousInitialized?.();
+    if (!clientSupportsMcpApps(server.server.getClientCapabilities())) return;
+    clientShowsApps = true;
+    annotateViewResource.enable();
+    submitAskUserTool.enable();
+    askUserTool.update({ _meta: { ui: { resourceUri: ANNOTATE_VIEW_URI } } });
+  };
   register('scene_review', 'Compare one to four independent camera or motion samples in one labeled PNG grid. Preserves source revision, transient pose, viewport and checkpoints. Omitted motionTime restores authored base pose; omitted animation uses the authored asset clip pose; rendererTime defaults to zero. No render job store is required.', z.strictObject({
     ...sessionFields, expectedRevision,
     width: z.number().int().min(64).max(480).default(384),

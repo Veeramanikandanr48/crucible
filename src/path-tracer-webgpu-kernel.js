@@ -9,14 +9,14 @@
 
 import { LIGHT_TREE_FIRST_HIT_LIGHTS, LIGHT_TREE_MINIMUM_SHARE } from './path-tracer-light-tree.js';
 import { PHASE_FUNCTIONS, SUBSURFACE_FUNCTIONS, VOLUME_FUNCTIONS } from './path-tracer-webgpu-medium.js';
-import { LOCAL_VOLUME_FUNCTIONS } from './path-tracer-webgpu-local-volumes.js';
+import { buildLocalVolumeFunctions } from './path-tracer-webgpu-local-volumes.js';
 
 export const WORKGROUP_SIZE = 8;
 export const WAVEFRONT_WORKGROUP_SIZE = 64;
 /** vec4 slots of path state per path; the wavefront section below names each one. */
 export const PATH_STATE_VECTORS = 9;
 
-const buildCommonSource = ({ hasVolume = false, hasLocalVolumes = false } = {}) => /* wgsl */ `
+const buildCommonSource = ({ hasVolume = false, hasLocalVolumes = false, hasGridVolume = false } = {}) => /* wgsl */ `
 const PI: f32 = 3.14159265358979;
 const TWO_PI: f32 = 6.28318530717959;
 const TRIANGLE_TEXELS: i32 = 10;
@@ -882,7 +882,7 @@ fn addDirect(depth: i32, normal: vec3<f32>, distance: f32, weightMode: i32) {
 }
 
 ${hasVolume ? VOLUME_FUNCTIONS : hasLocalVolumes ? PHASE_FUNCTIONS : ''}
-${hasLocalVolumes ? LOCAL_VOLUME_FUNCTIONS : ''}
+${hasLocalVolumes ? buildLocalVolumeFunctions({ hasGrid: hasGridVolume }) : ''}
 fn flushShadowRay() {
   if (!shadowPending) { return; }
   shadowPending = false;
@@ -1179,7 +1179,7 @@ fn bakeTexels(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgro
 `;
 
 // `realtime` is the set of WGSL pieces of path-tracer-realtime-webgpu-kernel.js (REALTIME_KERNEL_PIECES); the real-time tracer passes them in, so other bundles do not carry them.
-export const buildMegakernelSource = ({ hasVolume = false, hasLocalVolumes = false, hasSubsurface = false, texelBake = false, realtime = null } = {}) => buildCommonSource({ hasVolume, hasLocalVolumes }) + /* wgsl */ `
+export const buildMegakernelSource = ({ hasVolume = false, hasLocalVolumes = false, hasGridVolume = false, hasSubsurface = false, texelBake = false, realtime = null } = {}) => buildCommonSource({ hasVolume, hasLocalVolumes, hasGridVolume }) + /* wgsl */ `
 ${realtime ? realtime.declarations + realtime.addLights : `// The first hit lights from every emitter; later hits draw one, and divide by the chance of drawing it.
 fn addLights(depth: i32, normal: vec3<f32>) {
   let emitterCount = params.emittersFlagsSample.x;

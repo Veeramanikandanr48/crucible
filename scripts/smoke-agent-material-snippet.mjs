@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import sharp from 'sharp';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { assertToolListMatchesServer } from './mcp-tool-list.mjs';
 
 // Proves the material fragment hook through the MCP server: a valid hook changes pixels and takes new uniform values, a
 // discarded caster casts no shadow, a snippet that breaks a validator rule is refused before any compile, a snippet the
@@ -84,7 +85,7 @@ const broken = { fragment: 'void materialHook(inout vec3 color, inout float alph
 
 try {
   await client.connect(transport);
-  assert.equal((await client.listTools()).tools.length, 22);
+  await assertToolListMatchesServer(client);
   const capabilities = (await call('scene_capabilities', { topic: 'materialSnippet' })).structuredContent;
   assert.equal(capabilities.value.limits.maxUniforms, 16);
 

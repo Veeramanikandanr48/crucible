@@ -174,7 +174,7 @@ export function exportNativeSceneTables({ parts, environment, camera, options, k
     throw new RangeError(`exportNativeSceneTables: maximumTriangles must be an integer from 1 to ${NATIVE_CHUNKED_MAXIMUM_TRIANGLES}, got ${JSON.stringify(chunkedMaximumTriangles)}. Pass chunkedTriangleBound(capacity.maxUniqueTriangles).`);
   }
   const nativeLimits = wholeMaterials ? { maximumTriangles, maximumInstances: NATIVE_JOB_MAXIMUM_INSTANCES, maximumLights: NATIVE_JOB_MAXIMUM_LIGHTS, maximumParts: NATIVE_JOB_MAXIMUM_PARTS } : {};
-  let traceScene = buildTraceScene(parts, environment, { instancing: wholeMaterials && instancing === true, ...nativeLimits });
+  let traceScene = buildTraceScene(parts, environment, { instancing: wholeMaterials && instancing === true, instanceNormalMappedParts: wholeMaterials, ...nativeLimits });
   // Cook draws grid local volumes. Its packers refuse `localVolumes`, so the grids go in after them; any other volume kind is refused here.
   const gridVolumes = nativeGridVolumes(traceScene.localVolumes);
   const withGrids = input => (gridVolumes ? appendNativeGridVolumes(input, gridVolumes, gridVolumeInput) : input);

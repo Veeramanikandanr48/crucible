@@ -1,4 +1,4 @@
-import { exportNativeSceneTables, nativeTexelTracerIfAvailable, readExportChunk, splitExportForChunks } from './native-bake-page.js';
+import { exportNativeSceneTables, nativeTexelTracerIfAvailable, splitExportForChunks } from './native-bake-page.js';
 
 // The byte tables of the last chunked native export, held until the job runner has read them (releaseNativeExport).
 let heldNativeExportTables = null;
@@ -1125,9 +1125,13 @@ window.__agentPreview = {
     }
     return { ...exported, ignored: describeIgnoredFeatures(record.scene.parts, environment, 'cpu', { kernelMaterials: exported.wholeMaterials, clipStart: camera.clipStart }) };
   },
-  // One chunk (base64) of a table of the chunked export that exportNativeScene holds.
-  readNativeExportChunk({ name, offset }) {
-    return readExportChunk(heldNativeExportTables, name, offset);
+  // The tables of the chunked export that exportNativeScene holds, back to back in manifest order, as one Blob. The job runner
+  // reads it over DevTools (IO.read), which costs about half of an evaluate that returns the bytes as base64 (#1861).
+  nativeExportBlob() {
+    if (!heldNativeExportTables) {
+      throw new Error('nativeExportBlob: no chunked native export is held. Call exportNativeScene with chunked: true first.');
+    }
+    return new Blob(Object.values(heldNativeExportTables));
   },
   // Lets go of the held export once the job runner has every table.
   releaseNativeExport() {

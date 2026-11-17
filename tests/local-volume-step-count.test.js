@@ -3,7 +3,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { localVolumeStepCount, resolveLocalVolumes, LOCAL_VOLUME_MAXIMUM_STEPS, LOCAL_VOLUME_STEPS_PER_NOISE_CELL } from '../src/local-volumes.js';
+import { createHash } from 'node:crypto';
+import { localVolumeStepCount, localVolumeOctaveStepCount, resolveLocalVolumes, LOCAL_VOLUME_MAXIMUM_STEPS, LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS, LOCAL_VOLUME_STEPS_PER_NOISE_CELL } from '../src/local-volumes.js';
+import { createLocalVolumeCompositeFragment } from '../src/post.js';
+import '../src/fog-shader.js';
 
 const resolve = fields => resolveLocalVolumes([{ shape: 'box', center: [0, 0, 0], size: [2, 2, 2], ...fields }])[0];
 
@@ -29,4 +32,35 @@ test('the post shader and the path tracer use the same rule', () => {
   assert.match(shader, /if \(localVolumeAbsorption\[index\]\.w > 0\.0\) steps = min\(\$\{LOCAL_VOLUME_MAXIMUM_STEPS\}, max\(steps, int\(ceil\(length \* localVolumeEmission\[index\]\.w \* \$\{LOCAL_VOLUME_STEPS_PER_NOISE_CELL\.toFixed\(1\)\}\)\)\)\);/);
   const tracer = readFileSync(new URL('../src/path-tracer-volume.js', import.meta.url), 'utf8');
   assert.match(tracer, /let stepCount = localVolumeStepCount\(volume, segmentEnd - entry\);/);
+});
+
+// Noise octaves (#1855): the finest cell is 2^(octaves - 1) times smaller than the base one, so the count follows it and may pass the plain cap.
+test('the octave step count follows the finest cell and stops at its own bound', () => {
+  assert.equal(LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS, 96);
+  assert.ok(LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS > LOCAL_VOLUME_MAXIMUM_STEPS);
+  assert.equal(localVolumeOctaveStepCount(1, 2.2, 2), Math.ceil(2 * 2.2 * 2));
+  assert.equal(localVolumeOctaveStepCount(4, 2.2, 2), Math.ceil(2 * 2.2 * 8 * 2), 'the #1816 sphere needs 71 samples, not 32');
+  assert.equal(localVolumeOctaveStepCount(5, 10, 10), LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS);
+});
+
+test('a volume with octaves counts from its finest cell and one without keeps the plain rule', () => {
+  const fractal = resolve({ steps: 16, noiseAmount: 1, noiseScale: 2.2, noiseOctaves: 4 });
+  const plain = resolve({ steps: 16, noiseAmount: 1, noiseScale: 2.2 });
+  assert.equal(localVolumeStepCount(fractal, 2), 71);
+  assert.equal(localVolumeStepCount(plain, 2), 16);
+  assert.equal(localVolumeStepCount(resolve({ steps: 16, noiseAmount: 1, noiseScale: 100, noiseOctaves: 5 }), 10), LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS);
+  assert.equal(localVolumeStepCount(resolve({ steps: 16, noiseAmount: 1, noiseScale: 100 }), 10), LOCAL_VOLUME_MAXIMUM_STEPS, 'without octaves the cap is untouched');
+  assert.equal(localVolumeStepCount(resolve({ steps: 8, noiseAmount: 1, noiseScale: 2.2, noiseOctaves: 4 }), 0.1), 8, 'a short ray keeps the requested steps');
+});
+
+const hashOf = text => createHash('sha256').update(text).digest('hex').slice(0, 16);
+
+test('the shader text without octaves is the text from before #1855, and with octaves the march loop and the count follow the finest cell', () => {
+  assert.equal(hashOf(createLocalVolumeCompositeFragment(false, 'both', false)), 'eaf292fa5cd821f1');
+  assert.equal(hashOf(createLocalVolumeCompositeFragment(true, 'both', false)), '46ff4bbcc3814b18');
+  assert.equal(hashOf(createLocalVolumeCompositeFragment(false, 'shape', false)), 'ba0e89cd39d9b1a4');
+  const withOctaves = createLocalVolumeCompositeFragment(false, 'both', true);
+  assert.match(withOctaves, new RegExp(`min\\(${LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS}, int\\(ceil\\(length \\* localVolumeEmission\\[index\\]\\.w \\* exp2\\(float\\(octaves - 1\\)\\) \\* 2\\.0\\)\\)\\)`));
+  assert.match(withOctaves, new RegExp(`step < ${LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS}; step\\+\\+`));
+  assert.doesNotMatch(createLocalVolumeCompositeFragment(false, 'both', false), /exp2\(float\(octaves/);
 });

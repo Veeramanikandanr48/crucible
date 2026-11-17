@@ -10,6 +10,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { PatientStdioClientTransport } from './patient-stdio-transport.mjs';
 import { createAgentPreviewFixture } from './agent-preview-fixture.mjs';
 import { createTexturedRigFixture } from './agent-asset-fixture.mjs';
+import { assertToolListMatchesServer } from './mcp-tool-list.mjs';
 
 setPriority(0, constants.priority.PRIORITY_BELOW_NORMAL);
 const metadata = JSON.parse(await readFile('package.json', 'utf8'));
@@ -120,7 +121,7 @@ for (const era of ['modern', 'legacy']) {
     const connectMs = performance.now() - start;
     processId = transport.pid;
     assert.equal(client.getServerVersion().version, metadata.version);
-    assert.equal((await client.listTools()).tools.length, 25);
+    await assertToolListMatchesServer(client);
     const capabilities = (await call('scene_capabilities')).structuredContent;
     assert.equal(capabilities.phase, 'idle');
     assert.equal((await call('scene_capabilities', { topic: 'preview' })).structuredContent.value.maximumActiveScenes, 4);

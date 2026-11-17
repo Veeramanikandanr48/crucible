@@ -10,7 +10,7 @@ const COOK_GRID_CHANNELS = ['density', 'temperature', 'flame'];
 function requireNativeGridVolume(volume, index) {
   const label = `environment.localVolumes[${index}]`;
   if (volume.shape !== 'grid' || volume.part || !volume.gridData) {
-    throw new RangeError(`${label} is a ${volume.part ? 'mesh' : volume.shape} volume; the native path tracer draws grid volumes only. Use backend "cpu" for box, sphere and mesh volumes (backend "webgpu" draws box and sphere volumes), or make the volume a grid.`);
+    throw new RangeError(`${label} is a ${volume.part ? 'mesh' : volume.shape} volume; the native path tracer draws grid volumes only. Use backend "cpu" for box, sphere and mesh volumes (backend "webgpu" draws box, sphere and grid volumes), or make the volume a grid.`);
   }
   if (volume.emissionRamp) {
     throw new RangeError(`${label}.emissionRamp is not drawn by the native path tracer: Cook colours a grid by emission and blackbody only. Use backend "cpu", or remove emissionRamp and set emission and blackbodyIntensity.`);

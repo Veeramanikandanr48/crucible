@@ -593,7 +593,7 @@ export function attachTracer(scene) {
 /** Local volumes are traced by the CPU path tracer and, for boxes and spheres, the WebGPU final tracer. Every other tracer entry point calls this so none drops them silently. */
 export function refuseLocalVolumes(scene, tracerName) {
   if (!scene.localVolumes) return;
-  throw new RangeError(`environment.localVolumes is traced by the CPU path tracer only; ${tracerName} cannot draw them. Use backend "cpu" (backend "webgpu" draws box and sphere volumes) or remove the volumes.`);
+  throw new RangeError(`environment.localVolumes is traced by the CPU path tracer only; ${tracerName} cannot draw them. Use backend "cpu" (backend "webgpu" draws box, sphere and grid volumes) or remove the volumes.`);
 }
 
 // The rasterizer's own test (renderer.js `isHidden`): a part hides by `visible: false` or by the `visibility.visible` that a posed scene keys.
@@ -701,6 +701,34 @@ function flattenedRayVisibility(parts) {
  */
 function sharesAuthoredGeometry(part, traced) {
   return traced === part.geometry && !traced.triangleMaterial;
+}
+
+// A matrix tilts a normal map differently from the unit-normal bake unless it is a rotation, mirror and uniform scale (#1844).
+const NON_CONFORMAL_TOLERANCE = 1e-4;
+
+function hasNonConformalMatrix(matrix) {
+  if (!matrix) return false;
+  const columns = [0, 4, 8].map(offset => [matrix[offset], matrix[offset + 1], matrix[offset + 2]]);
+  const dot = (first, second) => first[0] * second[0] + first[1] * second[1] + first[2] * second[2];
+  const squaredLengths = columns.map(column => dot(column, column));
+  const scale = Math.max(...squaredLengths);
+  if (!(scale > 0)) return false;
+  const tolerance = NON_CONFORMAL_TOLERANCE * scale;
+  if (Math.max(...squaredLengths) - Math.min(...squaredLengths) > tolerance) return true;
+  return [[0, 1], [0, 2], [1, 2]].some(([first, second]) => Math.abs(dot(columns[first], columns[second])) > tolerance);
+}
+
+function hasNormalMap(material) {
+  return Boolean(material?.normalMap || material?.layerMaps?.clearcoatNormalTexture);
+}
+
+/**
+ * True when flattening would lose the exact normal-map tilt: the part has a base or coat normal map, a matrix that is not a
+ * uniform scale, and the geometry it was authored with (a baked copy has no matrix left to keep). Cook rebuilds the tilt
+ * from the instance matrix like Cycles; a flattened pack only holds world positions and unit normals.
+ */
+function needsInstanceForNormalMap(part, geometry) {
+  return hasNormalMap(part.material) && hasNonConformalMatrix(part.matrix) && sharesAuthoredGeometry(part, geometry);
 }
 
 function countSharedGeometries(parts, geometries) {
@@ -869,9 +897,11 @@ export function buildTraceScene(allParts, environment = {}, options = {}) {
   const shownParts = boundsOnlyParts.length ? allParts.filter(part => !boundsOnlyParts.includes(part)) : allParts;
   // A frame where every part is hidden traces the sky or background alone, like the rasterizer (#1806). The BVH and the native kernel need one triangle.
   const parts = Array.isArray(allParts) && allParts.length > 0 && shownParts.length === 0 ? [UNHITTABLE_PLACEHOLDER_PART] : shownParts;
-  const tryInstancing = options.instancing === true && Array.isArray(parts) && parts.length > 0;
+  const tryInstancing = (options.instancing === true || options.instanceNormalMappedParts === true) && Array.isArray(parts) && parts.length > 0;
   const geometries = tryInstancing ? parts.map(traceGeometry) : undefined;
-  if (tryInstancing && countSharedGeometries(parts, geometries) > 0) return buildInstancedTraceScene(parts, geometries, environment, localVolumes, limits);
+  const instancesWanted = options.instancing === true && countSharedGeometries(parts, geometries) > 0;
+  const tiltNeedsInstances = tryInstancing && options.instanceNormalMappedParts === true && parts.some((part, index) => needsInstanceForNormalMap(part, geometries[index]));
+  if (instancesWanted || tiltNeedsInstances) return buildInstancedTraceScene(parts, geometries, environment, localVolumes, limits);
   if (!Array.isArray(parts) || parts.length < 1 || parts.length > limits.parts.count) {
     if (!Array.isArray(parts) || parts.length < 1) {
       if (limits.parts.native) throw new RangeError(`A native path trace takes 1 to ${limits.parts.count} parts, got ${Array.isArray(parts) ? 0 : parts}. Pass at least one part with geometry.`);

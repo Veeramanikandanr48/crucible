@@ -1,5 +1,5 @@
 import { registerShaderFeatureCode } from './shader-registry.js';
-import { resolveLocalVolumes, createLocalVolumeBuffers, packLocalVolumes, LOCAL_VOLUME_MAXIMUM_STEPS, LOCAL_VOLUME_DETAIL_SHADOW_TAPS, LOCAL_VOLUME_STEPS_PER_NOISE_CELL, LOCAL_VOLUME_BLUR_PIXELS, LOCAL_VOLUME_BLUR_RATE, LOCAL_VOLUME_EDGE_WARP, LOCAL_VOLUME_KEY_GAIN, LOCAL_VOLUME_LIGHT_DEPTH_SATURATION, LOCAL_VOLUME_SHADOW_STRENGTH, LOCAL_VOLUME_SKY_GAIN, LOCAL_VOLUME_SUN_FLATTEN, LOCAL_VOLUME_GRID_MAXIMUM_STEPS, LOCAL_VOLUME_SURFACE_SHADOW_TAPS, LOCAL_VOLUME_GRID_SHADOW_TAPS, LOCAL_VOLUME_MAXIMUM_SCATTER_OCTAVES, LOCAL_VOLUME_MAXIMUM_NOISE_OCTAVES, LOCAL_VOLUME_MULTI_SCATTER, LOCAL_VOLUME_MULTI_EXTINCTION, LOCAL_VOLUME_MULTI_ANISOTROPY, MAX_LOCAL_VOLUMES } from './local-volumes.js';
+import { resolveLocalVolumes, createLocalVolumeBuffers, packLocalVolumes, LOCAL_VOLUME_MAXIMUM_STEPS, LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS, LOCAL_VOLUME_DETAIL_SHADOW_TAPS, LOCAL_VOLUME_STEPS_PER_NOISE_CELL, LOCAL_VOLUME_BLUR_PIXELS, LOCAL_VOLUME_BLUR_RATE, LOCAL_VOLUME_EDGE_WARP, LOCAL_VOLUME_KEY_GAIN, LOCAL_VOLUME_LIGHT_DEPTH_SATURATION, LOCAL_VOLUME_SHADOW_STRENGTH, LOCAL_VOLUME_SKY_GAIN, LOCAL_VOLUME_SUN_FLATTEN, LOCAL_VOLUME_GRID_MAXIMUM_STEPS, LOCAL_VOLUME_SURFACE_SHADOW_TAPS, LOCAL_VOLUME_GRID_SHADOW_TAPS, LOCAL_VOLUME_MAXIMUM_SCATTER_OCTAVES, LOCAL_VOLUME_MAXIMUM_NOISE_OCTAVES, LOCAL_VOLUME_MULTI_SCATTER, LOCAL_VOLUME_MULTI_EXTINCTION, LOCAL_VOLUME_MULTI_ANISOTROPY, MAX_LOCAL_VOLUMES } from './local-volumes.js';
 import { createLocalVolumeCompositeFragment } from './post.js';
 import { compileProgram, fullscreenVertex } from './gl-program.js';
 import { LOCAL_VOLUME_RAMP_STOPS } from './local-volume-ramp.js';
@@ -620,7 +620,9 @@ vec3 localVolumeBlurred(vec3 background, float opticalDepth, float firstEntry, v
 }
 int localVolumeShapeSteps(int index, float length) {
   int steps = int(localVolumeSteps[index].x);
-  if (localVolumeAbsorption[index].w > 0.0) steps = min(${LOCAL_VOLUME_MAXIMUM_STEPS}, max(steps, int(ceil(length * localVolumeEmission[index].w * ${LOCAL_VOLUME_STEPS_PER_NOISE_CELL.toFixed(1)}))));
+${noiseOctaves ? `  int octaves = 1 + int(localVolumeAxes[index * 3 + 1].w + 0.5);
+  if (localVolumeAbsorption[index].w > 0.0 && octaves > 1) return max(steps, min(${LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS}, int(ceil(length * localVolumeEmission[index].w * exp2(float(octaves - 1)) * ${LOCAL_VOLUME_STEPS_PER_NOISE_CELL.toFixed(1)}))));
+` : ''}  if (localVolumeAbsorption[index].w > 0.0) steps = min(${LOCAL_VOLUME_MAXIMUM_STEPS}, max(steps, int(ceil(length * localVolumeEmission[index].w * ${LOCAL_VOLUME_STEPS_PER_NOISE_CELL.toFixed(1)}))));
   return steps;
 }
 vec3 localVolumes(vec3 background) {
@@ -724,7 +726,7 @@ ${withGrid ? `    if (localVolumeGrid[nearest].x > 0.5) {
     float stepSize = (segmentEnd - entry) / float(steps);
     float jitter = fract(localVolumeJitter() + float(nearest) * 0.618034);
     float jitterSecond = fract(localVolumeJitter() + float(partner) * 0.618034);
-    for (int step = 0; step < 32; step++) {
+    for (int step = 0; step < ${noiseOctaves ? LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS : 32}; step++) {
       if (step >= steps) break;
       vec3 stepExtinction = vec3(0.0);
       for (int lane = 0; lane < 2; lane++) {

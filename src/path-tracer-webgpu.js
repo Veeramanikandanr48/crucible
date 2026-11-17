@@ -83,10 +83,10 @@ async function getSession() {
 }
 
 /** The WGSL and entry points of a kernel variant; a variant is one of the two kernels, with the optional parts a scene needs. */
-function describeVariant({ kernel, hasVolume, hasLocalVolumes, hasSubsurface, texelBake, realtime }) {
+function describeVariant({ kernel, hasVolume, hasLocalVolumes, hasGridVolume, hasSubsurface, texelBake, realtime }) {
   if (kernel === 'wavefront') return { code: WAVEFRONT_SOURCE, entryPoints: WAVEFRONT_ENTRY_POINTS };
-  if (realtime) return { code: buildMegakernelSource({ hasVolume, hasLocalVolumes, hasSubsurface, realtime }), entryPoints: ['traceRealtime'] };
-  return { code: buildMegakernelSource({ hasVolume, hasLocalVolumes, hasSubsurface, texelBake }), entryPoints: [texelBake ? 'bakeTexels' : 'main'] };
+  if (realtime) return { code: buildMegakernelSource({ hasVolume, hasLocalVolumes, hasGridVolume, hasSubsurface, realtime }), entryPoints: ['traceRealtime'] };
+  return { code: buildMegakernelSource({ hasVolume, hasLocalVolumes, hasGridVolume, hasSubsurface, texelBake }), entryPoints: [texelBake ? 'bakeTexels' : 'main'] };
 }
 
 async function compileKernel(current, variant) {
@@ -103,14 +103,14 @@ async function compileKernel(current, variant) {
 }
 
 async function getKernel(current, variant) {
-  const key = [variant.kernel, variant.hasVolume, variant.hasLocalVolumes, variant.hasSubsurface, variant.texelBake, Boolean(variant.realtime)].join(':');
+  const key = [variant.kernel, variant.hasVolume, variant.hasLocalVolumes, variant.hasGridVolume, variant.hasSubsurface, variant.texelBake, Boolean(variant.realtime)].join(':');
   if (!current.kernels.has(key)) current.kernels.set(key, compileKernel(current, variant));
   return current.kernels.get(key);
 }
 
 /** The optional parts the scene needs, as the kernel variant flags. */
 function sceneFeatures(scene) {
-  return { hasVolume: Boolean(scene.volume), hasLocalVolumes: Boolean(scene.localVolumes), hasSubsurface: sceneUsesSubsurface(scene.materials), texelBake: false };
+  return { hasVolume: Boolean(scene.volume), hasLocalVolumes: Boolean(scene.localVolumes), hasGridVolume: Boolean(scene.localVolumes?.some(volume => volume.shape === 'grid')), hasSubsurface: sceneUsesSubsurface(scene.materials), texelBake: false };
 }
 
 function createStorageBuffer(device, data, label) {

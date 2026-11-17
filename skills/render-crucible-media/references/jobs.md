@@ -123,7 +123,7 @@ stops at 30 minutes, so keep a traced video short and small. It writes no passes
 (hardware ray queries; it falls back to `gpu` or `cpu` and `metrics.pathTracer.backendNote` says why). Start with 16
 samples to judge the light, then raise them. Ranges: `samples` 1 to 1024, `bounces` 1 to 16, `maxSeconds` 1 to 600.
 `denoise` is `true` (the built-in filter), `false`, or `"oidn"` where the server has that optional package.
-The OIDN package `@codepawlhq/crucible-denoise-oidn` is not on npm yet, so an npm install of `@codepawlhq/crucible` does not have it. Use a source checkout: `npm run fetch --prefix packages/denoise-oidn` (or set `OIDN_DENOISE_PATH`). Without it the job does not fail: it runs the wavelet filter (the GPU a-trous filter on `backend: "native"`) and says so in `metrics.pathTracer.denoiser` and `denoiserNote`. Check `denoiser` before you judge grain.
+The OIDN package `@codepawlhq/crucible-denoise-oidn` is a separate package: `npm install @codepawlhq/crucible-denoise-oidn`, then `node node_modules/@codepawlhq/crucible-denoise-oidn/fetch-oidn.mjs` (or set `OIDN_DENOISE_PATH`). Without it the job does not fail: it runs the wavelet filter (the GPU a-trous filter on `backend: "native"`) and says so in `metrics.pathTracer.denoiser` and `denoiserNote`. Check `denoiser` before you judge grain.
 
 ## Imported character clips
 

@@ -1,9 +1,9 @@
 # @codepawlhq/crucible-denoise-oidn
 
-Optional native denoiser for Crucible path traced stills: [Intel Open Image Denoise](https://github.com/RenderKit/oidn) (Apache-2.0) 2.5.1, called through its official `oidnDenoise` tool with the colour, albedo and normal images the tracer already writes. It is not part of the core `crucible` archive and is not on npm yet: use this folder from a source checkout of Crucible, which finds it by itself.
+Optional native denoiser for Crucible path traced stills: [Intel Open Image Denoise](https://github.com/RenderKit/oidn) (Apache-2.0) 2.5.1, called through its official `oidnDenoise` tool with the colour, albedo and normal images the tracer already writes. It is not part of the core `crucible` archive and is a separate package: `npm install @codepawlhq/crucible-denoise-oidn` (a source checkout of Crucible finds this folder by itself).
 
 ```sh
-npm run fetch --prefix packages/denoise-oidn   # downloads the release for this platform into ./vendor after a SHA-256 check
+node node_modules/@codepawlhq/crucible-denoise-oidn/fetch-oidn.mjs   # (source checkout: npm run fetch --prefix packages/denoise-oidn) downloads the release for this platform into ./vendor after a SHA-256 check
 ```
 
 Then ask a render job for it: `settings.renderer: { type: "pathTracer", denoise: "oidn" }`. Samples default to 16 for `oidn`. If the package or its binary is missing, the job uses the wavelet filter (the GPU a-trous filter of the native tracer on `backend: "native"`) and says so in `metrics.pathTracer.denoiserNote`. `OIDN_DENOISE_PATH` points at an `oidnDenoise` you installed yourself.

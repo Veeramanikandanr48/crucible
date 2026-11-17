@@ -82,7 +82,9 @@ test('a frame without octaves compiles the shader it had, and a frame with them 
     assert.doesNotMatch(plain, /FractalNoise|noiseOctaves/);
     assert.match(fractal, /float localVolumeFractalNoise\(vec3 position, int octaves\)/);
     assert.match(fractal, /localVolumeFractalNoise\(position \* localVolumeEmission\[index\]\.w, 1 \+ int\(localVolumeAxes\[index \* 3 \+ 1\]\.w \+ 0\.5\)\)/);
-    assert.equal(fractal.replace(/\/\/ Fractal value noise[\s\S]*?\n}\n/, '').replace(/localVolumeFractalNoise\(position \* localVolumeEmission\[index\]\.w, [^\n]*?\)\) :/, 'localVolumeNoise(position * localVolumeEmission[index].w) :'), plain);
+    // The octave variant also counts its march steps from the finest cell (#1855): drop that block and the longer loop bound too.
+    const withoutOctaveSteps = fractal.replace(/  int octaves = 1 \+ int\([^\n]*\n  if \([^\n]*octaves > 1\) return [^\n]*\n/, '').replace('step < 96; step++', 'step < 32; step++');
+    assert.equal(withoutOctaveSteps.replace(/\/\/ Fractal value noise[\s\S]*?\n}\n/, '').replace(/localVolumeFractalNoise\(position \* localVolumeEmission\[index\]\.w, [^\n]*?\)\) :/, 'localVolumeNoise(position * localVolumeEmission[index].w) :'), plain);
   }
   assert.equal(createLocalVolumeCompositeFragment(false, 'both', false), createLocalVolumeCompositeFragment(false, 'both'));
   assert.match(createLocalVolumeCompositeFragment(false, 'shape', true), /localVolumeFractalNoise/);

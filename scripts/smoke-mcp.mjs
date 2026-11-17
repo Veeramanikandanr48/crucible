@@ -5,6 +5,7 @@ import { constants, setPriority } from 'node:os';
 import { Client } from '@modelcontextprotocol/client';
 import { PatientStdioClientTransport } from './patient-stdio-transport.mjs';
 import { createAgentPreviewFixture } from './agent-preview-fixture.mjs';
+import { assertToolNamesMatchServer } from './mcp-tool-list.mjs';
 
 setPriority(0, constants.priority.PRIORITY_BELOW_NORMAL);
 const backend = process.argv[2] ?? 'gpu';
@@ -53,7 +54,7 @@ try {
   await client.connect(transport);
   processId = transport.pid;
   const listing = await client.listTools();
-  assert.equal(listing.tools.length, 25);
+  await assertToolNamesMatchServer(listing.tools);
   const capabilities = (await call('scene_capabilities')).structuredContent;
   assert.equal(capabilities.phase, 'idle');
   const fixture = createAgentPreviewFixture();

@@ -13,7 +13,7 @@ Start the server with `npx --package @codepawlhq/crucible crucible-mcp --backend
 ## Loop
 
 1. `scene_capabilities`: with no arguments it returns a short index of features, limits and topic names. Pass
-   `topic` for the field list of one feature (`environment`, `materialFields`, `geometries`, `meshEdit.bevel`,
+   `topic` (one name or a list of up to 8) for the field list of a feature (`environment`, `materialFields`, `geometries`, `meshEdit.bevel`,
    `motion`) or `examples.scene_apply` for a complete call of a hard tool. Tool schemas list only common fields, so read the topic before a feature you have not used.
 2. `scene_create` with a `recipe`: `{ "format": "crucible.scene", "schemaVersion": 1, "geometries": [], "materials": [], "nodes": [] }`
    plus optional `camera`, `environment`, `effects`, `shadow`, `motion`, `bake`, `timeline`.

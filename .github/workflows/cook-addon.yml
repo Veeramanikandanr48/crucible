@@ -47,6 +47,7 @@ on:
       - 'scripts/agent-native-temporal.mjs'
       - 'scripts/agent-native-trace.mjs'
       - 'scripts/asset-server.mjs'
+      - 'scripts/cdp-blob-read.mjs'
       - 'scripts/file-scene.mjs'
       - 'scripts/make-spark-spec.mjs'
       - 'scripts/native-bake-page.js'

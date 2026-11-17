@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { totalmem } from 'node:os';
 import { sampleBrowserHeap, memoryGuardLimits, exceedsMemoryGuard, memoryGuardMessage, createNativeMemoryAllowance } from './agent-memory-guard.mjs';
@@ -24,6 +24,7 @@ import { readNativeCapacity } from './native-capacity.mjs';
 import { chooseNativeInstancing, chooseNativeKernel, chooseTraceBackend, createNativeTracerLocator, fetchNativeExport, isNativeTimeLimitError, traceFrameNative, traceTexelsNative } from './agent-native-trace.mjs';
 import { addonCapabilities, addonFileFor, addonImportMap } from './mcp-addons.mjs';
 import { createAgentAssetCatalog } from './agent-asset-catalog.mjs';
+import { launchWithShaderCache, shaderCacheDirectory } from './agent-shader-cache.mjs';
 import { createPackRegistry } from './agent-packs.mjs';
 import { MAXIMUM_INSTALLED_PACKS, MAXIMUM_PACK_BYTES, MAXIMUM_PACK_FILES, MAXIMUM_PACK_FILE_BYTES, MAXIMUM_PACK_JSON_BYTES, MAXIMUM_PACK_ITEMS_PER_KIND, PACK_CONTENT_KINDS } from '../src/pack-manifest.js';
 import { geometryOnlyGlb } from './agent-query-asset.mjs';
@@ -50,7 +51,7 @@ import { filmTimelineDuration, filmTimelineShotStarts, sampleFilmTimeline } from
 import { isPreviewHost } from './preview-host.mjs';
 import { runAnnotateSession } from './annotate-session.mjs';
 import { openInDefaultBrowser } from './annotate-open.mjs';
-import { ANNOTATE_LIMITS } from '../src/agent-annotate.js';
+import { ANNOTATE_LIMITS, validateMarks, isBoundedPng } from '../src/agent-annotate.js';
 import { normalizeReview, reviewDeadlineMessage, REVIEW_LIMITS } from './agent-review.mjs';
 import { mergeFrameDiagnostics, pathTracerFindingsLimit } from '../src/frame-checks.js';
 import { BRANCH_LIMITS, validateBranchName } from '../src/agent-branches.js';
@@ -166,6 +167,9 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
   let cancelReview;
   // One per scene_ask_user call that is waiting for the person; close() aborts them so the page server and its timer end at once.
   const pendingAskControllers = new Set();
+  // Views shown inline by an MCP Apps host (#923): the person's marks come back in a later call, so the frame they marked is kept here.
+  const inlineAsks = new Map();
+  const MAXIMUM_INLINE_ASKS = 8;
   // Open scenes, least recently used first; the last one is what a call without a sessionId means.
   const openSessionIds = new Set();
   // Set once a recipe with a streamed texture sequence is read; from then on a call with a motion time supplies its frames first.
@@ -569,9 +573,12 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
       if (backend === 'cpu') {
         args.push('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
       }
-      browserInstance = await chromium.launch({ headless: true, args,
-        ...(browserPath ? { executablePath: browserPath } : { channel: 'chrome' }),
-      });
+      const launchOptions = { headless: true, args, ...(browserPath ? { executablePath: browserPath } : { channel: 'chrome' }) };
+      // The shader cache only helps the GPU backend: the CPU backend compiles in SwiftShader, which has no driver compile to skip.
+      const shaderCacheFolder = backend === 'gpu' ? shaderCacheDirectory() : null;
+      browserInstance = shaderCacheFolder
+        ? await launchWithShaderCache(chromium, launchOptions, shaderCacheFolder, { viewport: { width: 768, height: 512 }, deviceScaleFactor: 1 })
+        : await chromium.launch(launchOptions);
       page = await browserInstance.newPage({ viewport: { width: 768, height: 512 }, deviceScaleFactor: 1 });
       await page.route('**/*', route => {
         const url = new URL(route.request().url());
@@ -628,6 +635,14 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
   function forgetAllSessions() {
     openSessionIds.clear();
     bakedSessionIds.clear();
+  }
+
+  async function resolveSentMarks({ sessionId, frame, marks, image }) {
+    const base = { sessionId, revision: frame.metadata.revision, view: { width: frame.width, height: frame.height, camera: frame.camera } };
+    const picked = await enqueue(() => invoke('pickMarks', { sessionId, camera: frame.camera, marks, width: frame.width, height: frame.height }));
+    const sceneChanged = picked.revision !== frame.metadata.revision;
+    return { image, content: { ...base, outcome: 'sent', marks: picked.marks,
+      ...(sceneChanged ? { warning: `The scene changed from revision ${frame.metadata.revision} to ${picked.revision} while the person marked; part IDs and points describe revision ${picked.revision}, the picture shows ${frame.metadata.revision}.` } : {}) } };
   }
 
   function requireSession(sessionId) {
@@ -845,7 +860,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
             const blendsOverTime = usesSession && settings.kind === 'video' && chooseNativeKernel() === 'cycles' && chooseNativeTemporal();
             const frameSeed = blendsOverTime ? temporalFrameSeed(tracerOptions.seed, frame) : tracerOptions.seed;
             try {
-              const exported = await fetchNativeExport(jobPage, { ...frameInput, options: { width, height, bounces: tracerOptions.bounces, seed: frameSeed, fireflyClamp: 20, noiseThreshold: tracerOptions.noiseThreshold, samples: tracerOptions.samples, instancing: chooseNativeInstancing(), kernel: chooseNativeKernel() } }, { capacity: readNativeCapacity(trace.tracer).capacity });
+              const exported = await fetchNativeExport(jobPage, { ...frameInput, options: { width, height, bounces: tracerOptions.bounces, seed: frameSeed, fireflyClamp: 20, noiseThreshold: tracerOptions.noiseThreshold, samples: tracerOptions.samples, instancing: chooseNativeInstancing(), kernel: chooseNativeKernel() } }, { capacity: readNativeCapacity(trace.tracer).capacity, session });
               exportedScene = true;
               if (usesSession) nativeSequence ??= createNativeSequence({ tracer: trace.tracer });
               if (blendsOverTime) {
@@ -1262,6 +1277,16 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
         return invoke('annotateFrame', { sessionId: input.sessionId });
       });
       if (closing) throw new Error('The agent runtime is closing.');
+      if (input.inline) {
+        // The nonce goes to the view in the result's _meta only, never in the content the model reads: the model cannot call the
+        // app-only submit tool with a person's marks because it never sees the nonce.
+        const nonce = randomBytes(16).toString('hex');
+        inlineAsks.set(nonce, { sessionId: input.sessionId, frame, maxMarks, expiresAt: Date.now() + timeoutSeconds * 1000 });
+        while (inlineAsks.size > MAXIMUM_INLINE_ASKS) inlineAsks.delete(inlineAsks.keys().next().value);
+        return { image: frame.data, viewMeta: { nonce }, content: { sessionId: input.sessionId, outcome: 'pending', revision: frame.metadata.revision,
+          view: { width: frame.width, height: frame.height, camera: frame.camera }, maxMarks, maxNoteLength: ANNOTATE_LIMITS.maxNoteLength, prompt: input.prompt ?? '',
+          message: 'The view is open in the chat for the person. Their marks arrive as a message from them: stop here and do not call scene_ask_user again.' } };
+      }
       const askController = new AbortController();
       pendingAskControllers.add(askController);
       let session;
@@ -1281,10 +1306,24 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
           ? `The person did not press Send within ${timeoutSeconds} seconds. Ask in text, or call scene_ask_user again with a longer timeoutSeconds.`
           : 'The person cancelled without sending marks. Ask what they meant in text.' } };
       }
-      const picked = await enqueue(() => invoke('pickMarks', { sessionId: input.sessionId, camera: frame.camera, marks: session.marks, width: frame.width, height: frame.height }));
-      const sceneChanged = picked.revision !== frame.metadata.revision;
-      return { image: session.image, content: { ...base, outcome: 'sent', marks: picked.marks,
-        ...(sceneChanged ? { warning: `The scene changed from revision ${frame.metadata.revision} to ${picked.revision} while the person marked; part IDs and points describe revision ${picked.revision}, the picture shows ${frame.metadata.revision}.` } : {}) } };
+      return resolveSentMarks({ sessionId: input.sessionId, frame, marks: session.marks, image: session.image });
+    },
+    // The second half of an inline scene_ask_user: the MCP Apps view sends the marks it collected, the answer has the same shape as a
+    // browser answer. Only the nonce the view received can submit, so the model cannot forge an answer; an unknown, used or
+    // expired nonce fails. The ask stays open until the marks resolve, so a failed pick can be retried.
+    async submitAskUser({ nonce, marks, image }) {
+      const pending = inlineAsks.get(nonce);
+      if (!pending) throw new Error('scene_ask_user_submit only accepts the marks of an open annotate view, using the nonce that view received. Call scene_ask_user again to get a fresh view.');
+      if (Date.now() > pending.expiresAt) {
+        inlineAsks.delete(nonce);
+        throw new Error('The annotate view timed out before the marks were sent. Ask in text, or call scene_ask_user again with a longer timeoutSeconds.');
+      }
+      const clean = validateMarks(marks, { width: pending.frame.width, height: pending.frame.height, maxMarks: pending.maxMarks });
+      if (!clean.length) throw new TypeError('Add at least one pin before sending.');
+      if (!isBoundedPng(image)) throw new TypeError('The marked picture is not a PNG within 1 MiB.');
+      const answer = await resolveSentMarks({ sessionId: pending.sessionId, frame: pending.frame, marks: clean, image });
+      inlineAsks.delete(nonce);
+      return answer;
     },
     checkpoint(input) {
       return enqueue(async () => {
@@ -1457,6 +1496,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
         await requirePreviewRenderer();
         const result = await invoke('dispose', input);
         forgetSession(input.sessionId);
+        for (const [nonce, pending] of inlineAsks) if (pending.sessionId === input.sessionId) inlineAsks.delete(nonce);
         return result;
       });
     },
@@ -1573,6 +1613,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
         phase = 'closing';
         cancelReview?.(new Error('The agent runtime is closing.'));
         for (const askController of pendingAskControllers) askController.abort();
+        inlineAsks.clear();
         closing = (async () => {
           try {
             // The job store goes first: a client that closes the connection waits only a couple of seconds before it kills this

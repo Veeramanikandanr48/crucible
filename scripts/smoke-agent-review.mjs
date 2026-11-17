@@ -8,6 +8,7 @@ import { Client } from '@modelcontextprotocol/client';
 import { PatientStdioClientTransport } from './patient-stdio-transport.mjs';
 import { createAgentCharacterFixture } from './agent-character-fixture.mjs';
 import { createTexturedRigFixture } from './agent-asset-fixture.mjs';
+import { assertToolListMatchesServer } from './mcp-tool-list.mjs';
 
 setPriority(0, constants.priority.PRIORITY_BELOW_NORMAL);
 const directory = await mkdtemp(join(tmpdir(), 'crucible-review-proof-'));
@@ -48,7 +49,7 @@ function pixels(bytes, crop) {
 }
 try {
   await client.connect(transport);
-  assert.equal((await client.listTools()).tools.length, 22);
+  await assertToolListMatchesServer(client);
   const created = (await call('scene_create_asset', { recipe: fixture.recipe })).structuredContent;
   const sessionId = created.sessionId;
   const checkpoint = (await call('scene_checkpoint', { sessionId })).structuredContent;

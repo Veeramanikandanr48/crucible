@@ -102,13 +102,11 @@ test('the learn pages carry no release URL that the site stops serving', () => {
   assert.match(readText('docs/learn/install.md'), /releases\/<version>\/67\.module\.js/);
 });
 
-test('the docs say the three optional packages are not on npm, and each package names its repository folder', () => {
+test('the docs say the two optional packages are not on npm, and each package names its repository folder', () => {
   const notes = [
-    ['docs/path-tracer.md', 'not on npm yet'],
     ['docs/three-bridge.md', 'not on npm yet'],
     ['docs/learn/if-you-know-three-js.md', 'not on npm yet'],
     ['public/llms.txt', 'not on npm yet'],
-    ['packages/denoise-oidn/README.md', 'not on npm yet'],
     ['packages/three-bridge/README.md', 'not on npm yet'],
     ['packages/three-compat/README.md', 'not on npm yet'],
   ];
