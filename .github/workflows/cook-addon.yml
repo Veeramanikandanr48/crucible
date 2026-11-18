@@ -181,6 +181,7 @@ on:
       - 'src/live-geometry.js'
       - 'src/local-volume-fire-light.js'
       - 'src/local-volume-grid.js'
+      - 'src/local-volume-grid-detail.js'
       - 'src/local-volume-noise.js'
       - 'src/local-volume-parts.js'
       - 'src/local-volume-ramp-bake.js'
