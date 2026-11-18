@@ -1326,6 +1326,23 @@ function stagePose(stagedState, time) {
   return { graph, materialUpdates, camera, time, clothGeometries, assetClips, hiddenNodes, movedLook, morphs: sampled?.morphs ?? null };
 }
 
+/** A mesh stack with every ocean node's time set to `oceanTime`: the geometry a recipe that writes that time into the node would build. */
+function oceanGeometryAt(stagedState, geometryId, oceanTime, wakeField) {
+  const definition = stagedState.recipe.geometries.find(candidate => candidate.id === geometryId);
+  const stack = definition.stack.map(node => (node.op === 'ocean' ? { ...node, ...wakeField, time: oceanTime } : node));
+  const scope = cutterScopeOf(stagedState.recipe.geometries);
+  return Object.freeze(generateGeometry({ ...definition, stack }, stagedState.maxGeometryVertices, scope));
+}
+
+/** What a particle emitter reads of a sea: whether an `oceanTime` track drives it, and the sea as it is at a motion time. */
+function oceanSeaReader(stagedState) {
+  const oceanTimeAt = (geometryId, time) => stagedState.motionSampler?.sample(time)?.geometries.get(geometryId)?.oceanTime;
+  return {
+    followsOceanTime: geometryId => oceanTimeAt(geometryId, 0) !== undefined,
+    geometryAt: (geometryId, time) => oceanGeometryAt(stagedState, geometryId, oceanTimeAt(geometryId, time)),
+  };
+}
+
 /**
  * Geometries of mesh stacks whose ocean time a geometry track drives, keyed by node ID. Each one is built from the cached edits with
  * every ocean node's `time` set to the sampled value, so it equals the still of a recipe that writes that time into the node. The last
@@ -1343,10 +1360,7 @@ function oceanTimeGeometries(stagedState, sampled, time) {
     const wakeField = stagedState.physicsSampler?.wakeField?.(geometryId, time);
     const key = wakeField ? `${patch.oceanTime}|${time}` : patch.oceanTime;
     if (frame?.key !== key) {
-      const definition = stagedState.recipe.geometries.find(candidate => candidate.id === geometryId);
-      const stack = definition.stack.map(node => (node.op === 'ocean' ? { ...node, ...wakeField, time: patch.oceanTime } : node));
-      const scope = cutterScopeOf(stagedState.recipe.geometries);
-      frame = { key, geometry: Object.freeze(generateGeometry({ ...definition, stack }, stagedState.maxGeometryVertices, scope)) };
+      frame = { key, geometry: oceanGeometryAt(stagedState, geometryId, patch.oceanTime, wakeField) };
       frames.set(geometryId, frame);
     }
     for (const node of stagedState.recipe.nodes) {
@@ -1814,7 +1828,7 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
     stagedState.motionSampler = recipe.motion ? agentSceneModule('motion').compileAgentMotion(recipe.motion, recipe) : null;
     stagedState.physicsSampler = stagePhysics(recipe, geometryRecords);
     stagedState.clothSampler = stageCloth(recipe, geometryRecords, stagedState.motionSampler);
-    stagedState.particleSampler = stageParticles(recipe, geometryRecords);
+    stagedState.particleSampler = stageParticles(recipe, geometryRecords, stagedState);
     const animated = Boolean(stagedState.motionSampler || stagedState.physicsSampler || stagedState.clothSampler || stagedState.particleSampler || assetRuntime.animators.length);
     stagedState.poseGraph = animated ? compile(recipe, geometries, localBounds, limits) : null;
     stagedState.initialPose = stagePose(stagedState, animated ? 0 : null);
@@ -1996,15 +2010,18 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
   }
 
   // Particle launches are cheap to recompute, but an unchanged section on unchanged nodes still reuses them.
-  function stageParticles(recipe, geometryRecords) {
+  function stageParticles(recipe, geometryRecords, stagedState) {
     if (!recipe.particles) {
       return null;
     }
     const involvedNodes = recipe.nodes.filter(node => recipe.particles.systems.some(system => system.node === node.id));
-    const key = JSON.stringify([recipe.particles, involvedNodes, involvedNodes.map(node => geometryRecords.get(node.geometry).signature)]);
+    // A mesh emitter on a sea with an oceanTime track reads the sea as it moves, so the bake depends on the motion and the sea's stack too.
+    const seaEmitters = recipe.particles.systems.some(system => system.emitter?.shape === 'mesh');
+    const seaInputs = seaEmitters ? [recipe.motion, recipe.geometries.filter(geometry => geometry.stack?.some(node => node.op === 'ocean'))] : null;
+    const key = JSON.stringify([recipe.particles, involvedNodes, involvedNodes.map(node => geometryRecords.get(node.geometry).signature), seaInputs]);
     if (particleBake?.key !== key) {
       const geometries = new Map([...geometryRecords].map(([id, record]) => [id, record.geometry]));
-      particleBake = { key, sampler: agentSceneModule('particles').bakeAgentParticles(recipe.particles, recipe, geometries) };
+      particleBake = { key, sampler: agentSceneModule('particles').bakeAgentParticles(recipe.particles, recipe, geometries, seaEmitters ? oceanSeaReader(stagedState) : null) };
     }
     return particleBake.sampler;
   }

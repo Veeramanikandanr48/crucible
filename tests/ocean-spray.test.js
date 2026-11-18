@@ -174,3 +174,50 @@ test('groupThreshold needs a group and stays between 0 and 1', () => {
   assert.throws(() => createAgentScene(ungrouped), /emitter.groupThreshold[^]*group/);
   failure({ groupThreshold: 2 }, /emitter\.groupThreshold/);
 });
+
+// A sea driven by an oceanTime track: droplets born at time t start on the water that sprays at t.
+function movingSeaRecipe() {
+  const recipe = seaRecipe({ groupThreshold: 0.3 }, { count: 120, rate: 60, lifetime: 0.5, size: 0.01 });
+  const sea = { ...SEA, time: 0, size: 8, resolution: 8, windSpeed: 14, choppiness: 2, spray: true };
+  recipe.geometries[0] = { id: 'sea', type: 'mesh', base: { type: 'box', bevel: 0 }, stack: [{ op: 'subdivide', levels: 4 }, sea] };
+  recipe.motion = { duration: 2, tracks: [{ kind: 'geometry', id: 'sea', property: 'oceanTime', keyframes: [{ time: 0, value: 0 }, { time: 2, value: 2 }] }] };
+  return recipe;
+}
+
+function birthsOnSprayingWater(recipe) {
+  const scene = createAgentScene(recipe);
+  const counts = { early: 0, late: 0 };
+  for (let index = 0; index < 120; index++) {
+    const birth = index / 60;
+    scene.sampleMotion(birth);
+    const sea = scene.parts.find(part => part.name === 'surface').geometry;
+    const drops = scene.parts.find(part => part.name === 'droplets').geometry;
+    const centre = [0, 1, 2].map(axis => {
+      let sum = 0;
+      for (let vertex = index * 24; vertex < index * 24 + 24; vertex++) sum += drops.positions[vertex * 3 + axis];
+      return sum / 24;
+    });
+    let nearest = Infinity;
+    let nearestWeight = 0;
+    for (let vertex = 0; vertex < sea.positions.length / 3; vertex++) {
+      const distance = Math.hypot(sea.positions[vertex * 3] - centre[0], sea.positions[vertex * 3 + 1] - centre[1], sea.positions[vertex * 3 + 2] - centre[2]);
+      if (distance < nearest) {
+        nearest = distance;
+        nearestWeight = sea.vertexGroups.spray[vertex];
+      }
+    }
+    if (nearest <= 0.3 && nearestWeight >= 0.3) counts[birth < 1 ? 'early' : 'late']++;
+  }
+  return counts;
+}
+
+test('droplets born later start on the crests that have arrived by then, and the same seed gives the same bytes', () => {
+  const counts = birthsOnSprayingWater(movingSeaRecipe());
+  assert.ok(counts.early > 20, `${counts.early} of 60 droplets born in the first second start on spraying water`);
+  assert.ok(counts.late > 20, `${counts.late} of 60 droplets born in the second second start on spraying water`);
+  const first = createAgentScene(movingSeaRecipe());
+  const second = createAgentScene(movingSeaRecipe());
+  first.sampleMotion(1.5);
+  second.sampleMotion(1.5);
+  assert.deepEqual(Array.from(first.parts.find(part => part.name === 'droplets').geometry.positions), Array.from(second.parts.find(part => part.name === 'droplets').geometry.positions));
+});

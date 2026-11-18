@@ -1,0 +1,3 @@
+- scene:agent-scene: a mesh emitter reads a moving sea at each droplet's birth, about 90 bytes gzip of code, so spray keeps coming from crests that arrive later instead of ending with the time-0 sea.
+- scene:agent-scene+lazy: the same code (about 300 bytes gzip counting the lazy chunk).
+- goal:agent-scene: an agent-facing capability (spray that lasts the whole clip) with no smaller route; the growth is under 0.1 percent of the bundle.

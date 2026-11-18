@@ -493,26 +493,68 @@ function velocityVectorOf(emitter, geometry, matrix, emitterPath) {
   return world;
 }
 
-function meshSourceOf(system, nodes, geometries, systemIndex) {
+function emptySourceError(emitter, emitterPath) {
+  const groupNote = emitter.group ? ` and some weight in vertex group "${emitter.group}"` : '';
+  return invalidField(`${emitterPath}.mesh`, emitter.mesh, `a node whose mesh has triangles with some area${groupNote}, because emitter.from is "${emitter.from}"`);
+}
+
+// The sampler over one build of the emitter mesh; null when that build cannot supply the mode (for a sea: no crest throwing spray).
+function meshSourceFrom(emitter, sourceNode, geometry, emitterPath) {
+  const world = surfaceInWorld(geometry, nodeMatrix(sourceNode));
+  const weights = emitter.group ? vertexGroupOf(emitter, geometry, emitterPath) : null;
+  const vectors = emitter.velocityFrom ? velocityVectorOf(emitter, geometry, nodeMatrix(sourceNode), emitterPath) : null;
+  return createMeshSource(world.positions, world.normals, geometry.indices, emitter.from, weights, emitter.sharpAngle ?? null, vectors, emitter.groupThreshold ?? 0);
+}
+
+// A moving sea is read 8 times a second over the first 8 s of emission (64 builds at most, each made on first use), so the cost is bounded.
+const SEA_FRAMES_PER_SECOND = 8;
+const SEA_FRAME_LIMIT = 64;
+
+/**
+ * A mesh source that follows an `oceanTime` track: a particle born at time t samples the sea as it is at t, so crests that
+ * arrive later keep emitting. A frame with no spray borrows the nearest frame that has some.
+ */
+function seaSourceOf(emitter, emitterPath, triangleCount, buildFrame) {
+  const frames = new Map();
+  const frameAt = frame => {
+    if (!frames.has(frame)) frames.set(frame, buildFrame(frame / SEA_FRAMES_PER_SECOND));
+    return frames.get(frame);
+  };
+  return Object.freeze({
+    mode: emitter.from,
+    triangleCount,
+    sample(random, birth = 0) {
+      const wanted = Math.min(SEA_FRAME_LIMIT - 1, Math.max(0, Math.round(birth * SEA_FRAMES_PER_SECOND)));
+      for (let distance = 0; distance < SEA_FRAME_LIMIT; distance++) {
+        for (const frame of [wanted - distance, wanted + distance]) {
+          if (frame < 0 || frame >= SEA_FRAME_LIMIT) continue;
+          const source = frameAt(frame);
+          if (source) return source.sample(random);
+        }
+      }
+      throw emptySourceError(emitter, emitterPath);
+    },
+  });
+}
+
+function meshSourceOf(system, nodes, geometries, systemIndex, sea) {
   const emitterPath = `particles.systems[${systemIndex}].emitter`;
   const emitter = system.emitter;
   if (emitter.shape !== 'mesh') return emitter;
   const sourceNode = nodes.get(emitter.mesh);
   const geometry = geometries.get(sourceNode.geometry);
-  const world = surfaceInWorld(geometry, nodeMatrix(sourceNode));
-  const weights = emitter.group ? vertexGroupOf(emitter, geometry, emitterPath) : null;
-  const sharpAngle = emitter.sharpAngle ?? null;
-  const sourceMatrix = nodeMatrix(sourceNode);
-  const vectors = emitter.velocityFrom ? velocityVectorOf(emitter, geometry, sourceMatrix, emitterPath) : null;
-  const source = createMeshSource(world.positions, world.normals, geometry.indices, emitter.from, weights, sharpAngle, vectors, emitter.groupThreshold ?? 0);
-  if (!source) {
-    const groupNote = emitter.group ? ` and some weight in vertex group "${emitter.group}"` : '';
-    throw invalidField(`${emitterPath}.mesh`, emitter.mesh, `a node whose mesh has triangles with some area${groupNote}, because emitter.from is "${emitter.from}"`);
+  const staticSource = meshSourceFrom(emitter, sourceNode, geometry, emitterPath);
+  const followsSea = Boolean(sea?.followsOceanTime(sourceNode.geometry));
+  if (!staticSource && !followsSea) throw emptySourceError(emitter, emitterPath);
+  const triangleCount = geometry.indices.length / 3;
+  if (triangleCount > PARTICLE_LIMITS.maxEmitterTriangles) {
+    throw invalidField(`${emitterPath}.mesh`, `${triangleCount} triangles on node ${emitter.mesh}`, `a mesh with at most ${PARTICLE_LIMITS.maxEmitterTriangles} triangles, such as a simpler proxy mesh`);
   }
-  if (source.triangleCount > PARTICLE_LIMITS.maxEmitterTriangles) {
-    throw invalidField(`${emitterPath}.mesh`, `${source.triangleCount} triangles on node ${emitter.mesh}`, `a mesh with at most ${PARTICLE_LIMITS.maxEmitterTriangles} triangles, such as a simpler proxy mesh`);
+  if (followsSea) {
+    const source = seaSourceOf(emitter, emitterPath, triangleCount, time => meshSourceFrom(emitter, sourceNode, sea.geometryAt(sourceNode.geometry, time), emitterPath));
+    return { ...emitter, source };
   }
-  return { ...emitter, source };
+  return { ...emitter, source: staticSource };
 }
 
 function prepareEmitter(system, node, templates, forces, colliders, emitter) {
@@ -570,8 +612,10 @@ function prepareHair(system, node, surfaceNode, surfaceGeometry, forces) {
 /**
  * Prepare the particles section. The result is a pure function of time: `sample(t)` returns the geometry of each
  * system node with every particle or strand placed from its seeded values, so a seek never replays earlier times.
+ * `sea` is optional: `{ followsOceanTime(geometryId), geometryAt(geometryId, time) }` lets a mesh emitter read a sea whose `oceanTime`
+ * is driven by a motion track, as it is at each particle's birth.
  */
-export function bakeAgentParticles(particles, recipe, geometries) {
+export function bakeAgentParticles(particles, recipe, geometries, sea = null) {
   const nodes = new Map(recipe.nodes.map(node => [node.id, node]));
   const forces = { gravity: particles.gravity ?? DEFAULT_GRAVITY, wind: particles.wind ?? [0, 0, 0], fields: particles.fields ?? [] };
   let totalVertices = 0;
@@ -584,9 +628,9 @@ export function bakeAgentParticles(particles, recipe, geometries) {
       const surfaceNode = nodes.get(system.surface);
       return prepareHair(system, node, surfaceNode, geometries.get(surfaceNode.geometry), forces);
     }
-    if (system.type === 'sparks') return prepareSparks(system, node, forces, meshSourceOf(system, nodes, geometries, systemIndex));
+    if (system.type === 'sparks') return prepareSparks(system, node, forces, meshSourceOf(system, nodes, geometries, systemIndex, sea));
     const templates = templateNodeIds(system).map(nodeId => geometries.get(nodes.get(nodeId).geometry));
-    return prepareEmitter(system, node, templates, forces, collisionSurfaceOf(system, nodes, geometries), meshSourceOf(system, nodes, geometries, systemIndex));
+    return prepareEmitter(system, node, templates, forces, collisionSurfaceOf(system, nodes, geometries), meshSourceOf(system, nodes, geometries, systemIndex, sea));
   });
   return Object.freeze({
     sample(time) {

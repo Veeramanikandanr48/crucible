@@ -128,7 +128,9 @@ export function createParticleLaunches(settings) {
   for (let index = 0; index < count; index++) {
     const random = createGenerator(seed, index);
     random();
-    const emission = emitter.shape === 'mesh' ? emitter.source.sample(random) : { point: pointInEmitter(emitter, [random(), random(), random()]), normal: null };
+    birth[index] = (settings.delay ?? 0) + (rate ? index / rate : 0);
+    // A sea that moves is read at the moment the particle is born, so the crests that have arrived by then emit it.
+    const emission = emitter.shape === 'mesh' ? emitter.source.sample(random, birth[index]) : { point: pointInEmitter(emitter, [random(), random(), random()]), normal: null };
     const launch = directionInCone(axis, spreadRadians, random(), random());
     const launchSpeed = between(speed, random());
     for (let component = 0; component < 3; component++) {
@@ -137,7 +139,6 @@ export function createParticleLaunches(settings) {
     }
     life[index] = between(lifetime, random());
     particleSize[index] = between(size, random());
-    birth[index] = (settings.delay ?? 0) + (rate ? index / rate : 0);
     // Drawn last, so adding spin never changes the launch of a particle that existed before.
     const spinDirection = directionInCone([0, 1, 0], Math.PI, random(), random());
     spinAxis.set(spinDirection, index * 3);

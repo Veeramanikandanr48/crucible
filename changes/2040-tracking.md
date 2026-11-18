@@ -1,0 +1,1 @@
+- Spray droplets follow a sea driven by an `oceanTime` track: each droplet is born on the crest the sea has at that moment, so a moving sea keeps throwing spray through the whole clip (#2040).
