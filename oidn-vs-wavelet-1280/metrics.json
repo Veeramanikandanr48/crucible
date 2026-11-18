@@ -1,0 +1,63 @@
+{
+ "reference": {
+  "1280x720": "mean of 7 seeds x 16 spp = 112 spp (mean of tone-mapped PNGs)",
+  "640x360": "mean of 4 seeds x 64 spp = 256 spp (mean of tone-mapped PNGs)"
+ },
+ "4spp 1280x720 / noisy input": {
+  "grain": 0.036,
+  "rmse_vs_reference": 0.06694
+ },
+ "4spp 1280x720 / Before = wavelet": {
+  "grain": 0.01624,
+  "rmse_vs_reference": 0.04198
+ },
+ "4spp 1280x720 / After = OIDN": {
+  "grain": 0.0044,
+  "rmse_vs_reference": 0.02903
+ },
+ "16spp 1280x720 / noisy input": {
+  "grain": 0.02593,
+  "rmse_vs_reference": 0.04789
+ },
+ "16spp 1280x720 / Before = wavelet": {
+  "grain": 0.01112,
+  "rmse_vs_reference": 0.02897
+ },
+ "16spp 1280x720 / After = OIDN": {
+  "grain": 0.0055,
+  "rmse_vs_reference": 0.02619
+ },
+ "64spp 640x360 / noisy input": {
+  "grain": 0.01845,
+  "rmse_vs_reference": 0.03481
+ },
+ "64spp 640x360 / Before = wavelet": {
+  "grain": 0.00875,
+  "rmse_vs_reference": 0.02296
+ },
+ "64spp 640x360 / After = OIDN": {
+  "grain": 0.0064,
+  "rmse_vs_reference": 0.02089
+ },
+ "crop": {
+  "x": 720,
+  "y": 568,
+  "w": 200,
+  "h": 112,
+  "rule": "lower half, mean luminance >= 0.05, highest noisy-input grain"
+ },
+ "crop_metrics": {
+  "noisy input": {
+   "grain": 0.05551,
+   "rmse_vs_reference": 0.08316
+  },
+  "Before = wavelet": {
+   "grain": 0.02221,
+   "rmse_vs_reference": 0.04616
+  },
+  "After = OIDN": {
+   "grain": 0.01178,
+   "rmse_vs_reference": 0.04693
+  }
+ }
+}
