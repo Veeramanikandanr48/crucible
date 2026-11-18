@@ -1,0 +1,15 @@
+r1 20000 util=1% "drawCounts":{"drawCalls":133,"triangles":1796604} "wallMedianMs":8.66 "gpuTotalMedianMs":4.404 
+r1 8000 util=2% "drawCounts":{"drawCalls":143,"triangles":1078210} "wallMedianMs":7.405 "gpuTotalMedianMs":3.317 
+r1 4000 util=1% "drawCounts":{"drawCalls":143,"triangles":1059836} "wallMedianMs":6.89 "gpuTotalMedianMs":3.389 
+r1 1500 util=2% "drawCounts":{"drawCalls":143,"triangles":1057188} "wallMedianMs":6.41 "gpuTotalMedianMs":3.508 
+r1 none util=2% "drawCounts":{"drawCalls":133,"triangles":3259594} "wallMedianMs":8.71 "gpuTotalMedianMs":7.074 
+r2 20000 util=3% "drawCounts":{"drawCalls":133,"triangles":1796604} "wallMedianMs":6.92 "gpuTotalMedianMs":4.346 
+r2 8000 util=2% "drawCounts":{"drawCalls":143,"triangles":1078210} "wallMedianMs":5.75 "gpuTotalMedianMs":3.297 
+r2 4000 util=22% "drawCounts":{"drawCalls":143,"triangles":1059836} "wallMedianMs":6.58 "gpuTotalMedianMs":3.377 
+r2 1500 util=36% "drawCounts":{"drawCalls":143,"triangles":1057188} "wallMedianMs":8.47 "gpuTotalMedianMs":3.62 
+r2 none util=4% "drawCounts":{"drawCalls":133,"triangles":3259594} "wallMedianMs":10.54 "gpuTotalMedianMs":6.728 
+r3 20000 util=1% "drawCounts":{"drawCalls":133,"triangles":1796604} "wallMedianMs":7.495 "gpuTotalMedianMs":4.382 
+r3 8000 util=2% "drawCounts":{"drawCalls":143,"triangles":1078210} "wallMedianMs":4.97 "gpuTotalMedianMs":3.291 
+r3 4000 util=53% "drawCounts":{"drawCalls":143,"triangles":1059836} "wallMedianMs":6.205 "gpuTotalMedianMs":3.364 
+r3 1500 util=1% "drawCounts":{"drawCalls":143,"triangles":1057188} "wallMedianMs":7.28 "gpuTotalMedianMs":3.562 
+r3 none util=3% "drawCounts":{"drawCalls":133,"triangles":3259594} "wallMedianMs":8.73 "gpuTotalMedianMs":7.081 

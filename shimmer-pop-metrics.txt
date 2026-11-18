@@ -1,0 +1,7 @@
+{"directory":"seq-none","reference":true,"shimmer":12.6949}
+{"directory":"seq-20000","shimmer":12.6287,"popMax":5.8064,"popMedian":2.8049,"popMaxFrame":59,"addedShimmer":0.7599,"popSpike":0.6269,"popSpikeFrame":14}
+{"directory":"seq-12000","shimmer":12.6284,"popMax":5.8518,"popMedian":2.8679,"popMaxFrame":59,"addedShimmer":0.7804,"popSpike":0.6026,"popSpikeFrame":14}
+{"directory":"seq-8000","shimmer":12.6124,"popMax":6.0158,"popMedian":3.3826,"popMaxFrame":59,"addedShimmer":1.141,"popSpike":0.4223,"popSpikeFrame":14}
+{"directory":"seq-4000","shimmer":12.6131,"popMax":6.087,"popMedian":3.4764,"popMaxFrame":59,"addedShimmer":1.1552,"popSpike":0.4195,"popSpikeFrame":14}
+{"directory":"seq-1500","shimmer":12.6129,"popMax":6.0871,"popMedian":3.4771,"popMaxFrame":59,"addedShimmer":1.1571,"popSpike":0.4194,"popSpikeFrame":14}
+{"directory":"seq-1500-err05","shimmer":12.6466,"popMax":4.9497,"popMedian":3.0571,"popMaxFrame":59,"addedShimmer":0.8748,"popSpike":0.1594,"popSpikeFrame":20}
