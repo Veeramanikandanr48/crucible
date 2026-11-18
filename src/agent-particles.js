@@ -17,7 +17,7 @@ const SPARK_PRESETS = Object.freeze({
   explosion: Object.freeze({ count: 800, speed: [6, 24], spread: 180, lifetime: [0.5, 2], size: [0.006, 0.014], drag: 0.9, emitter: Object.freeze({ shape: 'sphere', radius: 0.2 }) }),
 });
 const HAIR_FIELDS = ['type', 'node', 'surface', 'seed', 'count', 'length', 'segments', 'width', 'droop', 'lean', 'sway', 'swayRate'];
-const EMITTER_FIELDS = ['shape', 'position', 'halfExtents', 'radius', 'mesh', 'from', 'group', 'sharpAngle', 'normalSpeed'];
+const EMITTER_FIELDS = ['shape', 'position', 'halfExtents', 'radius', 'mesh', 'from', 'group', 'sharpAngle', 'normalSpeed', 'velocityFrom', 'velocityScale', 'groupThreshold'];
 const EMITTER_SHAPES = ['point', 'box', 'sphere', 'disc', 'mesh'];
 const ORIENT_MODES = ['none', 'random', 'normal'];
 const SCALE_MODES = ['constant', 'shrink', 'grow'];
@@ -69,6 +69,31 @@ function normalizeMeshEmitter(input, emitter, context, path) {
   if (input.normalSpeed !== undefined) {
     emitter.normalSpeed = finiteNumber(input.normalSpeed, `${path}.normalSpeed`, -1000, 1000);
   }
+  if (input.groupThreshold !== undefined) {
+    if (!emitter.group) {
+      throw invalidField(`${path}.groupThreshold`, input.groupThreshold, `left out unless ${path}.group names a vertex group, such as "spray"`);
+    }
+    emitter.groupThreshold = finiteNumber(input.groupThreshold, `${path}.groupThreshold`, 0, 1);
+  }
+  normalizeVelocitySource(input, emitter, from, path);
+}
+
+// `velocityFrom` names a "vector:<name>" point attribute of the emitter mesh (the ocean's `spray`): each particle also leaves with that velocity.
+function normalizeVelocitySource(input, emitter, from, path) {
+  if (input.velocityFrom === undefined) {
+    if (input.velocityScale !== undefined) {
+      throw invalidField(`${path}.velocityScale`, input.velocityScale, `left out unless ${path}.velocityFrom names a vector, such as "spray"`);
+    }
+    return;
+  }
+  if (typeof input.velocityFrom !== 'string' || !input.velocityFrom) {
+    throw invalidField(`${path}.velocityFrom`, input.velocityFrom, 'the name of a vector on the emitter mesh, such as "spray" (an ocean edit with spray: true writes it)');
+  }
+  if (from !== 'surface' && from !== 'vertices') {
+    throw invalidField(`${path}.velocityFrom`, input.velocityFrom, `left out, because a vector has a value at vertices and across faces, so ${path}.from is "surface" or "vertices", not "${from}"`);
+  }
+  emitter.velocityFrom = input.velocityFrom;
+  emitter.velocityScale = input.velocityScale === undefined ? 1 : finiteNumber(input.velocityScale, `${path}.velocityScale`, -1000, 1000);
 }
 
 function normalizeEmitter(input, context, path) {
@@ -89,7 +114,7 @@ function normalizeEmitter(input, context, path) {
   if (shape === 'mesh') {
     normalizeMeshEmitter(input, emitter, context, path);
   } else {
-    for (const field of ['mesh', 'from', 'group', 'sharpAngle', 'normalSpeed']) {
+    for (const field of ['mesh', 'from', 'group', 'sharpAngle', 'normalSpeed', 'velocityFrom', 'velocityScale', 'groupThreshold']) {
       if (input[field] !== undefined) throw invalidField(`${path}.${field}`, input[field], `left out unless ${path}.shape is "mesh"`);
     }
   }
@@ -452,6 +477,22 @@ function vertexGroupOf(emitter, geometry, emitterPath) {
   return weights;
 }
 
+// The emitter's vector in world space, scaled by velocityScale. A name the mesh lacks is an error that lists the vectors it has.
+function velocityVectorOf(emitter, geometry, matrix, emitterPath) {
+  const vectors = geometry.vertexVectors?.[emitter.velocityFrom];
+  if (!vectors) {
+    const known = Object.keys(geometry.vertexVectors ?? {});
+    throw invalidField(`${emitterPath}.velocityFrom`, emitter.velocityFrom, `a vector of node ${emitter.mesh} (known vectors: ${known.join(', ') || 'none'}); an ocean edit with spray: true writes "spray"`);
+  }
+  const world = new Float64Array(vectors.length);
+  for (let offset = 0; offset < vectors.length; offset += 3) {
+    for (let axis = 0; axis < 3; axis++) {
+      world[offset + axis] = emitter.velocityScale * (matrix[axis] * vectors[offset] + matrix[4 + axis] * vectors[offset + 1] + matrix[8 + axis] * vectors[offset + 2]);
+    }
+  }
+  return world;
+}
+
 function meshSourceOf(system, nodes, geometries, systemIndex) {
   const emitterPath = `particles.systems[${systemIndex}].emitter`;
   const emitter = system.emitter;
@@ -461,7 +502,9 @@ function meshSourceOf(system, nodes, geometries, systemIndex) {
   const world = surfaceInWorld(geometry, nodeMatrix(sourceNode));
   const weights = emitter.group ? vertexGroupOf(emitter, geometry, emitterPath) : null;
   const sharpAngle = emitter.sharpAngle ?? null;
-  const source = createMeshSource(world.positions, world.normals, geometry.indices, emitter.from, weights, sharpAngle);
+  const sourceMatrix = nodeMatrix(sourceNode);
+  const vectors = emitter.velocityFrom ? velocityVectorOf(emitter, geometry, sourceMatrix, emitterPath) : null;
+  const source = createMeshSource(world.positions, world.normals, geometry.indices, emitter.from, weights, sharpAngle, vectors, emitter.groupThreshold ?? 0);
   if (!source) {
     const groupNote = emitter.group ? ` and some weight in vertex group "${emitter.group}"` : '';
     throw invalidField(`${emitterPath}.mesh`, emitter.mesh, `a node whose mesh has triangles with some area${groupNote}, because emitter.from is "${emitter.from}"`);
@@ -528,6 +571,33 @@ function prepareHair(system, node, surfaceNode, surfaceGeometry, forces) {
  * Prepare the particles section. The result is a pure function of time: `sample(t)` returns the geometry of each
  * system node with every particle or strand placed from its seeded values, so a seek never replays earlier times.
  */
+function isOrigin(vector) {
+  return !vector || vector.every(component => component === 0);
+}
+
+/**
+ * A system node's own transform does not move its particles, only emitter.position does, so a node placed at the spark point
+ * with a translation and no emitter.position births its particles at the world origin (#2053). A mesh emitter takes its place
+ * from the mesh node, so it has nothing to ignore.
+ */
+function nodeTransformProblems(particles, recipe) {
+  const nodesById = new Map(recipe.nodes.map(node => [node.id, node]));
+  const reported = new Set();
+  const problems = [];
+  for (const system of particles.systems) {
+    const node = nodesById.get(system.node);
+    if (!node || reported.has(node.id) || isOrigin(node.translation) || system.emitter?.shape === 'mesh' || !isOrigin(system.emitter?.position)) continue;
+    reported.add(node.id);
+    const translation = Array.from(node.translation).map(component => Math.round(component * 1000) / 1000).join(', ');
+    problems.push({
+      kind: 'particle-node-transform-ignored', severity: 'warning', target: node.id,
+      message: `Particle system node ${node.id} is translated to [${translation}], but a system node's transform does not move its particles, so they are born at the world origin.`,
+      fix: `Set emitter.position to [${translation}] on the system with scene_apply set-particles, and leave the node translation at [0, 0, 0].`,
+    });
+  }
+  return problems;
+}
+
 export function bakeAgentParticles(particles, recipe, geometries) {
   const nodes = new Map(recipe.nodes.map(node => [node.id, node]));
   const forces = { gravity: particles.gravity ?? DEFAULT_GRAVITY, wind: particles.wind ?? [0, 0, 0], fields: particles.fields ?? [] };
@@ -546,6 +616,10 @@ export function bakeAgentParticles(particles, recipe, geometries) {
     return prepareEmitter(system, node, templates, forces, collisionSurfaceOf(system, nodes, geometries), meshSourceOf(system, nodes, geometries, systemIndex));
   });
   return Object.freeze({
+    /** Warnings for a recipe that loads but does not do what its author likely meant. */
+    diagnostics() {
+      return nodeTransformProblems(particles, recipe);
+    },
     sample(time) {
       return new Map(prepared.map(({ node, build }) => [node.id, worldToNodeLocal(build(time), nodeMatrix(node))]));
     },

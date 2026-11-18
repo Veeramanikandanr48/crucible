@@ -10,6 +10,7 @@ import { recipeAssetNeeds } from '../src/agent-scene-assets.js';
 import { normalizeFilmTimeline, filmTimelineDuration, videoFrameCount } from '../src/film-timeline.js';
 import { OIDN_DEFAULT_SAMPLES, PATH_TRACER_DENOISERS, PATH_TRACER_JOB_LIMITS } from '../src/path-tracer-capabilities.js';
 import { AGENT_ASSET_LIMITS, describeAssetBytes } from '../src/agent-asset-limits.js';
+import { iconArtifactNames, normalizeIconSettings } from '../src/icon-sheet.js';
 
 const UUID =/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const STATES = ['queued', 'running', 'finalizing', 'completed', 'cancelling', 'cancelled', 'failed', 'interrupted'];
@@ -109,8 +110,9 @@ export function normalizeJobSettings(input, clips, recipe) {
 }
 
 function settingsFrom(input, clips = [], recipe) {
+  if (input?.kind === 'icons') return normalizeIconSettings(input);
   objectKeys(input, ['kind', 'width', 'height', 'fps', 'duration', 'animation', 'motion', 'rendererTime', 'passes', 'renderer', 'timeline', 'audio', 'encoder', 'transparent', 'format', 'multilayer', 'region', 'quality', 'stillCount', 'mattes'], 'settings');
-  if (!['image', 'stills', 'video'].includes(input.kind)) throw new TypeError('kind must be image, stills or video.');
+  if (!['image', 'stills', 'video'].includes(input.kind)) throw new TypeError('kind must be image, stills, video or icons.');
   const largeFrame = input.kind === 'image';
   const maximumSide = largeFrame ? MAXIMUM_JOB_SIDE : MAXIMUM_SEQUENCE_JOB_SIDE;
   const maximumPixels = largeFrame ? MAXIMUM_JOB_PIXELS : MAXIMUM_SEQUENCE_JOB_PIXELS;
@@ -204,7 +206,7 @@ function stillsFrameCountFrom(input) {
 function stillsSequenceDuration(input, frames, fps) {
   const span = (frames - 1) / fps;
   if (input.duration !== undefined && Math.abs(input.duration - span) > 1e-9) {
-    throw new RangeError(`duration is (stillCount - 1) / fps = ${span} s when stillCount is set; leave duration out.`);
+    throw new RangeError(`Leave duration out when stillCount is set: it is (stillCount - 1) / fps = ${Number(span.toFixed(4))} s here, and you sent ${input.duration}.`);
   }
   return span;
 }
@@ -326,14 +328,17 @@ function mattesFrom(input) {
 /** Every artifact filename of a job, lit image first and then each requested pass and matte, frame by frame. */
 export function artifactNames(kind, passes = [], format = 'png', multilayer = false, stillCount = 8, mattes = []) {
   if (kind === 'video') return ['render.mp4'];
+  // An icons job has one frame per item, so its frame count is its item count.
+  if (kind === 'icons') return iconArtifactNames(stillCount);
   const extension = format === 'exr' ? 'exr' : 'png';
   const stems = kind === 'image' ? ['render'] : Array.from({ length: stillCount }, (_, index) => `frame-${index}`);
   if (multilayer) return stems.map(stem => `${stem}.${extension}`);
   return stems.flatMap(stem => [`${stem}.${extension}`, ...passes.map(pass => `${stem}-${pass}.${extension}`), ...mattes.map((_, index) => `${stem}-matte-${index}.png`)]);
 }
 
-function artifactMimeType(settings) {
+function artifactMimeType(settings, filename = '') {
   if (settings.kind === 'video') return 'video/mp4';
+  if (settings.kind === 'icons' && filename.endsWith('.json')) return 'application/json';
   return settings.format === 'exr' ? 'image/x-exr' : 'image/png';
 }
 
@@ -363,14 +368,15 @@ export function frameByteLimitFor(width, height, baseBytes) {
 }
 
 function artifactByteLimit(settings, limits) {
-  if (settings.kind === 'video') return limits.maxOutputBytes;
+  // The atlas of a full icon set is the largest file; the combined output limit still caps the whole job.
+  if (settings.kind === 'video' || settings.kind === 'icons') return limits.maxOutputBytes;
   const frameBytes = frameByteLimitFor(settings.width, settings.height, limits.maxFrameBytes);
   return settings.format === undefined ? frameBytes : frameBytes * HIGH_PRECISION_FRAME_FACTOR;
 }
 
 function allowedFile(name) {
   const passNames = RENDER_PASS_NAMES.join('|');
-  const artifact = new RegExp(`^(?:render\\.(?:png|mp4|exr)|(?:render|frame-\\d{1,3})(?:-(?:${passNames}|matte-[0-7]))?\\.(?:png|exr))(?:\\.partial)?$`);
+  const artifact = new RegExp(`^(?:render\\.(?:png|mp4|exr)|(?:icon-\\d{1,3}|atlas)\\.png|icons\\.json|(?:render|frame-\\d{1,3})(?:-(?:${passNames}|matte-[0-7]))?\\.(?:png|exr))(?:\\.partial)?$`);
   return INTERNAL_FILES.has(name) || artifact.test(name);
 }
 
@@ -866,7 +872,7 @@ export async function createAgentRenderJobs({ root, run, acquireGpu, limits: inp
         if (!namesAllowed.includes(artifact.filename) || seen.has(artifact.filename)) throw new Error('Invalid persisted artifact name.');
         seen.add(artifact.filename);
         const actual = await hashFile(join(directory, artifact.filename), artifactByteLimit(settings, limits));
-        if (artifact.mimeType !== artifactMimeType(settings) || artifact.bytes !== actual.bytes || artifact.sha256 !== actual.sha256) throw new Error('Persisted artifact integrity failed.');
+        if (artifact.mimeType !== artifactMimeType(settings, artifact.filename) || artifact.bytes !== actual.bytes || artifact.sha256 !== actual.sha256) throw new Error('Persisted artifact integrity failed.');
       }
       if (record.state === 'completed' && record.artifacts.length !== namesAllowed.length) throw new Error('Completed job is missing its artifacts.');
       const job = { record, persistence: Promise.resolve(), settled: Promise.resolve() };
@@ -950,7 +956,7 @@ export async function createAgentRenderJobs({ root, run, acquireGpu, limits: inp
       let outputBytes = 0;
       for (const output of completed.artifacts) {
         objectKeys(output, ['temporary', 'filename', 'mimeType'], 'runner artifact');
-        if (!expected.includes(output.filename) || seen.has(output.filename) || output.temporary !== `${output.filename}.partial` || output.mimeType !== artifactMimeType(record.settings)) throw new Error('Runner artifact must use the fixed filename and MIME type.');
+        if (!expected.includes(output.filename) || seen.has(output.filename) || output.temporary !== `${output.filename}.partial` || output.mimeType !== artifactMimeType(record.settings, output.filename)) throw new Error('Runner artifact must use the fixed filename and MIME type.');
         seen.add(output.filename);
         const artifact = { filename: output.filename, mimeType: output.mimeType, ...await hashFile(join(directory, output.temporary), artifactByteLimit(record.settings, limits)) };
         outputBytes += artifact.bytes;

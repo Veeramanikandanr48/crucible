@@ -422,6 +422,26 @@ runTest('scene_render_status of a finished job still answers while a newer job h
   } finally { await runtime.close(); }
 });
 
+runTest('a tool blocked by a render job names the job, how far it is and the tools to call next (#2050)', async () => {
+  const runningJobId = randomUUID();
+  const records = [{ jobId: runningJobId, state: 'running', progress: { frames: 3, maximumPendingFrames: 1 }, settings: { frameCount: 24 } }];
+  const controller = { list: () => records, status: jobId => records.find(record => record.jobId === jobId), close: async () => {}, submit: async () => ({ jobId: runningJobId }) };
+  const { runtime, sessionId } = await reviewRuntimeHarness({
+    runtimeOptions: { jobs: join(tmpdir(), 'crucible-job-root-test') },
+    contextOverrides: { createAgentRenderJobs: async () => controller } });
+  try {
+    await runtime.submitJob({ sessionId, expectedRevision: 0, settings: { kind: 'image', width: 64, height: 64 } });
+    for (const blocked of [() => runtime.look({ sessionId }), () => runtime.dispose({ sessionId }), () => runtime.exportGlb({ sessionId })]) {
+      await assert.rejects(blocked(), error => {
+        assert.ok(error.message.includes(runningJobId), error.message);
+        assert.match(error.message, /running \(frame 3 of 24\)/);
+        assert.match(error.message, /scene_render_status.*scene_render_cancel/);
+        return true;
+      });
+    }
+  } finally { await runtime.close(); }
+});
+
 async function runOversizeJob({ requested, jobRender, memory }) {
   let runJob;
   const controller = { list: () => [], close: async () => {}, submit: async () => ({ jobId: 'job' }) };

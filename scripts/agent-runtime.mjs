@@ -44,6 +44,8 @@ import { RENDER_QUALITY_NOTE, applyQuality, tierReport } from './agent-render-qu
 import { RENDER_BUDGET_NOTE, chooseBudgetSettings, parseBudget } from './agent-render-budget.mjs';
 import { RENDER_ESTIMATE_NOTE, estimateRenderJob, historyWithJob, parseHistory, pathTraceTriangleProblem, renderReport, sceneSizeFrom } from './agent-render-estimate.mjs';
 import { objectIdMetrics } from './agent-object-id-metrics.mjs';
+import { renderIconsInPage } from './agent-icon-page.mjs';
+import { ICON_CAPABILITIES } from '../src/icon-sheet.js';
 import { renderJobMattes } from './job-mattes.mjs';
 import { encodeRenderOutput, encodeMultilayerExr } from './render-output-encoders.mjs';
 import { createFrameEncoder } from './frame-encoder.mjs';
@@ -111,6 +113,12 @@ const VENDOR_FILES = Object.freeze({
 });
 
 /** Checks the launch paths that need no job folder; the CLI runs it before serving so a bad value exits with its message. */
+// What a tool that needs the preview renderer says while a render job holds it: which job, how far it is, and the next call.
+function leaseHeldMessage(record) {
+  const progress = record.state === 'running' ? ` (frame ${record.progress.frames} of ${record.settings.frameCount})` : '';
+  return `The renderer is leased to render job ${record.jobId}, which is ${record.state}${progress}. Poll scene_render_status with {"jobId":"${record.jobId}"} until it is completed, or stop it with scene_render_cancel, then call this tool again.`;
+}
+
 export function validateLaunchPaths({ browser, assets, packs, ffmpeg = 'ffmpeg', audio }) {
   if (browser !== undefined && (typeof browser !== 'string' || !existsSync(browser))) {
     throw new Error('The configured browser executable does not exist.');
@@ -339,19 +347,22 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
     return { path, filename, mimeType: 'model/gltf-binary', bytes: bytes.length,
       sha256: createHash('sha256').update(bytes).digest('hex'), keptExports: savedGlbPaths.length };
   }
-  /** True while the renderer is still leased: a render job exists that has not reached a terminal state. */
-  async function rendererStillLeased() {
-    if (phase !== 'rendering') return false;
+  /** The render job that still holds the renderer: one that has not reached a terminal state. Undefined when the renderer is free. */
+  async function leasingJob() {
+    if (phase !== 'rendering') return undefined;
     const terminal = ['completed', 'cancelled', 'failed', 'interrupted'];
-    if ((await jobs()).list().some(record => !terminal.includes(record.state))) return true;
+    const running = (await jobs()).list().find(record => !terminal.includes(record.state));
+    if (running) return running;
     // A queued job can be cancelled before its runner acquires the renderer.
     phase = 'ready';
-    return false;
+    return undefined;
+  }
+  async function rendererStillLeased() {
+    return (await leasingJob()) !== undefined;
   }
   async function requirePreviewRenderer() {
-    if (await rendererStillLeased()) {
-      throw new Error('The renderer is leased to a render job. Wait for completion or cancel the job.');
-    }
+    const holder = await leasingJob();
+    if (holder) throw new Error(leaseHeldMessage(holder));
   }
   function catalog() {
     if (!assetRoot && !packsRoot) throw new Error('Configure --assets or --packs with an absolute directory before importing GLB assets.');
@@ -421,6 +432,24 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
   async function assertSceneFitsBeforeJob(recipe) {
     if (recipe?.format === 'crucible.asset') return;
     await assertPlacedAssetsFitBeforeReading({}, [], recipe);
+  }
+
+  /**
+   * Pins each item of an icons job to its catalog asset id, so the job holds the content hash and a re-exported file cannot change
+   * a render in flight. An item is a catalog GLB name or an asset id; the original text stays as `source` for icons.json.
+   */
+  async function pinIconItems(settings) {
+    if (!Array.isArray(settings.items)) return settings;
+    const readyCatalog = await catalog();
+    const items = await Promise.all(settings.items.map(async item => {
+      if (typeof item !== 'string') return item;
+      if (/^[0-9a-f]{64}$/.test(item)) {
+        await readyCatalog.size(item);
+        return { source: item, asset: item };
+      }
+      return { source: item, asset: readyCatalog.resolveName(item) };
+    }));
+    return { ...settings, items };
   }
 
   /** Bytes of the catalog assets a recipe or edit list places, base64 by asset id, for the page that decodes them. */
@@ -848,6 +877,13 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
       jobPage.setDefaultTimeout(15000);
       await jobPage.goto(origin);
       await jobPage.waitForFunction(() => Boolean(window.__agentPreview));
+      if (settings.kind === 'icons') {
+        // Each icon is its own scene, created and disposed inside the job, so the shared dispose below has nothing left to release.
+        const icons = await renderIconsInPage({ jobPage, jobId, settings, directory, signal, progress, assetData: placedAssetData, memoryBudgetMiB: memory, backend, tier: settings.quality });
+        metrics.renderSeconds = (performance.now() - started) / 1000;
+        metrics.elapsedSeconds = metrics.renderSeconds;
+        return { artifacts: icons.artifacts, metrics: { ...metrics, ...icons.metrics } };
+      }
       const input = { sessionId: jobId, recipe: snapshot.recipe, memoryBudgetMiB: memory, backend, ...(settings.transparent ? { transparent: true } : {}), ...(settings.quality ? { tier: settings.quality } : {}),
         ...(snapshot.assetBytes ? { data: snapshot.assetBytes.toString('base64'), ...(await motionSources([snapshot.recipe.motion])) } : await placedAssetData(snapshot.recipe)) };
       const created = await jobPage.evaluate(({ method, input }) => window.__agentPreview[method](input),
@@ -1139,7 +1175,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
       finally {
         try {
           if (jobPage && !jobPage.isClosed()) {
-            try { await jobPage.evaluate(sessionId => window.__agentPreview.dispose({ sessionId }), jobId); }
+            try { if (settings.kind !== 'icons') await jobPage.evaluate(sessionId => window.__agentPreview.dispose({ sessionId }), jobId); }
             finally { await jobPage.close(); }
           }
         }
@@ -1209,7 +1245,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
           maximumFileBytes: MAXIMUM_PACK_FILE_BYTES, maximumJsonBytes: MAXIMUM_PACK_JSON_BYTES, maximumItemsPerKind: MAXIMUM_PACK_ITEMS_PER_KIND,
           use: 'scene_asset_catalog lists packs: name, version, license, author, description and item ids. GLBs, images, looks and environments carry assetId values that work in scene_create_asset, look, hdri and texture fields. Materials and recipes are read with scene_asset_catalog { pack, material } or { pack, recipe }: pass a recipe to scene_create, and a material as a materials entry or a scene_apply set-material. Packs are installed by the user (unzip into the --packs folder); a tool call never downloads one. Invalid packs are skipped and listed under packs.rejected with the reason.',
         },
-        jobs: { configured: Boolean(jobRoot), kinds: ['image', 'stills', 'video'], passes: RENDER_PASS_NAMES, pathTracer: PATH_TRACER_CAPABILITIES, maximumActiveJobs: 1, estimate: RENDER_ESTIMATE_NOTE, budget: RENDER_BUDGET_NOTE, quality: RENDER_QUALITY_NOTE, tiers: await deviceTiers(),
+        jobs: { configured: Boolean(jobRoot), kinds: ['image', 'stills', 'video', 'icons'], icons: ICON_CAPABILITIES, passes: RENDER_PASS_NAMES, pathTracer: PATH_TRACER_CAPABILITIES, maximumActiveJobs: 1, estimate: RENDER_ESTIMATE_NOTE, budget: RENDER_BUDGET_NOTE, quality: RENDER_QUALITY_NOTE, tiers: await deviceTiers(),
           maximumWidth: MAXIMUM_JOB_SIDE, maximumHeight: MAXIMUM_JOB_SIDE, maximumPixels: MAXIMUM_JOB_PIXELS, maximumSequenceWidth: MAXIMUM_SEQUENCE_JOB_SIDE, maximumSequenceHeight: MAXIMUM_SEQUENCE_JOB_SIDE, maximumSequencePixels: MAXIMUM_SEQUENCE_JOB_PIXELS, maximumSquareSide: MAXIMUM_SQUARE_JOB_SIDE, maximumSquareSequenceSide: MAXIMUM_SQUARE_SEQUENCE_JOB_SIDE,
           maximumDuration: MAXIMUM_VIDEO_SECONDS, maximumFps: MAXIMUM_JOB_FPS, maximumFrames: MAXIMUM_JOB_FRAMES, maximumStills: 8, maximumStillCount: MAXIMUM_STILLS_FRAMES, stillCountNote: 'a stills job with stillCount (2 to maximumStillCount) and fps writes frame-0.png and on, one per 1 / fps s of the motion clock from motion.start; with transparent each is RGBA. Without stillCount it is 8 spread over duration.',
           encoder: 'H.264', encoders: VIDEO_ENCODERS, audio: Boolean(audioRoot), timeline: true, previewSuspendedDuringJob: true,
@@ -1633,6 +1669,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
       return enqueue(async () => {
         await requirePreviewRenderer();
         const controller = await jobs();
+        if (settings?.kind === 'icons') settings = await pinIconItems(settings);
         if (settings?.audio) {
           if (!audioLibrary) throw new Error('Configure --audio with an absolute folder before submitting a job with audio.');
           await audioLibrary.resolve(settings.audio.file);

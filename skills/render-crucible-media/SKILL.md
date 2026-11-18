@@ -22,7 +22,7 @@ submit call fails: tell the user which launch option is missing.
    durable frame progress. Never loop tightly. Status and result answer in a short `concise` form by default; pass
    `response_format: "detailed"` for the full record.
 5. `scene_render_result`: output paths, sizes and metrics. Report the actual `width` and `height`, the backend
-   and the seconds; memory limits can lower the size. `detailed` adds SHA-256 hashes and resource counters.
+   and the seconds; memory limits can lower the size. `detailed` adds SHA-256 hashes and resource counters. The answer attaches every PNG as an image; pass `images: false` when the paths are enough (a `stills` job is 8 pictures).
    `metrics.report.fallbacks` lists everything that ran differently from the request: read it.
 6. Keep what you need, then `scene_render_release` to remove the job's files.
 7. `scene_render_cancel` stops a job; poll `scene_render_status` until it is `cancelled` before editing again.

@@ -229,7 +229,11 @@ export function planSdf(value) {
   if (!Number.isInteger(resolution) || resolution < SDF_LIMITS.minResolution || resolution > SDF_LIMITS.maxResolution) {
     throw fail('sdf.resolution', resolution, `a whole number of cells along the longest side, ${SDF_LIMITS.minResolution} to ${SDF_LIMITS.maxResolution}; the grid is capped at ${SDF_LIMITS.maxResolution ** 3} cells`);
   }
-  const root = compileNode(value.root, 'sdf.root', 0, { count: 0 });
+  return planDistanceField(compileNode(value.root, 'sdf.root', 0, { count: 0 }), resolution);
+}
+
+/** The sampling grid of a compiled field { distance, bounds }: resolution cells along its longest side, plus padding. */
+export function planDistanceField(root, resolution) {
   const extent = root.bounds.max.map((high, axis) => high - root.bounds.min[axis]);
   const edge = Math.max(...extent) / resolution;
   const points = extent.map(length => Math.ceil(length / edge - 1e-9) + 1 + PADDING_VOXELS * 2);
@@ -282,7 +286,11 @@ function triangulate(quads, positions) {
 
 /** Mesh an sdf geometry: positions, normals from the field gradient, box-projected UVs and triangle indices. */
 export function sdfGeometry(value) {
-  const plan = planSdf(value);
+  return meshDistanceField(planSdf(value));
+}
+
+/** Mesh a planned field (planSdf or planDistanceField) with surface nets. */
+export function meshDistanceField(plan) {
   const grid = { points: plan.points, edge: plan.edge };
   const distances = sampleGrid(plan);
   const { cellVertex, positions: cellPositions } = placeCellVertices(distances, grid, plan.origin);

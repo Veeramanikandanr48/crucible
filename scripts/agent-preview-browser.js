@@ -31,6 +31,7 @@ import { assetCopyKey, recipeAssetNeeds } from '../src/agent-scene-assets.js';
 import { exportGlb } from '../src/export.js';
 import '../src/texture-update.js';
 import { staleRevisionMessage } from '../src/agent-errors.js';
+import { sampleMotionAtZeroForGround } from './motion-ground-sample.js';
 import { updatePartVertices } from '../src/update-part-vertices.js';
 import { rasterOptionsFor } from './agent-render-quality.mjs';
 import { hasPatternTextures } from './agent-preview-textures.js';
@@ -212,6 +213,7 @@ function viewProblems(record, camera, exposure, { placement = false } = {}) {
   if (record.scene.bakeStaleness) problems.push(...record.scene.bakeStaleness());
   problems.push(...textureProblems({ parts: record.scene.parts }));
   if (record.scene.flushLeftovers) problems.push(...record.scene.flushLeftovers());
+  problems.push(...(record.scene.inspect({}).diagnostics ?? []).filter(problem => problem.kind === 'particle-node-transform-ignored'));
   if (exposure !== undefined) problems.push(...exposureProblems({ shares: sampleFrameShares(), exposure, environment: record.scene.environment }));
   return problems;
 }
@@ -357,7 +359,7 @@ function automaticGroundPlacement(scene) {
 
 function sampleMotionTime(scene, time) {
   if (motionGrounds.get(scene)?.revision !== scene.revision) {
-    scene.sampleMotion(0);
+    sampleMotionAtZeroForGround(scene, time);
     motionGrounds.set(scene, { revision: scene.revision, placement: agentGroundPlacement(scene.parts, scene.environment) });
   }
   scene.sampleMotion(time);

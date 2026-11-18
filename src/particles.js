@@ -133,7 +133,7 @@ export function createParticleLaunches(settings) {
     const launchSpeed = between(speed, random());
     for (let component = 0; component < 3; component++) {
       origin[index * 3 + component] = emitter.position[component] + emission.point[component];
-      velocity[index * 3 + component] = launch[component] * launchSpeed + (emission.normal ? emission.normal[component] * normalSpeed : 0);
+      velocity[index * 3 + component] = launch[component] * launchSpeed + (emission.normal ? emission.normal[component] * normalSpeed : 0) + (emission.velocity ? emission.velocity[component] : 0);
     }
     life[index] = between(lifetime, random());
     particleSize[index] = between(size, random());

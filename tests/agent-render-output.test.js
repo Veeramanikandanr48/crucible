@@ -149,7 +149,8 @@ test('stillCount needs stills, stays under its cap and names the cap and what to
   const controller = await withController(context, recordingRunner([]));
   await assert.rejects(controller.submit(submission({ kind: 'video', width: 64, height: 64, stillCount: 4 })), /stillCount needs kind stills/);
   await assert.rejects(controller.submit(submission({ kind: 'stills', width: 64, height: 64, stillCount: 301 })), /render a longer clip in parts, each from its own motion\.start\) must be within 2 and 300/);
-  await assert.rejects(controller.submit(submission({ kind: 'stills', width: 64, height: 64, stillCount: 10, fps: 10, duration: 5 })), /leave duration out/);
+  await assert.rejects(controller.submit(submission({ kind: 'stills', width: 64, height: 64, stillCount: 10, fps: 10, duration: 5 })), /Leave duration out when stillCount is set: it is \(stillCount - 1\) \/ fps = 0\.9 s here, and you sent 5\.$/);
+  await assert.rejects(controller.submit(submission({ kind: 'stills', width: 64, height: 64, stillCount: 3, duration: 5 })), /= 0\.0833 s here, and you sent 5\.$/);
   await assert.rejects(controller.submit(submission({ kind: 'stills', width: 1500, height: 1500 })), /square frame fits up to 1440x1440/);
 });
 

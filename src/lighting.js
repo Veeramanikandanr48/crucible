@@ -191,7 +191,8 @@ function writeAreaLights(state, areaLights) {
     }
     state.areaPositions.set(light.position, index * 4);
     state.areaColors.set(light.color ?? [1, 1, 1], index * 4);
-    state.areaColors[index * 4 + 3] = light.intensity ?? 1;
+    // A portal marks a window for the path tracers and emits nothing in the raster view.
+    state.areaColors[index * 4 + 3] = light.portal ? 0 : light.intensity ?? 1;
     state.areaNormals.set(normal, index * 4);
     state.areaNormals[index * 4 + 3] = light.width;
     state.areaTangents.set(tangent.map(component => component / tangentLength), index * 4);

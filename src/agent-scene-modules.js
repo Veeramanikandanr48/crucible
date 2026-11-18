@@ -59,7 +59,7 @@ let physicsLoader = null;
 // Each test errs on the side of loading: a false positive costs a chunk, a false negative a clear error.
 const MODULE_MARKERS = {
   mesh: ['"type":"mesh"', '"instances"'],
-  modeling: ['"type":"lathe"', '"type":"extrude"', '"type":"tube"', '"type":"curve"', '"type":"sdf"'],
+  modeling: ['"type":"lathe"', '"type":"extrude"', '"type":"tube"', '"type":"curve"', '"type":"sdf"', '"type":"cloud"'],
   text: ['"type":"text"'],
   motion: ['"motion":{', '"bake-motion"', '"add-explosion"'],
   motionBake: ['"bake-motion"'],

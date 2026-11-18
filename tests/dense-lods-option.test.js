@@ -1,4 +1,4 @@
-// A scene file's renderer option `denseLods` gives a dense scan levels of detail (#1163); without it the parts are untouched.
+// A scene file's renderer option `denseLods` gives a dense scan levels of detail, on by default (#1163); `false` leaves the parts untouched.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sphere } from '../src/geometry.js';
@@ -18,11 +18,18 @@ test('denseLods true gives levels to a scan that has more than one triangle per 
   assert.ok(result[0].lods.length > 1, 'the part carries levels');
 });
 
-test('without denseLods, or with it false, the same parts come back', () => {
+test('denseLods is on by default: a dense scan gets levels without the option', () => {
+  for (const options of [{ pixelRatio: 1 }, {}, undefined]) {
+    const parts = [scanPart()];
+    const result = partsForRendererOptions(parts, SMALL_CANVAS, options);
+    assert.notEqual(result, parts);
+    assert.ok(result[0].lods.length > 1, 'the part carries levels');
+  }
+});
+
+test('denseLods false returns the same parts', () => {
   const parts = [scanPart()];
-  assert.equal(partsForRendererOptions(parts, SMALL_CANVAS, {}), parts);
   assert.equal(partsForRendererOptions(parts, SMALL_CANVAS, { denseLods: false }), parts);
-  assert.equal(partsForRendererOptions(parts, SMALL_CANVAS), parts);
 });
 
 test('the pixel ratio counts: the same scan is sparse on a big canvas', () => {

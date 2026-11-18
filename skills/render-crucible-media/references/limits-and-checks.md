@@ -26,8 +26,10 @@ before you promise a size or a sound track.
   `maxSeconds` per frame.
 - Output files of one job: 128 MiB in all, 12 MiB a frame (48 MiB for `png16` or `exr`); a job over it fails with that limit.
 - Placed assets and `.67vg` grid files of one scene count together toward a 64 MiB cap; a scene over it fails with the cap message.
-- A job leases the single preview renderer: previews and edits pause while it runs, inspection and recipe export stay
-  available. Plan one job at a time.
+- A job leases the single preview renderer. While it runs, `scene_create`, `scene_create_asset`, `scene_apply`, `mesh_edit`, `mesh_stack`, `scene_look`,
+  `scene_review`, `scene_checkpoint`, `scene_restore`, `scene_release_checkpoint`, `scene_export_glb`, `scene_export_web`, `scene_dispose` and `scene_render_submit`
+  fail with the running job's ID and frame count; call `scene_render_status` with that `jobId`, or `scene_render_cancel`. Inspection, recipe export and the
+  job tools stay available. Plan one job at a time.
 
 ## Check the result
 

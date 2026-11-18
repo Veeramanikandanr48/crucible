@@ -16,7 +16,7 @@ const MAXIMUM_BYTES = AGENT_ASSET_LIMITS.maxBytes;
 
 const IMAGE_EXTENSIONS = { png: /\.png$/i, jpeg: /\.jpe?g$/i, webp: /\.webp$/i };
 /**
- * A file the catalog refuses for its size or pixel bounds. Listing skips it and says why, so one such file does not hide the
+ * A file the catalog refuses for its size, its pixel bounds or a texture it cannot find (#2072). Listing skips it and says why, so one such file does not hide the
  * others; reading it by name still throws.
  */
 export class SkippableCatalogFileError extends RangeError {
@@ -179,7 +179,7 @@ async function readSiblingImage(directory, glbName, uri, segments) {
   try {
     original = await lstat(path);
   } catch {
-    throw new Error(`${label} was not found next to the GLB. Copy that file into the GLB's folder at the same relative path.`);
+    throw new SkippableCatalogFileError(`${label} was not found next to the GLB. Copy that file into the GLB's folder at the same relative path.`);
   }
   if (!original.isFile() || original.isSymbolicLink()) throw new Error(`${label} must be a regular file, without links.`);
   const resolved = await realpath(path);

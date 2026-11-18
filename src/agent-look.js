@@ -36,7 +36,7 @@ const EFFECT_FIELDS = ['exposure', 'saturation', 'contrast', 'temperature', 'vig
 const SHADOW_FIELDS = ['target', 'extent', 'distance', 'near', 'far'];
 const POINT_LIGHT_FIELDS = ['position', 'color', 'intensity', 'radius', 'range', 'castShadow', 'softFalloff', 'affects'];
 const SPOT_LIGHT_FIELDS = ['position', 'direction', 'angle', 'penumbra', 'color', 'intensity', 'radius', 'range', 'castShadow', 'softFalloff', 'ies', 'affects'];
-const AREA_LIGHT_FIELDS = ['position', 'direction', 'up', 'width', 'height', 'color', 'intensity', 'castShadow', 'ies', 'affects'];
+const AREA_LIGHT_FIELDS = ['position', 'direction', 'up', 'width', 'height', 'color', 'intensity', 'castShadow', 'ies', 'portal', 'affects'];
 const VOLUME_VECTOR_FIELDS = ['minimum', 'maximum', 'color', 'ambient', 'drift'];
 const VOLUME_NUMBER_FIELDS = ['density', 'steps', 'anisotropy', 'noiseAmount', 'noiseScale', 'maxDistance', 'shadowAmbient', 'heightFalloff', 'detailOctaves', 'detailAmount', 'warp', 'contrast', 'profileSoftness', 'keyScattering', 'scatterOctaves', 'multiScatter', 'multiExtinction', 'multiAnisotropy', 'keyTransmittance', 'surfaceTransmittance'];
 export const VOLUME_FOG_FIELDS = Object.freeze([...VOLUME_VECTOR_FIELDS, ...VOLUME_NUMBER_FIELDS]);
@@ -204,6 +204,15 @@ function lightFlagFrom(light, name) {
 const shadowFieldFrom = light => lightFlagFrom(light, 'castShadow');
 const softFalloffFieldFrom = light => lightFlagFrom(light, 'softFalloff');
 
+// A portal is a rect area light that marks a window: Cook draws sky light through it and it emits nothing itself.
+function portalFieldFrom(light) {
+  const flag = fallback(light.portal, false);
+  if (typeof flag !== 'boolean') {
+    throw invalidField('portal', flag, 'true to mark a window (a rect area light with width and height above 0), or false', TypeError);
+  }
+  return flag ? { portal: true } : {};
+}
+
 function pointLightFrom(light) {
   knownKeys(light, POINT_LIGHT_FIELDS, 'point light');
   return {
@@ -246,7 +255,7 @@ function areaLightFrom(light) {
     intensity: numberInRange(fallback(light.intensity, 1), 0, 1e5, 'intensity'),
   };
   if (light.up !== undefined) resolved.up = directionFrom(light.up, 'up').direction;
-  return { ...resolved, ...affectsFrom(light, 'area light') };
+  return { ...resolved, ...portalFieldFrom(light), ...affectsFrom(light, 'area light') };
 }
 
 function volumeFogFrom(input = {}) {

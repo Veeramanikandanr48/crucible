@@ -1,4 +1,4 @@
-import { GROUP_PREFIX, createMeshData } from './mesh-data.js';
+import { GROUP_PREFIX, VECTOR_PREFIX, createMeshData } from './mesh-data.js';
 import { oceanWaves, oceanSurfaceAt } from './ocean-waves.js';
 import { normalizeWake, wakeAt } from './ocean-wake.js';
 import { registerModifierNormalizer, registerModifierRunner } from './mesh-modifiers.js';
@@ -9,9 +9,13 @@ export const MAX_OCEAN_RESOLUTION = 16;
 export const MAX_OCEAN_WORK = 50_000_000;
 const UP_AXES = Object.freeze({ x: 0, y: 1, z: 2 });
 const MAX_SEED = 0x7fffffff;
+// The surface must rise this fraction of the wind speed (m/s per m/s) for a foamy point to throw full spray.
+const SPRAY_RISE_PER_WIND = 0.1;
+export const SPRAY_GROUP = 'spray';
+export const SPRAY_VELOCITY_VECTOR = 'spray';
 
-/** Displace every vertex by the sea and write the vertex group `foam`; `axis` is the up axis of the sea. A `wake` adds foam and a trough along its points. */
-export function oceanMesh(mesh, { axis, windSpeed, direction, choppiness, size, seed, time, resolution, wake }) {
+/** Displace every vertex by the sea and write the vertex group `foam`; `axis` is the up axis of the sea. A `wake` adds foam and a trough along its points. With `spray: true` it also writes the vertex group `spray` (foam where the surface is rising, 0 to 1) and the vector `spray` (the surface velocity in m/s, along the mesh axes) for particle emitters. */
+export function oceanMesh(mesh, { axis, windSpeed, direction, choppiness, size, seed, time, resolution, wake, spray }) {
   const waves = oceanWaves({ windSpeed, direction, size, seed, resolution });
   if (waves.length * mesh.vertexCount > MAX_OCEAN_WORK) {
     throw new RangeError(`ocean would make ${waves.length * mesh.vertexCount} wave evaluations, over the limit of ${MAX_OCEAN_WORK}. Lower resolution or use a coarser grid.`);
@@ -24,19 +28,35 @@ export function oceanMesh(mesh, { axis, windSpeed, direction, choppiness, size, 
   const horizontalHigh = up === 2 ? 1 : 2;
   const positions = new Float32Array(mesh.positions);
   const foam = new Float32Array(mesh.vertexCount);
+  const sprayWeight = spray ? new Float32Array(mesh.vertexCount) : null;
+  const sprayVelocity = spray ? new Float32Array(mesh.vertexCount * 3) : null;
+  const fullSprayRise = SPRAY_RISE_PER_WIND * windSpeed;
   for (let vertex = 0; vertex < mesh.vertexCount; vertex++) {
     const surface = oceanSurfaceAt(waves, positions[vertex * 3 + first], positions[vertex * 3 + second], time, choppiness);
     positions[vertex * 3 + up] += surface.height;
     positions[vertex * 3 + first] += surface.moveX;
     positions[vertex * 3 + second] += surface.moveZ;
     foam[vertex] = surface.foam;
+    if (spray) {
+      sprayWeight[vertex] = Math.min(1, Math.max(0, surface.riseSpeed / fullSprayRise));
+      sprayVelocity[vertex * 3 + up] = surface.riseSpeed;
+      sprayVelocity[vertex * 3 + first] = surface.driftX;
+      sprayVelocity[vertex * 3 + second] = surface.driftZ;
+    }
     if (wake?.points.length) {
       const trail = wakeAt(wake, positions[vertex * 3 + horizontalLow], positions[vertex * 3 + horizontalHigh]);
       positions[vertex * 3 + up] += trail.offset;
       foam[vertex] = Math.max(foam[vertex], trail.foam);
     }
   }
-  const attributes = { ...mesh.attributes, point: { ...mesh.attributes.point, [`${GROUP_PREFIX}foam`]: { data: foam, size: 1 } } };
+  const point = { ...mesh.attributes.point, [`${GROUP_PREFIX}foam`]: { data: foam, size: 1 } };
+  if (spray) {
+    // The wake can raise foam after the surface was sampled, so the spray follows the final foam.
+    for (let vertex = 0; vertex < mesh.vertexCount; vertex++) sprayWeight[vertex] = Math.min(sprayWeight[vertex], foam[vertex]);
+    point[`${GROUP_PREFIX}${SPRAY_GROUP}`] = { data: sprayWeight, size: 1 };
+    point[`${VECTOR_PREFIX}${SPRAY_VELOCITY_VECTOR}`] = { data: sprayVelocity, size: 3 };
+  }
+  const attributes = { ...mesh.attributes, point };
   return createMeshData({
     positions, faceOffsets: mesh.faceOffsets, cornerVertices: mesh.cornerVertices,
     edgeVertices: mesh.edgeVertices, cornerEdges: mesh.cornerEdges, attributes,
@@ -53,6 +73,10 @@ function normalizeOcean(edit, normalized, index, { finiteNumber, integerInRange 
   normalized.seed = edit.seed === undefined ? 0 : integerInRange(edit.seed, index, 'seed', 0, MAX_SEED);
   normalized.time = edit.time === undefined ? 0 : finiteNumber(edit.time, index, 'time', { minimum: -1e6, maximum: 1e6 });
   normalized.resolution = edit.resolution === undefined ? 8 : integerInRange(edit.resolution, index, 'resolution', 1, MAX_OCEAN_RESOLUTION);
+  if (edit.spray !== undefined) {
+    if (typeof edit.spray !== 'boolean') throw new TypeError(`Mesh edit ${index} (spray must be true or false, such as spray: true to write the spray group and velocity, not ${JSON.stringify(edit.spray)})`);
+    normalized.spray = edit.spray;
+  }
   if (edit.wake !== undefined) normalized.wake = normalizeWake(edit.wake, `Mesh edit ${index} wake`);
 }
 
