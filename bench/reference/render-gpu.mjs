@@ -21,9 +21,19 @@ const waterIndex = argumentsGiven.indexOf('--water');
 const waterOption = waterIndex >= 0 ? argumentsGiven[waterIndex + 1] : null;
 const reversedDepth = argumentsGiven.includes('--reversed-depth');
 
+// --bake-preset <name> bakes as a recipe does; --bake-grid [nodes], --bake-grid-fog, --bake-tail and --bake-bounces <n> add the grid, its fog, the bounce tail and a bounce count to it.
 function bakePresetOption() {
   const index = argumentsGiven.indexOf('--bake-preset');
-  return index >= 0 ? { preset: argumentsGiven[index + 1] } : null;
+  if (index < 0) return null;
+  const gridIndex = argumentsGiven.indexOf('--bake-grid');
+  const gridNodes = gridIndex >= 0 ? Number(argumentsGiven[gridIndex + 1]) : NaN;
+  return {
+    preset: argumentsGiven[index + 1],
+    ...(gridIndex >= 0 ? { irradianceGrid: gridNodes || true } : {}),
+    ...(argumentsGiven.includes('--bake-grid-fog') ? { gridFog: true } : {}),
+    ...(argumentsGiven.includes('--bake-tail') ? { bounceTail: true } : {}),
+    ...(argumentsGiven.includes('--bake-bounces') ? { bounces: Number(argumentsGiven[argumentsGiven.indexOf('--bake-bounces') + 1]) } : {}),
+  };
 }
 
 function bloomOption() {
@@ -69,7 +79,7 @@ try {
   const page = await browser.newPage({ viewport: { width: WIDTH, height: HEIGHT } });
   page.on('pageerror', error => console.log('PAGE ERROR', error.message));
   for (const id of sceneIds) {
-    await page.goto(`${serverUrl}/bench/reference/harness.html?${[setOf(id) ? `set=${setOf(id)}` : '', waterOption ? `water=${waterOption}` : '', reversedDepth ? 'reversedDepth=on' : '', sunBounce === null ? '' : `sunBounce=${sunBounce}`, sunBounceRange === null ? '' : `sunBounceRange=${sunBounceRange}`, sunBounceGain === null ? '' : `sunBounceGain=${sunBounceGain}`].filter(Boolean).join('&')}`, { timeout: 180000 });
+    await page.goto(`${serverUrl}/bench/reference/harness.html?${[setOf(id) ? `set=${setOf(id)}` : '', argumentsGiven.includes('--no-glossy') ? 'glossy=0' : '', waterOption ? `water=${waterOption}` : '', reversedDepth ? 'reversedDepth=on' : '', sunBounce === null ? '' : `sunBounce=${sunBounce}`, sunBounceRange === null ? '' : `sunBounceRange=${sunBounceRange}`, sunBounceGain === null ? '' : `sunBounceGain=${sunBounceGain}`].filter(Boolean).join('&')}`, { timeout: 180000 });
     await page.waitForFunction(() => window.renderReferenceScene, null, { timeout: 180000 });
     const result = await page.evaluate(([sceneId, renderOptions]) => window.renderReferenceScene(sceneId, { describe: false, ...renderOptions }), [id, options]);
     if (result.glError !== 0) throw new Error(`${id} gave WebGL error ${result.glError}.`);

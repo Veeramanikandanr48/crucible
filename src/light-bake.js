@@ -468,7 +468,8 @@ const SCRATCH_TRIANGLE = new Float64Array(9);
  * The mean radiance arriving at one texel from other surfaces: cosine-weighted paths of up to `bounces` reflections,
  * each hit adding its own emission and its direct light. The caller multiplies by the texel's albedo.
  */
-export function createGatherer({ world, tracer, albedoOfPart, emissionOfPart, directIrradiance, offset, samples, bounces, medium = null, fogScatterLimit = 8 }) {
+export function createGatherer({ world, tracer, albedoOfPart, emissionOfPart, directIrradiance, offset, samples, bounces, medium = null, fogScatterLimit = 8, bounceTail = false }) {
+  const reflectedByBounce = Array.from({ length: bounces }, () => [0, 0, 0]);
   const scatterSum = [0, 0, 0];
   const singleScatterSum = [0, 0, 0];
   const direction = [0, 0, 0];
@@ -482,6 +483,7 @@ export function createGatherer({ world, tracer, albedoOfPart, emissionOfPart, di
     sum[2] = 0;
     scatterSum.fill(0);
     singleScatterSum.fill(0);
+    for (const reflected of reflectedByBounce) reflected.fill(0);
     const rotation = hashUnit(texelIndex, 1, 7);
     // Rays that leave the scene on their first leg see the sky, so the share of them is how much sky this point sees.
     let escaped = 0;
@@ -522,6 +524,7 @@ export function createGatherer({ world, tracer, albedoOfPart, emissionOfPart, di
         const irradiance = directIrradiance(hitPoint, normal, owner);
         for (let channel = 0; channel < 3; channel++) {
           sum[channel] += throughput[channel] * (emission[channel] + albedo[channel] * irradiance[channel] / Math.PI);
+          if (bounceTail) reflectedByBounce[bounce][channel] += throughput[channel] * albedo[channel] * irradiance[channel] / Math.PI;
           throughput[channel] *= albedo[channel];
         }
         if (throughput[0] + throughput[1] + throughput[2] < 1e-4) break;
@@ -532,6 +535,7 @@ export function createGatherer({ world, tracer, albedoOfPart, emissionOfPart, di
         bounce++;
       }
     }
+    if (bounceTail) addBounceTail(sum, reflectedByBounce);
     // `sum` holds the fog's light too; `fogLight`, when given, gets the single scattered sun alone, the part the fog on screen adds itself.
     for (let channel = 0; channel < 3; channel++) {
       scatterSum[channel] /= samples;
@@ -540,6 +544,34 @@ export function createGatherer({ world, tracer, albedoOfPart, emissionOfPart, di
     }
     return escaped / samples;
   };
+}
+
+// The most of the last bounce's light that the next one is taken to bring back. A closed room loses light to its openings and
+// to absorption at every bounce, so the ratio between two bounces stays under 1; the limit keeps a noisy ratio from running away.
+export const BOUNCE_TAIL_RATIO_LIMIT = 0.9;
+
+/**
+ * Adds the light of the bounces after the last traced one, as the geometric series the last two bounces point to: if the
+ * last brought back `ratio` times what the one before it did, every later bounce brings `ratio` times the one before it, and
+ * the rest adds `last * ratio / (1 - ratio)`. The ratio comes from the sums over all samples of the texel (not path by path)
+ * and over the three channels, so it is steady, and the colour of the tail follows the last bounce.
+ */
+export function addBounceTail(sum, reflectedByBounce) {
+  if (reflectedByBounce.length < 2) {
+    return;
+  }
+  const last = reflectedByBounce[reflectedByBounce.length - 1];
+  const before = reflectedByBounce[reflectedByBounce.length - 2];
+  const lastTotal = last[0] + last[1] + last[2];
+  const beforeTotal = before[0] + before[1] + before[2];
+  if (!(beforeTotal > 0) || !(lastTotal > 0)) {
+    return;
+  }
+  const ratio = Math.min(lastTotal / beforeTotal, BOUNCE_TAIL_RATIO_LIMIT);
+  const tailShare = ratio / (1 - ratio);
+  for (let channel = 0; channel < 3; channel++) {
+    sum[channel] += last[channel] * tailShare;
+  }
 }
 
 function worldTriangleArea(part) {

@@ -14,7 +14,7 @@ const PRESET_SAMPLES_FLOOR = 16;
 // Recipe `bake`: bounced light written into lightmaps when the scene builds. This module loads on demand, so scenes
 // without a bake never download the ray tracer.
 
-const BAKE_FIELDS = ['preset', 'samples', 'bounces', 'texelsPerUnit', 'probes', 'irradianceGrid', 'gridFog', 'rebake'];
+const BAKE_FIELDS = ['preset', 'samples', 'bounces', 'texelsPerUnit', 'probes', 'irradianceGrid', 'gridFog', 'bounceTail', 'rebake'];
 const BAKED_MATERIAL_FIELDS = ['emission', 'emissiveColor', 'emissiveMap', 'lightMap', 'lightMapScale', 'occlusionMap', 'occlusionStrength'];
 
 /** Validates a recipe bake section and returns the plain, resolved form stored in the recipe (null clears it). */
@@ -54,6 +54,16 @@ export function normalizeAgentBake(input) {
       throw invalidField('bake.gridFog', input.gridFog, 'true only together with bake.irradianceGrid, such as irradianceGrid: true');
     }
     resolved.gridFog = true;
+  }
+  // Opt in on top of the grid: the light of the bounces after the last traced one is added as a geometric tail. Not stored when off.
+  if (input.bounceTail !== undefined && typeof input.bounceTail !== 'boolean') {
+    throw invalidField('bake.bounceTail', input.bounceTail, 'true or false');
+  }
+  if (input.bounceTail === true) {
+    if (!irradianceGrid) {
+      throw invalidField('bake.bounceTail', input.bounceTail, 'true only together with bake.irradianceGrid, such as irradianceGrid: true');
+    }
+    resolved.bounceTail = true;
   }
   // Not stored when off, so the default bake keeps its bytes.
   if (input.rebake !== undefined && typeof input.rebake !== 'boolean') {
@@ -399,6 +409,7 @@ function bakeIrradianceGridParts(parts, snapshots, lighting, settings) {
     resolution: settings.irradianceGrid,
     samples: Math.max(GRID_MINIMUM_SAMPLES, Math.round(settings.samples / GRID_SAMPLES_SHARE)),
     bounces: settings.bounces,
+    ...(settings.bounceTail ? { bounceTail: true } : {}),
   };
   const grid = withMeanRadiance(runKernel('gridTrace', [snapshots, lighting, gridOptions], traceGridKernel));
   const probeTrace = !settings.probes ? null

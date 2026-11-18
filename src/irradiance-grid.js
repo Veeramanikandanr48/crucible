@@ -235,7 +235,7 @@ function requireTraceSettings(resolution, samples) {
  * the mean of the opposite pair is the constant term and half their difference the slope. Nodes inside solids are filled from
  * their neighbours. Returns `{ origin, cellSize, size, data, seconds, nodes, solidNodes }`; the same input gives the same bytes.
  */
-export function traceIrradianceGrid(parts, lighting, { resolution = true, samples = DEFAULT_GRID_SAMPLES, bounces = 3, maxSeconds = 60 } = {}) {
+export function traceIrradianceGrid(parts, lighting, { resolution = true, samples = DEFAULT_GRID_SAMPLES, bounces = 3, maxSeconds = 60, bounceTail = false } = {}) {
   if (!Array.isArray(parts) || parts.length === 0 || parts.length > MAX_PROBE_GRID_PARTS) {
     throw new RangeError(`The irradiance grid takes from 1 to ${MAX_PROBE_GRID_PARTS} parts: it traces on the CPU. Use fewer parts or drop bake.irradianceGrid.`);
   }
@@ -256,7 +256,7 @@ export function traceIrradianceGrid(parts, lighting, { resolution = true, sample
   const directIrradiance = createDirectIrradiance(tracer, withReach(lights, parts), offset, scale, medium?.sunReaching);
   const albedoOfPart = parts.map(part => diffuseAlbedo(part.material));
   const emissionOfPart = parts.map(part => emittedRadiance(part.material));
-  const gather = createGatherer({ world, tracer, albedoOfPart, emissionOfPart, directIrradiance, offset, samples, bounces, medium, fogScatterLimit: MAXIMUM_FOG_SCATTERS });
+  const gather = createGatherer({ world, tracer, albedoOfPart, emissionOfPart, directIrradiance, offset, samples, bounces, medium, fogScatterLimit: MAXIMUM_FOG_SCATTERS, bounceTail });
   const started = performance.now();
   const data = new Float32Array(nodeCount * COEFFICIENTS_PER_NODE);
   // The part of `data` that the fog scattered into the paths. The fog drawn on screen already scatters the sun itself, so it reads the grid without this part.
