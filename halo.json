@@ -1,0 +1,15 @@
+{
+  "objectBox": {
+    "left": 552,
+    "right": 724,
+    "top": 319,
+    "bottom": 487
+  },
+  "ringPixels": 30240,
+  "haloMeanLuminance": {
+    "beforeBloomOff": 0.24479188383126213,
+    "before": 0.24584042452532381,
+    "afterBloomOff": 0.32430857000206215,
+    "after": 0.3442350315125956
+  }
+}
