@@ -159,6 +159,30 @@ Videos hold the lit image only.
 A seek to any frame gives the same pixels: a job samples each frame from its time and keeps no state between frames.
 `npm run smoke:render-passes` proves it through MCP: it renders eight stills with every pass, then renders frame 3 again as an image in a different order of seeks and compares the bytes of the lit image and all five passes.
 
+### ID mattes {since 0.22.0}
+
+`settings.mattes` on an `image` or `stills` job writes one gray PNG per entry next to the lit image: `render-matte-<n>.png` (`frame-N-matte-<n>.png` for stills), where `<n>` is the entry's position. A pixel is white where the named part is drawn and black elsewhere.
+
+```json
+{ "kind": "image", "width": 1280, "height": 720, "mattes": [{ "object": "hero" }, { "material": "stone" }] }
+```
+
+Each entry names exactly one `object` (a part name from `metrics.objectNames`) or one `material` (a name from `metrics.cryptomatte.materials`), up to 8 entries and 120 characters a name. An object matte is read from the exact 24-bit object ID, so a part that other parts overlap still gets its own clean edge. A material matte is read from the `cryptomatte` pass, whose hash has 255 values: two materials can share one, and then `metrics.mattes[n].sharedWith` lists the other names and the matte holds both. A name the scene does not have fails the job with the list of names it does have.
+`metrics.mattes` holds `{ object, partIds, coveragePixels }` or `{ material, sharedWith?, coveragePixels }` for each entry, from the last frame. Mattes are 8-bit PNG: they need `format` png, no `multilayer` and no `renderer`, and they cost about one extra pass each in the job estimate.
+
+### Combining pass pixels
+
+`src/pass-compositing.js` holds the pixel steps that put passes together. They work on plain RGBA8 buffers (top row first, up to 3840x2160) with integer math, so the same input gives the same bytes on every machine, and each throws an error that says which buffer to pass instead.
+
+| Function | Result |
+| --- | --- |
+| `zCombine({ width, height, colorA, depthA, colorB, depthB })` | Per pixel, the colour and depth of the nearer input; a tie keeps A. Returns `{ color, depth, nearest }`. `depthMetresFromPass` reads a depth pass into the metres these take, and a background pixel reads `Infinity`, so it never wins. |
+| `alphaOver({ width, height, foreground, background })` | The foreground over the background, straight alpha in and out, each channel rounded to the nearest byte. |
+| `objectIdMatte`, `cryptomatteMatte` | The 0 or 255 masks behind `settings.mattes`, from an object ID pass or from the red (object) or green (material) channel of a Cryptomatte pass. |
+| `applyMatteAsAlpha({ width, height, color, mask })` | A colour buffer with the mask as its alpha: the cut-out of a part, ready for `alphaOver`. |
+
+These are library functions for scripts and addons; no MCP tool combines passes yet, and `scene_render_submit` reads no image from disk.
+
 ## Output options: transparent, 16-bit PNG, EXR, region and 60 fps
 
 ### A transparent frame sequence {since 0.21.0}

@@ -881,6 +881,7 @@ const renderSettings = z.strictObject({
   audio: z.strictObject({ file: z.string().max(68), offset: z.number().min(0).max(3600).optional(), track: z.enum(['aac', 'pcm']).optional() }).optional().describe('Video only: a file in the --audio folder, mixed in from offset seconds.'),
   encoder: z.enum(VIDEO_ENCODERS).optional().describe('Video only: cpu (default) or nvenc.'),
   passes: z.array(z.enum(RENDER_PASS_NAMES)).min(1).max(RENDER_PASS_NAMES.length).optional().describe('image and stills: also write a raw PNG per pass; opaque geometry only.'),
+  mattes: z.array(z.strictObject({ object: z.string().max(120).optional(), material: z.string().max(120).optional() })).max(8).optional().describe('One ID matte PNG per part or material; see jobs.'),
   stillCount: z.number().int().min(2).max(MAXIMUM_STILLS_FRAMES).optional(),
   transparent: z.boolean().optional().describe('image and stills: lit image with alpha; no sky, auto ground or volume fog.'),
   format: z.enum(RENDER_OUTPUT_FORMATS).optional().describe('image and stills: png (default), png16 or exr (depth in metres).'),

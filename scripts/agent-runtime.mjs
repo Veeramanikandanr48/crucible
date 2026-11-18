@@ -44,6 +44,7 @@ import { RENDER_QUALITY_NOTE, applyQuality, tierReport } from './agent-render-qu
 import { RENDER_BUDGET_NOTE, chooseBudgetSettings, parseBudget } from './agent-render-budget.mjs';
 import { RENDER_ESTIMATE_NOTE, estimateRenderJob, historyWithJob, parseHistory, pathTraceTriangleProblem, renderReport, sceneSizeFrom } from './agent-render-estimate.mjs';
 import { objectIdMetrics } from './agent-object-id-metrics.mjs';
+import { renderJobMattes } from './job-mattes.mjs';
 import { encodeRenderOutput, encodeMultilayerExr } from './render-output-encoders.mjs';
 import { createFrameEncoder } from './frame-encoder.mjs';
 import { DEFAULT_PAGE_ENCODER_QUANTIZER, createFrameReceiver, startVideoEncoderInPage } from './gpu-frame-reader.mjs';
@@ -862,7 +863,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
       await jobPage.setViewportSize({ width, height });
       session = await jobPage.context().newCDPSession(jobPage);
       const region = settings.region;
-      if (settings.format && settings.format !== 'png') await jobPage.evaluate(prepareInput => window.__agentPreview.prepareFloatOutput(prepareInput), { sessionId: jobId });
+      if ((settings.format && settings.format !== 'png') || settings.mattes) await jobPage.evaluate(prepareInput => window.__agentPreview.prepareFloatOutput(prepareInput), { sessionId: jobId });
       if (settings.passes?.includes('wireframe')) await jobPage.evaluate(prepareInput => window.__agentPreview.prepareWireframe(prepareInput), { sessionId: jobId });
       // A memory budget can shrink the frame below the size the region was chosen for.
       if (region && (region.x + region.width > width || region.y + region.height > height)) {
@@ -1103,6 +1104,15 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
             if (pass === 'objectId') {
               Object.assign(metrics, objectIdMetrics(passInfo));
             }
+          }
+          if (settings.mattes) {
+            const mattes = await renderJobMattes({ mattes: settings.mattes, renderPass: async pass => {
+              const info = await jobPage.evaluate(input => window.__agentPreview.frame(input),
+                { ...frameInput, floatOutput: false, pass, passDepthRange: RENDER_PASS_DEPTH_RANGE, passFloat: true });
+              return { info, ...(await readFloatPass(pass)) };
+            } });
+            for (const [index, matte] of mattes.entries()) await writeArtifact(`${stem}-matte-${index}.png`, matte.bytes);
+            metrics.mattes = mattes.map(matte => matte.metric);
           }
         }
           }

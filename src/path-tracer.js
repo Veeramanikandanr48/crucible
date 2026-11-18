@@ -1053,6 +1053,8 @@ export function describeIgnoredFeatures(parts, environment, backend = 'cpu', { k
   const hasGridVolume = (environment?.localVolumes ?? []).some(volume => volume?.shape === 'grid');
   if (hasGridVolume && kernelMaterials && environment.volumeShutter > 0) notes.add('environment.volumeShutter is ignored for a grid volume: Cook draws the grid as it is at the frame time, with no motion blur from its velocity channel. Use backend "cpu" or "webgpu" for a blurred blast.');
   if (!environment?.map) notes.add('There is no environment map, so the sky is black and only the lights shine.');
+  if (environment?.fillIntensity > 0) notes.add('fillIntensity is ignored: the two fixed fill lights are rasterizer only. Add a point or area light, or raise environmentIntensity, to light the shadow side of a trace.');
+  if (environment?.world === true) notes.add('world: true is ignored: the outdoor haze shading is rasterizer only, and a trace draws the environment map behind the picture and lights with it whatever world says.');
   if (environment?.cameraIntensity !== undefined && !kernelMaterials) notes.add('cameraIntensity is ignored: only the native cycles kernel draws the sky a camera ray sees at its own strength, the other tracers use the map intensity.');
   for (const part of parts) {
     const material = part.material ?? {};

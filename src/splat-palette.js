@@ -27,27 +27,28 @@ export function buildBayerMatrix(size) {
   return matrix;
 }
 
-function parseHexColor(text, position) {
+function parseHexColor(text, label) {
   const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(text);
   if (!match) {
-    throw new RangeError(`palette[${position}] must be a hex colour such as '#a1b2c3' or '#abc', or an [r, g, b] array of numbers from 0 to 1, got ${JSON.stringify(text)}`);
+    throw new RangeError(`${label} must be a hex colour such as '#a1b2c3' or '#abc', or an [r, g, b] array of numbers from 0 to 1, got ${JSON.stringify(text)}`);
   }
   const digits = match[1].length === 3 ? [...match[1]].map(digit => digit + digit).join('') : match[1];
   return [0, 2, 4].map(offset => parseInt(digits.slice(offset, offset + 2), 16) / 255);
 }
 
-function parseArrayColor(color, position) {
+function parseArrayColor(color, label) {
   const valid = color.length === 3 && color.every(value => typeof value === 'number' && value >= 0 && value <= 1);
   if (!valid) {
-    throw new RangeError(`palette[${position}] must be a hex colour such as '#a1b2c3' or an [r, g, b] array of three numbers from 0 to 1, got ${JSON.stringify(color)}`);
+    throw new RangeError(`${label} must be a hex colour such as '#a1b2c3' or an [r, g, b] array of three numbers from 0 to 1, got ${JSON.stringify(color)}`);
   }
   return color;
 }
 
-function parsePaletteColor(color, position) {
-  if (typeof color === 'string') return parseHexColor(color, position);
-  if (Array.isArray(color)) return parseArrayColor(color, position);
-  throw new RangeError(`palette[${position}] must be a hex colour such as '#a1b2c3' or an [r, g, b] array of numbers from 0 to 1, got ${String(color)}`);
+/** A colour option as three numbers from 0 to 1: a hex string or an [r, g, b] array. `label` names the field in errors. */
+export function parseSplatColor(color, label) {
+  if (typeof color === 'string') return parseHexColor(color, label);
+  if (Array.isArray(color)) return parseArrayColor(color, label);
+  throw new RangeError(`${label} must be a hex colour such as '#a1b2c3' or an [r, g, b] array of numbers from 0 to 1, got ${String(color)}`);
 }
 
 /**
@@ -73,7 +74,7 @@ export function resolveSplatPalette(palette, dither, alphaCut, caller) {
     throw new TypeError(`${caller} palette needs alphaCut (a number from 0 to 1) so the splats draw as opaque discs; blended pixels cannot be snapped to a palette. Pass alphaCut: 0.5, or leave palette out`);
   }
   const colors = new Float32Array(palette.length * 3);
-  palette.forEach((color, position) => colors.set(parsePaletteColor(color, position), position * 3));
+  palette.forEach((color, position) => colors.set(parseSplatColor(color, `palette[${position}]`), position * 3));
   return { colors, count: palette.length, dither: resolvedDither };
 }
 

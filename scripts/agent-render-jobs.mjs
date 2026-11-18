@@ -109,7 +109,7 @@ export function normalizeJobSettings(input, clips, recipe) {
 }
 
 function settingsFrom(input, clips = [], recipe) {
-  objectKeys(input, ['kind', 'width', 'height', 'fps', 'duration', 'animation', 'motion', 'rendererTime', 'passes', 'renderer', 'timeline', 'audio', 'encoder', 'transparent', 'format', 'multilayer', 'region', 'quality', 'stillCount'], 'settings');
+  objectKeys(input, ['kind', 'width', 'height', 'fps', 'duration', 'animation', 'motion', 'rendererTime', 'passes', 'renderer', 'timeline', 'audio', 'encoder', 'transparent', 'format', 'multilayer', 'region', 'quality', 'stillCount', 'mattes'], 'settings');
   if (!['image', 'stills', 'video'].includes(input.kind)) throw new TypeError('kind must be image, stills or video.');
   const largeFrame = input.kind === 'image';
   const maximumSide = largeFrame ? MAXIMUM_JOB_SIDE : MAXIMUM_SEQUENCE_JOB_SIDE;
@@ -138,6 +138,7 @@ function settingsFrom(input, clips = [], recipe) {
   if (framesAsked !== undefined) result.stillCount = framesAsked;
   if (input.passes !== undefined) result.passes = passesFrom(input.passes, input.kind);
   if (input.renderer !== undefined) result.renderer = rendererFrom(input.renderer, input.passes);
+  if (input.mattes !== undefined) result.mattes = mattesFrom(input);
   Object.assign(result, outputOptionsFrom(input, result));
   if (input.quality !== undefined) result.quality = qualityFrom(input.quality, result.renderer);
   const lastSampleTime = input.kind === 'image' ? 0 : input.kind === 'stills' ? duration : (frameCount - 1) / fps;
@@ -301,13 +302,34 @@ function passesFrom(passes, kind) {
   return [...passes];
 }
 
-/** Every artifact filename of a job, lit image first and then each requested pass, frame by frame. */
-export function artifactNames(kind, passes = [], format = 'png', multilayer = false, stillCount = 8) {
+const MAXIMUM_MATTES = 8;
+const MAXIMUM_MATTE_NAME_LENGTH = 120;
+
+/** The ID mattes of a job: each names one object (part) or one material, and writes one gray PNG per frame. */
+function mattesFrom(input) {
+  const { mattes, kind, renderer, format, multilayer } = input;
+  if (kind === 'video') throw new RangeError('mattes need kind image or stills; a video holds the lit image only.');
+  if (renderer !== undefined) throw new RangeError('mattes cannot combine with renderer: the path tracer has no object ID or Cryptomatte pass. Leave renderer out.');
+  if (format !== undefined && format !== 'png') throw new RangeError('mattes are 8-bit PNG files: leave format out or use png.');
+  if (multilayer) throw new RangeError('mattes cannot combine with multilayer. Leave multilayer out.');
+  if (!Array.isArray(mattes) || mattes.length < 1 || mattes.length > MAXIMUM_MATTES) throw new TypeError(`mattes must list 1 to ${MAXIMUM_MATTES} entries, each { object: "<part name>" } or { material: "<material name>" }.`);
+  return mattes.map((matte, index) => {
+    objectKeys(matte, ['object', 'material'], `mattes[${index}]`);
+    const kindsGiven = ['object', 'material'].filter(key => matte[key] !== undefined);
+    if (kindsGiven.length !== 1) throw new TypeError(`mattes[${index}] needs exactly one of object or material. Pass { object: "<part name>" } or { material: "<material name>" }.`);
+    const name = matte[kindsGiven[0]];
+    if (typeof name !== 'string' || name.length < 1 || name.length > MAXIMUM_MATTE_NAME_LENGTH) throw new TypeError(`mattes[${index}].${kindsGiven[0]} must be a name of 1 to ${MAXIMUM_MATTE_NAME_LENGTH} characters. scene_render_result metrics.objectNames and metrics.cryptomatte list the names of a render.`);
+    return { [kindsGiven[0]]: name };
+  });
+}
+
+/** Every artifact filename of a job, lit image first and then each requested pass and matte, frame by frame. */
+export function artifactNames(kind, passes = [], format = 'png', multilayer = false, stillCount = 8, mattes = []) {
   if (kind === 'video') return ['render.mp4'];
   const extension = format === 'exr' ? 'exr' : 'png';
   const stems = kind === 'image' ? ['render'] : Array.from({ length: stillCount }, (_, index) => `frame-${index}`);
   if (multilayer) return stems.map(stem => `${stem}.${extension}`);
-  return stems.flatMap(stem => [`${stem}.${extension}`, ...passes.map(pass => `${stem}-${pass}.${extension}`)]);
+  return stems.flatMap(stem => [`${stem}.${extension}`, ...passes.map(pass => `${stem}-${pass}.${extension}`), ...mattes.map((_, index) => `${stem}-matte-${index}.png`)]);
 }
 
 function artifactMimeType(settings) {
@@ -348,7 +370,7 @@ function artifactByteLimit(settings, limits) {
 
 function allowedFile(name) {
   const passNames = RENDER_PASS_NAMES.join('|');
-  const artifact = new RegExp(`^(?:render\\.(?:png|mp4|exr)|(?:render|frame-\\d{1,3})(?:-(?:${passNames}))?\\.(?:png|exr))(?:\\.partial)?$`);
+  const artifact = new RegExp(`^(?:render\\.(?:png|mp4|exr)|(?:render|frame-\\d{1,3})(?:-(?:${passNames}|matte-[0-7]))?\\.(?:png|exr))(?:\\.partial)?$`);
   return INTERNAL_FILES.has(name) || artifact.test(name);
 }
 
@@ -836,7 +858,7 @@ export async function createAgentRenderJobs({ root, run, acquireGpu, limits: inp
       boundedNumber(record.progress.maximumPendingFrames, 0, 1, 'persisted pending frames', true);
       if (record.metrics !== undefined) record.metrics = jsonCopy(record.metrics, 65536);
       if (record.reason !== undefined && (typeof record.reason !== 'string' || record.reason.length > 2048)) throw new Error('Invalid persisted job reason.');
-      const namesAllowed = artifactNames(settings.kind, settings.passes, settings.format, settings.multilayer, settings.frameCount);
+      const namesAllowed = artifactNames(settings.kind, settings.passes, settings.format, settings.multilayer, settings.frameCount, settings.mattes);
       if (!Array.isArray(record.artifacts) || record.artifacts.length > namesAllowed.length) throw new Error('Invalid persisted artifacts.');
       const seen = new Set();
       for (const artifact of record.artifacts) {
@@ -919,7 +941,7 @@ export async function createAgentRenderJobs({ root, run, acquireGpu, limits: inp
       record.state = 'finalizing';
       await persist(job);
       objectKeys(completed, ['artifacts', 'metrics'], 'runner result');
-      const expected = artifactNames(record.settings.kind, record.settings.passes, record.settings.format, record.settings.multilayer, record.settings.frameCount);
+      const expected = artifactNames(record.settings.kind, record.settings.passes, record.settings.format, record.settings.multilayer, record.settings.frameCount, record.settings.mattes);
       if (!Array.isArray(completed.artifacts) || completed.artifacts.length !== expected.length) throw new Error('Runner did not return the required fixed artifacts.');
       const directory = await directoryFor(record.jobId);
       const metrics = jsonCopy(completed.metrics ?? {}, 65536);

@@ -206,6 +206,7 @@
     "smoke:agent-texture-sequence": "node scripts/smoke-agent-texture-sequence.mjs",
     "smoke:agent-texture-sequence-streamed": "node scripts/smoke-agent-texture-sequence-streamed.mjs",
     "smoke:render-passes": "node scripts/smoke-render-passes.mjs",
+    "smoke:pass-mattes": "node scripts/smoke-pass-mattes.mjs",
     "smoke:wireframe-pass": "node scripts/smoke-wireframe-pass.mjs",
     "smoke:object-motion-blur": "node scripts/smoke-object-motion-blur.mjs",
     "smoke:path-tracer": "node scripts/smoke-path-tracer.mjs",

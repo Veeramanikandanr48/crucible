@@ -18,7 +18,7 @@ export const RASTER_SCALE_STEPS = Object.freeze([1, 0.75, 0.5, 0.25]);
 /** A candidate must be expected to finish within this share of the time budget, because the estimate is only good to a few tens of percent. */
 export const TIME_HEADROOM = 0.85;
 const MINIMUM_SIDE = 64;
-const TRACER_BLOCKERS = ['passes', 'transparent', 'region', 'multilayer'];
+const TRACER_BLOCKERS = ['passes', 'mattes', 'transparent', 'region', 'multilayer'];
 
 function limitedNumber(value, name) {
   const { minimum, maximum } = BUDGET_LIMITS[name];

@@ -214,17 +214,29 @@ export function findVolumeGrid(name, label) {
 
 const decodedByGrid = new WeakMap();
 
+let halfFloatLookup = null;
+
+// Every half float bit pattern as a float, built once for the process: a sequence decodes a grid per frame, and building the table for each one cost about as much as the decode.
+function halfFloatTable() {
+  if (halfFloatLookup) return halfFloatLookup;
+  halfFloatLookup = new Float32Array(65536);
+  for (let bits = 0; bits < 65536; bits++) halfFloatLookup[bits] = halfToFloat(bits);
+  return halfFloatLookup;
+}
+
 /** The grid's channels as Float32Arrays, decoded once; a missing temperature or flame channel is left out. */
 export function volumeGridFloats(grid) {
   let floats = decodedByGrid.get(grid);
   if (floats) return floats;
   floats = Object.create(null);
-  const table = new Float32Array(65536);
-  for (let bits = 0; bits < 65536; bits++) table[bits] = halfToFloat(bits);
+  const table = halfFloatTable();
   // Only the known channel names become keys, so a name read from a grid file can never write another property.
   for (const name of VOLUME_GRID_CHANNELS) {
     const values = grid.channels[name];
-    if (values) floats[name] = Float32Array.from(values, bits => table[bits]);
+    if (!values) continue;
+    const decoded = new Float32Array(values.length);
+    for (let index = 0; index < values.length; index++) decoded[index] = table[values[index]];
+    floats[name] = decoded;
   }
   decodedByGrid.set(grid, floats);
   return floats;

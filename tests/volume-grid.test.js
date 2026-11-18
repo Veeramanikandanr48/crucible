@@ -25,6 +25,19 @@ test('half floats round trip the values a simulation stores', () => {
   assert.equal(floatToHalf(1e9), 0x7c00, 'past the range is infinity');
 });
 
+test('the decoded floats of a grid are the half float of every bit pattern, for each channel', () => {
+  const everyPattern = new Uint16Array(65536).map((_, bits) => bits);
+  const grid = { resolution: [256, 16, 16], size: [1, 1, 1], channels: { density: everyPattern, flame: everyPattern.slice().reverse() } };
+  const floats = volumeGridFloats(grid);
+  for (let bits = 0; bits < 65536; bits++) {
+    const expected = halfToFloat(bits);
+    const reversed = halfToFloat(65535 - bits);
+    assert.ok(Object.is(floats.density[bits], Math.fround(expected)) || Number.isNaN(expected) && Number.isNaN(floats.density[bits]), `density bits ${bits}`);
+    assert.ok(Object.is(floats.flame[bits], Math.fround(reversed)) || Number.isNaN(reversed) && Number.isNaN(floats.flame[bits]), `flame bits ${bits}`);
+  }
+  assert.equal(volumeGridFloats(grid), floats, 'decoded once per grid');
+});
+
 test('a grid file encodes and decodes with its channels, resolution and size', () => {
   const resolution = [4, 3, 2];
   const bytes = encodeVolumeGrid({ resolution, size: [2, 1.5, 1], channels: uniformGrid(resolution, { density: 0.75, flame: 2 }) });

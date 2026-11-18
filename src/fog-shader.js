@@ -242,12 +242,14 @@ function localGridTexture(renderer, grid) {
 
 function localGridEmissionTexture(renderer, volume) {
   const grid = volume?.gridData ?? null;
-  const baked = grid ? bakedGridEmission(grid, volume.temperatureScale, volume.flameTemperature) : null;
-  return uploadGridTexture(renderer, 'localGridEmissionCache', grid, `${volume?.temperatureScale ?? 0}|${volume?.flameTemperature?.ignition}|${volume?.flameTemperature?.maximum}`, (texels, voxel, texel) => {
+  // A grid without a temperature channel bakes to zeros: its texture is the zero fill, with no pass over the voxels.
+  const baked = grid?.channels.temperature ? bakedGridEmission(grid, volume.temperatureScale, volume.flameTemperature) : null;
+  const cacheKey = `${volume?.temperatureScale ?? 0}|${volume?.flameTemperature?.ignition}|${volume?.flameTemperature?.maximum}`;
+  return uploadGridTexture(renderer, 'localGridEmissionCache', grid, cacheKey, baked && ((texels, voxel, texel) => {
     texels[texel] = floatToHalf(Math.min(baked.red[voxel], HALF_FLOAT_MAXIMUM));
     texels[texel + 1] = floatToHalf(Math.min(baked.green[voxel], HALF_FLOAT_MAXIMUM));
     texels[texel + 2] = floatToHalf(Math.min(baked.blue[voxel], HALF_FLOAT_MAXIMUM));
-  });
+  }));
 }
 
 // The gas velocity of a grid with velocity channels as box fractions per second, x y z (volume-grid.js gridUnitVelocity), for the motion blur of the march (#1759).
@@ -268,6 +270,12 @@ function uploadGridTexture(renderer, cacheName, grid, scale, writeVoxel) {
   const resolution = grid ? grid.resolution : [1, 1, 1];
   // The next frame of a sequence has the resolution of the one before: overwrite its texture instead of making a new one.
   const reuse = cached && cached.resolution.join('x') === resolution.join('x');
+  const filled = Boolean(grid && writeVoxel);
+  if (reuse && !filled && !cached.filled) {
+    // Zeros over zeros (the emission of a grid with no temperature): nothing to upload.
+    renderer[cacheName] = { ...cached, grid, scale };
+    return cached.texture;
+  }
   const texture = reuse ? cached.texture : context.createTexture();
   if (cached && !reuse) context.deleteTexture(cached.texture);
   context.bindTexture(context.TEXTURE_3D, texture);
@@ -278,7 +286,7 @@ function uploadGridTexture(renderer, cacheName, grid, scale, writeVoxel) {
   }
   const padded = resolution.map(count => count + 2 * GRID_BORDER_VOXELS);
   const texels = new Uint16Array(padded[0] * padded[1] * padded[2] * 4);
-  if (grid) {
+  if (filled) {
     for (let z = 0; z < resolution[2]; z++) {
       for (let y = 0; y < resolution[1]; y++) {
         for (let x = 0; x < resolution[0]; x++) {
@@ -295,7 +303,7 @@ function uploadGridTexture(renderer, cacheName, grid, scale, writeVoxel) {
   } else {
     context.texImage3D(context.TEXTURE_3D, 0, context.RGBA16F, padded[0], padded[1], padded[2], 0, context.RGBA, context.HALF_FLOAT, texels);
   }
-  renderer[cacheName] = { grid, scale, texture, resolution };
+  renderer[cacheName] = { grid, scale, texture, resolution, filled };
   return texture;
 }
 

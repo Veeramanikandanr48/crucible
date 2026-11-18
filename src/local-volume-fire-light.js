@@ -35,14 +35,16 @@ function gridEmissionSums(gridData, volume) {
   const total = [0, 0, 0];
   const centroidWeight = [0, 0, 0];
   const blackbody = [0, 0, 0];
+  const emitted = [0, 0, 0];
+  const glows = volume.blackbodyIntensity > 0 && temperature;
   for (let z = 0; z < depth; z++) {
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const cell = x + y * width + z * width * height;
         const flameValue = flame ? flame[cell] : 0;
-        const emitted = [0, 0, 0];
+        if (flameValue === 0 && !glows) continue; // an empty cell emits nothing; a sequence runs this over every frame, so it stays free of allocations
         for (let channel = 0; channel < 3; channel++) emitted[channel] = volume.emission[channel] * volume.emissionStrength * flameValue;
-        if (volume.blackbodyIntensity > 0 && temperature) {
+        if (glows) {
           blackbodyRadiance(temperature[cell] * volume.temperatureScale, blackbody);
           for (let channel = 0; channel < 3; channel++) emitted[channel] += blackbody[channel] * volume.blackbodyIntensity * volume.emissionStrength;
         }
