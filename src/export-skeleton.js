@@ -19,18 +19,26 @@ function transformFields(translation, rotation, scale) {
   return fields;
 }
 
-/** Split an affine matrix into glTF translation, rotation and scale fields. */
-export function decomposeMatrix(matrix) {
+/**
+ * Translation, rotation and scale of an affine matrix. gl-matrix's getRotation divides the wrong entries by the scale,
+ * so under a non-uniform scale it returns a wrong rotation: the rotation is taken from the unit-length columns instead.
+ * A mirrored matrix (negative determinant) keeps its reflection as a negative x scale, so the rotation stays proper.
+ */
+export function matrixFrame(matrix) {
   const translation = mat4.getTranslation(vec3.create(), matrix);
   const scale = mat4.getScaling(vec3.create(), matrix);
-  // A mirrored matrix (negative determinant) keeps its reflection as a negative x scale, so the rotation stays proper.
-  const mirrored = mat4.determinant(matrix) < 0;
-  const properMatrix = Float32Array.from(matrix);
-  if (mirrored) {
-    scale[0] = -scale[0];
-    for (let index = 0; index < 3; index++) properMatrix[index] = -properMatrix[index];
-  }
-  const rotation = mat4.getRotation(quat.create(), properMatrix);
+  if (mat4.determinant(matrix) < 0) scale[0] = -scale[0];
+  const unitColumns = [0, 4, 8].flatMap((offset, column) => {
+    const axisScale = scale[column] || 1;
+    return [matrix[offset] / axisScale, matrix[offset + 1] / axisScale, matrix[offset + 2] / axisScale];
+  });
+  const rotation = quat.normalize(quat.create(), quat.fromMat3(quat.create(), unitColumns));
+  return { translation, rotation, scale };
+}
+
+/** Split an affine matrix into glTF translation, rotation and scale fields. */
+export function decomposeMatrix(matrix) {
+  const { translation, rotation, scale } = matrixFrame(matrix);
   return transformFields(translation, rotation, scale);
 }
 

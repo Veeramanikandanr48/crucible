@@ -303,7 +303,7 @@ export function meshDistanceField(plan) {
   const normals = new Float32Array(positions.length);
   const uvs = new Float32Array(positions.length / 3 * 2);
   for (let vertex = 0; vertex < positions.length / 3; vertex++) {
-    const gradient = gradientAt(plan.root.distance, separatedPositions[vertex * 3], separatedPositions[vertex * 3 + 1], separatedPositions[vertex * 3 + 2], plan.edge * 0.5);
+    const gradient = gradientAt(plan.root.distance, separatedPositions[vertex * 3], separatedPositions[vertex * 3 + 1], separatedPositions[vertex * 3 + 2], plan.normalStep ?? plan.edge * 0.5);
     normals.set(gradient, vertex * 3);
     const strongest = Math.abs(gradient[0]) >= Math.abs(gradient[1]) && Math.abs(gradient[0]) >= Math.abs(gradient[2]) ? 0 : Math.abs(gradient[1]) >= Math.abs(gradient[2]) ? 1 : 2;
     const [u, v] = [[1, 2], [0, 2], [0, 1]][strongest];

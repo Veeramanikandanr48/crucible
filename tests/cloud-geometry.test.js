@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { createAgentScene } from '../src/agent-scene.js';
-import { CLOUD_LIMITS } from '../src/cloud-geometry.js';
+import { CLOUD_LIMITS, checkFaceCount } from '../src/cloud-geometry.js';
+import { growLevels, levelSettings, levelUnion, levelUnionByBruteForce } from '../src/cloud-levels.js';
+import { seededRandom } from '../src/seeded-random.js';
 import { cloudGeometry, cloudVertexEstimate } from '../src/modeling.js';
 
 function hashOf(mesh) {
@@ -113,4 +115,112 @@ test('a recipe cloud geometry becomes a part and respects the vertex budget', ()
   assert.throws(() => recipe({ puffs: 100 }), /cloud\.puffs/);
   assert.throws(() => recipe({ puffs: null }), /puffs/);
   assert.throws(() => recipe({ radius: 3 }), /radius/);
+});
+
+const TOWER_LEVELS = [{ count: 7, sizeRatio: 1 }, { count: 60, sizeRatio: 0.35 }, { count: 680, sizeRatio: 0.12 }];
+
+test('a cloud without levels keeps the bytes it had before levels existed', () => {
+  assert.equal(hashOf(cloudGeometry({ seed: 7, puffs: 12 })), 'c5df2864c435732ada8ae8f7d6e9ccd77dc8aca16a4a1eaa452edb80de81cad1');
+});
+
+test('a tower of levels is deterministic, closed, one piece and sized as asked', () => {
+  const tower = cloudGeometry({ seed: 3, levels: TOWER_LEVELS, resolution: 64, width: 8, height: 6 });
+  assert.equal(hashOf(cloudGeometry({ seed: 3, levels: TOWER_LEVELS, resolution: 64, width: 8, height: 6 })), hashOf(tower));
+  assert.notEqual(hashOf(cloudGeometry({ seed: 4, levels: TOWER_LEVELS, resolution: 64, width: 8, height: 6 })), hashOf(tower));
+  assert.notEqual(hashOf(cloudGeometry({ seed: 3, levels: TOWER_LEVELS.slice(0, 2), resolution: 64, width: 8, height: 6 })), hashOf(tower));
+  assert.equal(openEdgeCount(tower), 0);
+  assert.equal(pieceCount(tower), 1);
+  const { low, high } = boundsOf(tower);
+  assert.ok(Math.max(high[0] - low[0], high[2] - low[2]) > 8 * 0.95 && Math.max(high[0] - low[0], high[2] - low[2]) < 8 * 1.05);
+  assert.ok(Math.abs(low[1]) < 0.1);
+});
+
+test('the grid gives the same union as checking every lobe, wherever the surface can be', () => {
+  const baseLobes = [{ center: [0, 0, 0], radius: 1 }, { center: [1.2, 0.3, 0], radius: 0.8 }, { center: [-0.8, 0.9, 0.4], radius: 0.7 }];
+  const grown = growLevels(baseLobes, levelSettings(TOWER_LEVELS), { seed: 5, upBias: 0.5 });
+  const levels = grown.map(lobes => ({ lobes, blend: 0.3 * Math.max(...lobes.map(lobe => lobe.radius)) }));
+  const fast = levelUnion(levels);
+  const slow = levelUnionByBruteForce(levels);
+  let compared = 0;
+  for (let sample = 0; sample < 4000; sample++) {
+    const point = [0, 1, 2].map(axis => (seededRandom(sample, axis, 9) - 0.5) * 5);
+    const reference = slow(...point);
+    if (Math.abs(reference) > 0.1) continue;
+    compared++;
+    assert.ok(Math.abs(fast(...point) - reference) < 1e-9, `sample ${sample} differs`);
+  }
+  assert.ok(compared > 100, `only ${compared} samples near the surface`);
+});
+
+test('grown lobes sit on their parents and upBias 1 never grows them downward', () => {
+  const baseLobes = [{ center: [0, 0, 0], radius: 1 }];
+  const levels = levelSettings([{ count: 1, sizeRatio: 1 }, { count: 50, sizeRatio: 0.3 }]);
+  const lifted = growLevels(baseLobes, levels, { seed: 2, upBias: 1 })[1];
+  const uniform = growLevels(baseLobes, levels, { seed: 2, upBias: 0 })[1];
+  assert.ok(lifted.every(lobe => lobe.center[1] >= -1e-12));
+  assert.ok(uniform.some(lobe => lobe.center[1] < -0.2));
+  for (const lobe of uniform) assert.ok(Math.hypot(...lobe.center) < 1 && Math.hypot(...lobe.center) > 1 - 0.3 * lobe.radius - 1e-9);
+});
+
+test('normals come from the field gradient: unit length and facing along the face they belong to', () => {
+  const mesh = cloudGeometry({ seed: 2, levels: TOWER_LEVELS, resolution: 48 });
+  let alignment = 0;
+  let pairs = 0;
+  let facingAway = 0;
+  for (let corner = 0; corner < mesh.indices.length; corner += 3) {
+    const [first, second, third] = [0, 1, 2].map(side => mesh.indices[corner + side]);
+    const point = vertex => [0, 1, 2].map(axis => mesh.positions[vertex * 3 + axis]);
+    const [firstPoint, secondPoint, thirdPoint] = [first, second, third].map(point);
+    const edgeOne = secondPoint.map((value, axis) => value - firstPoint[axis]);
+    const edgeTwo = thirdPoint.map((value, axis) => value - firstPoint[axis]);
+    const face = [edgeOne[1] * edgeTwo[2] - edgeOne[2] * edgeTwo[1], edgeOne[2] * edgeTwo[0] - edgeOne[0] * edgeTwo[2], edgeOne[0] * edgeTwo[1] - edgeOne[1] * edgeTwo[0]];
+    const faceLength = Math.hypot(...face);
+    if (faceLength < 1e-9) continue;
+    for (const vertex of [first, second, third]) {
+      const normal = [0, 1, 2].map(axis => mesh.normals[vertex * 3 + axis]);
+      assert.ok(Math.abs(Math.hypot(...normal) - 1) < 1e-4);
+      alignment += (normal[0] * face[0] + normal[1] * face[1] + normal[2] * face[2]) / faceLength;
+      pairs++;
+      if ((normal[0] * face[0] + normal[1] * face[1] + normal[2] * face[2]) < 0) facingAway++;
+    }
+  }
+  assert.ok(alignment / pairs > 0.8, `normals follow their faces on average: ${alignment / pairs}`);
+  assert.ok(facingAway / pairs < 0.01, `${facingAway} of ${pairs} corners face away from their triangle`);
+});
+
+test('levels, upBias, unionSoftness and size limits name the field and what to pass', () => {
+  assert.throws(() => cloudGeometry({ levels: [] }), /cloud\.levels.*1 to 4 levels/);
+  assert.throws(() => cloudGeometry({ levels: 'many' }), /cloud\.levels.*array/);
+  assert.throws(() => cloudGeometry({ levels: Array(5).fill({ count: 2, sizeRatio: 0.5 }) }), /cloud\.levels.*1 to 4 levels/);
+  assert.throws(() => cloudGeometry({ levels: [{ count: 49, sizeRatio: 1 }] }), /cloud\.levels\[0\]\.count.*1 to 48/);
+  assert.throws(() => cloudGeometry({ levels: [{ count: 7, sizeRatio: 1 }, { count: 1001, sizeRatio: 0.3 }] }), /cloud\.levels\[1\]\.count.*1 to 1000/);
+  assert.throws(() => cloudGeometry({ levels: [{ count: 40, sizeRatio: 1 }, { count: 600, sizeRatio: 0.3 }, { count: 600, sizeRatio: 0.1 }] }), /at most 1000 lobes in all/);
+  assert.throws(() => cloudGeometry({ levels: [{ count: 7, sizeRatio: 5 }] }), /cloud\.levels\[0\]\.sizeRatio/);
+  assert.throws(() => cloudGeometry({ levels: [{ count: 7, sizeRatio: 1, size: 2 }] }), /cloud\.levels\[0\]\.size.*remove "size"/);
+  assert.throws(() => cloudGeometry({ levels: TOWER_LEVELS, puffs: 10 }), /cloud\.puffs.*remove puffs/);
+  assert.throws(() => cloudGeometry({ upBias: 0.5 }), /cloud\.upBias.*add levels/);
+  assert.throws(() => cloudGeometry({ levels: TOWER_LEVELS, upBias: 2 }), /cloud\.upBias.*0 to 1/);
+  assert.throws(() => cloudGeometry({ unionSoftness: 0 }), /cloud\.unionSoftness.*0\.02 to 1/);
+  assert.throws(() => cloudGeometry({ levels: TOWER_LEVELS, resolution: 161 }), /cloud\.resolution.*16 to 160/);
+  assert.throws(() => cloudGeometry({ levels: TOWER_LEVELS, resolution: 160 }, 1000), /exceeding maxVertices 1000/);
+});
+
+test('a mesh over the face limit says which resolution to pass', () => {
+  assert.throws(() => checkFaceCount({ indices: new Uint32Array(3 * 200_000) }, 160), /makes 200000 faces, over the limit of 150000\. Pass resolution 138 or lower/);
+  checkFaceCount({ indices: new Uint32Array(3 * 150_000) }, 160);
+});
+
+test('unionSoftness widens the blend between lobes of a cloud without levels', () => {
+  assert.notEqual(hashOf(cloudGeometry({ seed: 7, puffs: 12, unionSoftness: 0.5 })), hashOf(cloudGeometry({ seed: 7, puffs: 12 })));
+});
+
+test('a recipe cloud with levels becomes a part', () => {
+  const scene = createAgentScene({
+    format: 'crucible.scene',
+    schemaVersion: 1,
+    materials: [{ id: 'white', color: [0.95, 0.95, 0.97], roughness: 1 }],
+    geometries: [{ id: 'cloud', type: 'cloud', seed: 4, levels: TOWER_LEVELS, resolution: 40 }],
+    nodes: [{ id: 'cloud-node', geometry: 'cloud', material: 'white' }],
+  });
+  assert.equal(hashOf(scene.parts[0].geometry), hashOf(cloudGeometry({ seed: 4, levels: TOWER_LEVELS, resolution: 40 })));
 });

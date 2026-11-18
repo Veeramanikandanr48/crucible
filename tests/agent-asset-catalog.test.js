@@ -10,6 +10,7 @@ import { exportGlb } from '../src/export.js';
 import { createAgentAssetCatalog, readCatalogFile } from '../scripts/agent-asset-catalog.mjs';
 import { AGENT_ASSET_LIMITS, agentAssetDecodeOptions, withCatalogLimitAdvice } from '../src/agent-asset-limits.js';
 import { GLTF_CAPABILITIES, parseGltf } from '../src/gltf.js';
+import { createClips } from '../src/gltf-animation.js';
 
 async function fixture(context) {
   const directory = await mkdtemp(join(tmpdir(), 'crucible-catalog-'));
@@ -346,4 +347,15 @@ test('resolveName refuses an unknown or non-string name with a hint (#1843)', as
   assert.throws(() => catalog.resolveName('cub'), /Near names: "cube\.glb"/);
   assert.throws(() => catalog.resolveName('tree.glb'), /Run scene_asset_catalog/);
   assert.throws(() => catalog.resolveName(7), TypeError);
+});
+
+test('an unnamed clip has the same name in the catalog as in the decoded asset (#2075)', async context => {
+  const { directory, bytes } = await fixture(context);
+  const animations = [{ channels: [], samplers: [] }, { name: 'Walk', channels: [], samplers: [] }, { name: '', channels: [], samplers: [] }];
+  await writeFile(join(directory, 'cube.glb'), withDocument(bytes, document => { document.animations = animations; }));
+  const catalog = await createAgentAssetCatalog(directory);
+  const listed = catalog.list().assets[0].animations.map(clip => clip.name);
+  assert.deepEqual(listed, ['animation_0', 'Walk', 'animation_2']);
+  const decoded = createClips({ animations }, () => undefined, () => undefined).map(clip => clip.name);
+  assert.deepEqual(decoded, listed);
 });

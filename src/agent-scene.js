@@ -1,5 +1,5 @@
 import { mat4, mat3 } from 'gl-matrix';
-import { box, circle, cone, cylinder, grid, icoSphere, sphere, torus } from './geometry.js';
+import { box, checkTorusShape, circle, cone, cylinder, grid, icoSphere, sphere, torus } from './geometry.js';
 import { createSceneGraph } from './scene-graph.js';
 import { currentFormatName } from './legacy-names.js';
 import { invalidField, withFieldPrefix } from './field-error.js';
@@ -78,6 +78,17 @@ const REMOVAL_FIELDS = Object.freeze({
   'remove-geometry': 'geometries',
   'remove-material': 'materials',
 });
+// Rejects a batch that removes a geometry or material and leaves nodes pointing at it, naming them and the fix.
+function assertRemovedResourcesUnused(candidate, removals) {
+  for (const { type, id } of removals) {
+    const kind = type.slice(7);
+    const users = candidate.nodes.filter(node => node[kind] === id).map(node => node.id);
+    if (users.length > 0 && !candidate[REMOVAL_FIELDS[type]].some(record => record.id === id)) {
+      const more = users.length > 8 ? ` and ${users.length - 8} more` : '';
+      throw invalidField('id', id, `${kind} ${id} is used by nodes ${users.slice(0, 8).join(', ')}${more}; set-node them to another ${kind} or remove-node them first`);
+    }
+  }
+}
 
 
 function knownKeys(value, allowed, label) {
@@ -540,7 +551,7 @@ const GEOMETRY_FIELDS = {
   text: ['text', 'size', 'depth', 'font', 'align', 'curveSegments'],
   mesh: ['base', 'edits', 'stack', 'smoothAngle', 'shapeKeys'],
   terrain: ['size', 'resolution', 'seed', 'amplitude', 'holes'],
-  cloud: ['seed', 'puffs', 'width', 'height', 'flatBase', 'resolution'],
+  cloud: ['seed', 'puffs', 'width', 'height', 'flatBase', 'resolution', 'levels', 'upBias', 'unionSoftness'],
   fragment: ['source', 'seed', 'cells', 'index', 'impact', 'impactRadius'],
   dented: ['source', 'impacts', 'stiffness', 'maxDepth', 'radius'],
 };
@@ -602,14 +613,19 @@ function geometryEstimate(value, scope = PENDING_CUTTER_SCOPE) {
       return 2 * sides * 2 + 2 * (sides + 1);
     }
     case 'torus':
+      checkTorusShape(value.tubeRadius, value.arc);
       return (detail('segments', 96, 3, 2048) + 1) * (detail('sides', 24, 3, 128) + 1) + 2 * ((value.sides ?? 24) + 2);
-    case 'lathe':
-      return (detail('segments', 64, 3, 2048) + 1) * points(value.profile, 2, 2, 'profile');
+    case 'lathe': {
+      const profileCount = points(value.profile, 2, 2, 'profile');
+      agentSceneModule('modeling').checkLatheProfile(value.profile);
+      return (detail('segments', 64, 3, 2048) + 1) * profileCount;
+    }
     case 'tube':
       points(value.path, 3, value.closed ? 3 : 2, 'path');
       if (value.closed !== undefined && typeof value.closed !== 'boolean') {
         throw invalidField('closed', value.closed, 'true or false', TypeError);
       }
+      agentSceneModule('modeling').checkTubeInputs(value.path, value.radius ?? 0.1, value.closed ?? false);
       return (detail('segments', 64, 3, 2048) + 1) * (detail('radialSegments', 12, 3, 128) + 1);
     case 'curve': {
       if (['shape', 'splines', 'kind', 'weights', 'order', 'knots', 'knotMode', 'trim', 'grow'].some(field => value[field] !== undefined)) {
@@ -645,6 +661,7 @@ function geometryEstimate(value, scope = PENDING_CUTTER_SCOPE) {
       if (count > 4096) {
         throw invalidField('contour', `${count} points`, 'a contour and holes with at most 4096 points in total; simplify them');
       }
+      agentSceneModule('modeling').checkExtrudeRings(value.contour, holes);
       const beveled = (value.bevel ?? 0) > 0 || (value.bevelThickness ?? value.bevel ?? 0) > 0;
       return 6 * (count + holes.length * 2 - 2) + 6 * count * (detail('steps', 1, 1, 256) + (beveled ? detail('bevelSegments', 3, 1, 32) * 2 : 0));
     }
@@ -1790,10 +1807,12 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
     const usesVisibility = recipeUsesVisibility(recipe);
     const nextParts = recipe.nodes.filter(node => node.geometry !== undefined).map(node => {
       const binding = skinBindings.get(node.id);
-      const material = materialHandles.get(node.material).output;
+      const recipeMaterial = materialHandles.get(node.material);
       const sourceGeometry = binding?.geometry ?? geometries.get(node.geometry);
-      const foamGeometry = sourceGeometry.vertexGroups?.foam ? agentSceneModule('mesh').waterFoamGeometry(sourceGeometry, material) : sourceGeometry;
-      const geometry = material.wear ? geometryWithSurfaceMasks(foamGeometry, material.wear, node.id) : foamGeometry;
+      const foamGeometry = sourceGeometry.vertexGroups?.foam ? agentSceneModule('mesh').waterFoamGeometry(sourceGeometry, recipeMaterial.output) : sourceGeometry;
+      const geometry = recipeMaterial.output.wear ? geometryWithSurfaceMasks(foamGeometry, recipeMaterial.output.wear, node.id) : foamGeometry;
+      // A graph with a vertexGroup node bakes with this mesh's weights, so its textures belong to the mesh.
+      const material = recipeMaterial.output.pattern?.graph ? agentSceneModule('patterns').materialViewForGeometry(recipeMaterial.output, geometry, node.id, recipeMaterial.holder.images) : recipeMaterial.output;
       const assetExtras = assetRuntime.partExtras.get(node.id);
       // Shape keys of a recipe mesh are morph targets with their own weights per part; an imported asset brings its own pose.
       const shapeKeyMorph = geometry.morphTargetValues && !assetExtras?.morph ? { weights: Float32Array.from(geometry.morphTargetValues) } : undefined;
@@ -2182,6 +2201,7 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
       const candidate = (onlyFieldEdits && fieldEditCandidate(state.recipe, operations)) || authoredRecipe(state.recipe);
       const removedNodes = new Set();
       const removedMaterials = new Set();
+      const removals = [];
       for (const operation of operations) {
         const section = Object.hasOwn(NULLABLE_SECTION_OPERATIONS, operation.type) ? NULLABLE_SECTION_OPERATIONS[operation.type] : null;
         if (section) {
@@ -2293,6 +2313,7 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
           if (index < 0) {
             throw invalidField('id', operation.id, `the ID of an existing ${removal} entry; scene_inspect lists them`);
           }
+          removals.push(operation);
           candidate[removal].splice(index, 1);
           if (operation.type === 'remove-material') {
             removedMaterials.add(operation.id);
@@ -2327,6 +2348,7 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
           }
         }
       }
+      assertRemovedResourcesUnused(candidate, removals);
       // Plain field edits put only values the operation copy already checked into the candidate, so the recipe is not copied and checked a second time.
       try {
         return commit(stage(candidate, null, removedNodes, removedMaterials, onlyFieldEdits, onlyFieldEdits ? poseEditNodeIds(operations) : null), true);

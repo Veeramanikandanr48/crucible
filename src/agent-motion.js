@@ -122,6 +122,16 @@ function copiedKeyframe(keyframe, interpolation) {
   return result;
 }
 
+// A CUBICSPLINE keyframe carries both tangents, each as wide as its value.
+function tangentFrom(keyframe, field, size) {
+  if (keyframe[field] === undefined) {
+    const example = size === 1 ? '0' : `[${Array(size).fill(0).join(', ')}]`;
+    const shape = size === 1 ? 'a number' : `an array of ${size} numbers`;
+    throw invalidField(field, undefined, `${shape}, such as ${example}; a CUBICSPLINE keyframe takes inTangent and outTangent (or use interpolation "SMOOTH")`, TypeError);
+  }
+  return valueFrom(keyframe[field], size, field);
+}
+
 function normalizedKeyframe(keyframe, track, duration, interpolation) {
   knownKeys(keyframe, ['time', 'value', 'inTangent', 'outTangent', 'easing'], 'motion keyframe');
   const size = PROPERTIES[track.kind][track.property];
@@ -136,8 +146,8 @@ function normalizedKeyframe(keyframe, track, duration, interpolation) {
   }
   Object.assign(result, easing);
   if (interpolation === 'CUBICSPLINE') {
-    result.inTangent = valueFrom(keyframe.inTangent, size, 'Incoming tangent');
-    result.outTangent = valueFrom(keyframe.outTangent, size, 'Outgoing tangent');
+    result.inTangent = tangentFrom(keyframe, 'inTangent', size);
+    result.outTangent = tangentFrom(keyframe, 'outTangent', size);
   } else if (Object.hasOwn(keyframe, 'inTangent') || Object.hasOwn(keyframe, 'outTangent')) {
     throw invalidField(Object.hasOwn(keyframe, 'inTangent') ? 'inTangent' : 'outTangent', keyframe.inTangent ?? keyframe.outTangent, `a field left out unless the track interpolation is CUBICSPLINE, such as "interpolation": "CUBICSPLINE" (this track is ${interpolation})`, TypeError);
   }

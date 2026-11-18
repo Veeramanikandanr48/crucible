@@ -10,7 +10,7 @@ import { planRenderSize, estimateTextureBytes, estimateFrameBytes, memoryBudgetE
 import { applyProjection } from './camera.js';
 import { fittedNearPlane, sceneBoundsOfParts } from './near-plane-fit.js';
 import { installReversedDepth, prepareCameraRelativeProgram } from './reversed-depth.js';
-import { resolveEffects } from './effects.js';
+import { isBloomActive, resolveEffects } from './effects.js';
 import { frameDiagnostics } from './frame-diagnostics.js';
 import { depthLayerOf, flushOrderOf, RANKS_PER_LAYER } from './depth-layer.js';
 import { createLightingState, updateLightingState } from './lighting.js';
@@ -111,7 +111,7 @@ export function shaderFeatureRepresentatives(parts) {
   return representatives.length > 0 ? representatives : parts.slice(0, 1);
 }
 
-function shaderFeaturesOfParts(parts) {
+export function shaderFeaturesOfParts(parts) {
   const features = new Set();
   for (const part of parts) {
     const { material } = part;
@@ -135,7 +135,11 @@ function shaderFeaturesOfParts(parts) {
     if ((material.alphaMode ?? 'opaque') !== 'opaque') features.add('alphaMode');
     if (material.subsurface?.weight > 0) features.add('subsurface');
     if (material.wear) features.add('surfaceWear');
-    if (material.snippet) features.add(material.snippet.feature);
+    if (material.snippet) {
+      features.add(material.snippet.feature);
+      // A water hook reads the water values the world material code declares, so that code is compiled in.
+      if (/\bvoid\s+waterHook\s*\(/.test(material.snippet.fragment)) features.add('water');
+    }
     if (materialLayerValue(material, 'clearcoat') > 0) features.add('clearcoat');
     if (materialLayerValue(material, 'sheenColor').some(channel => channel !== 0)) features.add('sheen');
     if (TAG_SHADER_FEATURES.has(material.tag)) features.add(material.tag);
@@ -989,7 +993,7 @@ export class CrucibleRenderer {
     await this.programsReady();
     if (this.disposed) return false;
     // The bloom targets take the driver tens of milliseconds under load: a frame that blooms allocates them in a task of its own, not inside the draw.
-    if (!this.benchmark && !this.bloomTargets.length && resolveEffects(frame.effects).bloom.strength > 0) {
+    if (!this.benchmark && !this.bloomTargets.length && isBloomActive(resolveEffects(frame.effects))) {
       await new Promise(resolve => setTimeout(resolve, 0));
       if (this.disposed) return false;
       this.ensureBloomTargets();
@@ -2308,7 +2312,7 @@ export class CrucibleRenderer {
     const steps = [];
     if (this.transparent) steps.push('transparent');
     if (occluded) steps.push('occlusion');
-    if (effects.bloom.strength > 0) steps.push('bloom');
+    if (isBloomActive(effects)) steps.push('bloom');
     if (volume.density > 0) steps.push('volume');
     if (volume.density > 0 && volume.field) steps.push('field');
     if (volume.density > 0 && requireFeatureCode('volumeFog').support.usesDetail(volume)) steps.push('detail');
@@ -2368,9 +2372,9 @@ export class CrucibleRenderer {
     // A grid with velocity blurs over the shutter of the scene's motion blur, or over environment.volumeShutter when the caller sets one (#1759).
     const localVolumes = this.prepareLocalVolumes(environment.localVolumes, frame, environment.volumeTime ?? frame.time ?? 0, environment.volumeShutter ?? effects.motionBlur.shutter);
     // A glowing volume is drawn before bloom extraction so it blooms; the final pass then skips its local step.
-    const compositedLocalVolumes = localVolumes && effects.bloom.strength > 0 && this.localVolumeBuffers.emissive;
+    const compositedLocalVolumes = localVolumes && isBloomActive(effects) && this.localVolumeBuffers.emissive;
     if (compositedLocalVolumes) sourceTexture = requireFeatureCode('volumeFog').support.compositeLocalVolumes(this, frame, environment, sourceTexture);
-    if (effects.bloom.strength > 0) this.drawBloom(effects.bloom, sourceTexture);
+    if (isBloomActive(effects)) this.drawBloom(effects.bloom, sourceTexture);
     const occluded = effects.ambientOcclusion > 0 && Boolean(this.depthTexture);
     if (occluded) this.drawAmbientOcclusion(frame, effects);
     // A frame that names an outputFramebuffer (src/float-output.js) draws its final pass there, not on the canvas.
@@ -2404,9 +2408,9 @@ export class CrucibleRenderer {
     fogSupport?.bindUniforms(this, post, volume, environment, frame);
     if (localVolumes && !compositedLocalVolumes) requireFeatureCode('volumeFog').support.bindLocalVolumes(this, post, frame, environment);
     context.activeTexture(context.TEXTURE2);
-    context.bindTexture(context.TEXTURE_2D, effects.bloom.strength > 0 ? this.bloomTargets[1].texture : this.whiteTexture);
+    context.bindTexture(context.TEXTURE_2D, isBloomActive(effects) ? this.bloomTargets[1].texture : this.whiteTexture);
     context.uniform1i(post.uniforms.bloomTexture, 2);
-    context.uniform1f(post.uniforms.bloomStrength, effects.bloom.strength);
+    context.uniform1f(post.uniforms.bloomStrength, isBloomActive(effects) ? effects.bloom.strength : 0);
     context.activeTexture(context.TEXTURE4);
     context.bindTexture(context.TEXTURE_2D, occluded ? this.occlusionTarget.texture : this.whiteTexture);
     context.uniform1i(post.uniforms.occlusionTexture, 4);

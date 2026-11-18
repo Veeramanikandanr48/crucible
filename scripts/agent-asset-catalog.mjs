@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { open, readdir, realpath, lstat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
+import { clipDisplayName } from '../src/clip-name.js';
 import { AGENT_ASSET_LIMITS, assetBytesLimitMessage } from '../src/agent-asset-limits.js';
 import { MAXIMUM_CATALOG_ENVIRONMENT_BYTES, MAXIMUM_CATALOG_LOOK_BYTES } from '../src/look-catalog.js';
 import { imageLimitProblem, readImageDimensions } from '../src/image-header.js';
@@ -313,7 +314,7 @@ export function describeCatalogFile(name, { bytes, document, assetId, imageForma
     images: document.images?.length ?? 0,
     animationCount: animations.length,
     animationsTruncated: animations.length > 16,
-    animations: animations.slice(0, 16).map((animation, index) => ({ index, name: String(animation?.name ?? `Clip ${index}`).slice(0, 80) })),
+    animations: animations.slice(0, 16).map((animation, index) => ({ index, name: clipDisplayName(animation, index).slice(0, 80) })),
   });
 }
 

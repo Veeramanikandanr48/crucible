@@ -74,27 +74,44 @@ function validateGeometry(geometry, partName) {
 }
 
 // A skinned part takes its pose from its joints, so only parts with a node transform need a valid matrix.
-function validateMatrix(matrix) {
+function validateMatrix(matrix, part, nodePaths) {
   if (!matrix || matrix.length !== 16 || Array.from(matrix).some(value => !Number.isFinite(value) || !Number.isFinite(Math.fround(value)))) {
     throw new RangeError('GLB matrix requires 16 finite components.');
   }
   if (matrix[3] !== 0 || matrix[7] !== 0 || matrix[11] !== 0 || matrix[15] !== 1) {
     throw new RangeError('GLB matrix requires an affine transform.');
   }
-  validateTransformColumns(matrix);
+  validateTransformColumns(matrix, part, nodePaths);
+}
+
+function partLabel(part, nodePaths) {
+  const path = nodePaths?.[part.name];
+  return `part "${part.name}"${path && path !== part.name ? ` (${path})` : ''}`;
+}
+
+function materialLabel(part) {
+  return part.material.id ? `material "${part.material.id}" of ${part.name}` : `material of part "${part.name}"`;
+}
+
+// An emissive color above 1 is allowed: the writer moves the excess into KHR_materials_emissive_strength.
+function validateEmissiveColor(part) {
+  const color = part.material.emissiveColor ?? part.material.color;
+  if (!color || color.length !== 3 || Array.from(color).some(value => !Number.isFinite(Math.fround(value)) || value < 0)) {
+    throw new RangeError(`GLB ${materialLabel(part)} needs emissiveColor as three finite numbers of 0 or more, such as [1, 0.5, 0.1].`);
+  }
 }
 
 function validatePart(part) {
   const material = part.material;
   if (!material || typeof material !== 'object') throw new TypeError('GLB parts require a material.');
   validateColor(material.color, 'GLB base color');
-  validateColor(material.emissiveColor ?? material.color, 'GLB emissive color');
+  validateEmissiveColor(part);
   validateFactor(material.metallic, 'GLB metallic factor');
   validateFactor(material.roughness, 'GLB roughness factor');
   validateFactor(material.emission ?? 0, 'GLB emission', Infinity);
 }
 
-function validateTransformColumns(matrix) {
+function validateTransformColumns(matrix, part, nodePaths) {
   const columns = [0, 4, 8].map(offset => {
     const values = [Math.fround(matrix[offset]), Math.fround(matrix[offset + 1]), Math.fround(matrix[offset + 2])];
     const length = Math.hypot(...values);
@@ -108,13 +125,13 @@ function validateTransformColumns(matrix) {
     for (let second = first + 1; second < 3; second++) {
       let dot = 0;
       for (let axis = 0; axis < 3; axis++) dot += columns[first][axis] * columns[second][axis];
-      if (Math.abs(dot) > tolerance) throw new RangeError('GLB matrix cannot preserve shear. Use a transform with orthogonal rotation and scale columns.');
+      if (Math.abs(dot) > tolerance) throw new RangeError(`GLB ${partLabel(part, nodePaths)} cannot preserve shear: its world transform stretches along axes that are not at right angles, which a glTF node cannot hold. Put the stretch on the node that holds the mesh (the child), or give its parents a uniform scale.`);
     }
   }
 }
 
 const TEXTURE_CHANNELS = ['map', 'normalMap', 'metallicRoughnessMap', 'occlusionMap', 'emissiveMap'];
-const OPTION_NAMES = ['clips', 'nodes', 'maxTextureSize'];
+const OPTION_NAMES = ['clips', 'nodes', 'maxTextureSize', 'nodePaths'];
 
 function validateOptions(options) {
   if (!options || typeof options !== 'object') throw new TypeError('GLB export options must be an object.');
@@ -181,6 +198,14 @@ function writeLightMap(writer, textureWriter, material, gltfMaterial) {
   }
 }
 
+/** An emissive factor holds at most 1 per channel: the excess moves into the strength, which renders the same. */
+function foldEmissiveExcess(gltfMaterial, strength) {
+  const peak = Math.max(...gltfMaterial.emissiveFactor);
+  if (strength === 0 || peak <= 1) return strength;
+  gltfMaterial.emissiveFactor = gltfMaterial.emissiveFactor.map(channel => channel / peak);
+  return strength * peak;
+}
+
 function writeMaterial(writer, textureWriter, material) {
   const pbr = { baseColorFactor: [...material.color, 1], metallicFactor: material.metallic, roughnessFactor: material.roughness };
   const gltfMaterial = {
@@ -192,7 +217,7 @@ function writeMaterial(writer, textureWriter, material) {
   for (const extensionName of Object.keys(layerExtensions)) writer.addExtension(extensionName);
   writeLayerTextures(writer, textureWriter, material, layerExtensions);
   if (Object.keys(layerExtensions).length > 0) gltfMaterial.extensions = layerExtensions;
-  const strength = material.emission ?? 0;
+  const strength = foldEmissiveExcess(gltfMaterial, material.emission ?? 0);
   if (strength > 0 && strength < 1) {
     // KHR_materials_emissive_strength allows only values of 1 or more, so a weaker emission is folded into the factor.
     gltfMaterial.emissiveFactor = gltfMaterial.emissiveFactor.map(channel => channel * strength);
@@ -252,7 +277,8 @@ function usesSecondUvSet(material) {
 /**
  * Returns a self-contained GLB ArrayBuffer for the parts.
  * Options: `clips` (createAnimationClip form, track targets are node names), `nodes` (the `nodes` of a parsed asset,
- * which hold joints and groups, so skinned parts and clips keep their hierarchy), `maxTextureSize` (default 2048).
+ * which hold joints and groups, so skinned parts and clips keep their hierarchy), `maxTextureSize` (default 2048),
+ * `nodePaths` (part name to a label such as "parent > child", which an error names).
  */
 export function exportGlb(parts, options = {}) {
   if (!Array.isArray(parts) || parts.length === 0) throw new TypeError('GLB export requires a nonempty parts array.');
@@ -279,7 +305,7 @@ export function exportGlb(parts, options = {}) {
   parts.forEach((part, partIndex) => {
     if (part.skin) return;
     const host = part.matrix?.length === 16 ? hostOfPart(partIndex, hierarchy, worldCache) : null;
-    validateMatrix(host ? relativeMatrix(part.matrix, host.world) : part.matrix);
+    validateMatrix(host ? relativeMatrix(part.matrix, host.world) : part.matrix, part, options.nodePaths);
   });
   const writer = createGlbWriter();
   const { document } = writer;

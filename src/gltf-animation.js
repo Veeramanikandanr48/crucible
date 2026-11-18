@@ -1,3 +1,4 @@
+import { clipDisplayName } from './clip-name.js';
 import { attributeFloats } from './gltf-accessors.js';
 
 export const INTERPOLATE_DISCRETE = 2300;
@@ -189,7 +190,7 @@ export function createClips(document, nodeAt, readAccessor) {
       tracks.push(...tracksForChannel(channel, sampler, nodeAt(channel.target.node), readAccessor));
     }
     const duration = Math.max(0, ...tracks.map(track => track.times[track.times.length - 1]));
-    return { name: definition.name ? definition.name : `animation_${animationIndex}`, duration, tracks };
+    return { name: clipDisplayName(definition, animationIndex), duration, tracks };
   });
 }
 

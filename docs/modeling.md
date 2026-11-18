@@ -46,7 +46,7 @@ The base contour validation does not establish that an arbitrary bevel produces 
 `tube(path, { radius = 0.1, segments = 64, radialSegments = 12, closed = false, maxVertices = 250000 })`
 sweeps a circular cross-section along a centripetal Catmull-Rom curve through XYZ points.
 Open paths need two points. Closed paths need three. Closed paths join the final sample back to the first.
-Open tube ends have no caps. Paths can intersect themselves.
+Open tube ends have no caps. Paths can intersect themselves. A bad radius, `closed` flag, profile, contour or torus arc throws an error that names the field, the value received and an example; in a scene recipe the field starts with `geometries[i]`.
 
 Segments range from 3 to 2048. Radial segments range from 3 to 128.
 
@@ -146,9 +146,14 @@ through its depth. `"\n"` starts a new line 1.2 em lower. `size` is the em heigh
 | `width` | 10 | 0.5 to 2000 | Widest side in metres, centred on x and z. |
 | `height` | 5 | 0.25 to 2000 | Top to base in metres, measured before the base is cut. |
 | `flatBase` | 0.6 | 0 to 1 | 0 keeps a round underside; 1 cuts it flat the furthest. The base always sits on y = 0. |
-| `resolution` | 48 | whole, 16 to 96 | Cells along the longest side; it sets the triangle count. |
+| `resolution` | 48 (128 with `levels`) | whole, 16 to 96 (16 to 160 with `levels`) | Cells along the longest side; it sets the triangle count. |
+| `levels` | none | 1 to 4 of `{count, sizeRatio}`, 1000 lobes in all | Grows a tower: the first level is the dome layout (`count` 1 to 48 lobes), and each later level puts its lobes on the surface of the level before. `sizeRatio` (0.02 to 2) is the lobe size as a share of the first level's. `puffs` is not used with levels. |
+| `upBias` | 0.5 | 0 to 1, with `levels` | 0 grows lobes in every direction; 1 never grows them downward. |
+| `unionSoftness` | 0.14 (0.3 with `levels`) | 0.02 to 1 | The blend between lobes as a share of lobe radius; with levels each level blends by its own radius. Lower is tighter. |
 
 A scene geometry takes the same fields with `"type": "cloud"` (see `scene_capabilities` `cloud`). A bad value throws an error that names the field and the accepted range. Lobes are stretched with the box, so a tall or flat cloud has taller or flatter puffs.
+
+With `levels` such as `[{"count": 7, "sizeRatio": 1}, {"count": 60, "sizeRatio": 0.35}, {"count": 680, "sizeRatio": 0.12}]` the cloud becomes a tower covered in rounded lobes. Normals come from the gradient of the blended field at each vertex, not from the mesh faces, so toon steps follow the lobes without fine rings. Later levels find their neighbours in a grid, so 680 bumps cost little per sample; three such towers at `resolution` 128 take about 2.3 s together. A mesh over 150000 faces is refused with the resolution to pass instead.
 
 For a sky with many clouds, keep `resolution` at 48 or lower and repeat a few cloud shapes with a node's `instances` (see [agent-scene.md](agent-scene.md)) instead of building one mesh per cloud. Triangles grow with the square of `resolution`.
 

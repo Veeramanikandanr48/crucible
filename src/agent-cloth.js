@@ -76,7 +76,7 @@ function normalizeSheet(input, context, path) {
   }
   if (input.selfCollision !== undefined) {
     if (typeof input.selfCollision !== 'boolean') {
-      throw invalidField(`${path}.selfCollision`, input.selfCollision, 'true or false; the radius follows the mesh edge length');
+      throw invalidField(`${path}.selfCollision`, input.selfCollision, 'true or false, not an object; the radius follows the mesh edge length, or the sheet thickness when it is set');
     }
     sheet.selfCollision = input.selfCollision;
   }

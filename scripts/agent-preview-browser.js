@@ -28,7 +28,9 @@ import { groundBounceEnvironment } from '../src/ground-bounce.js';
 import { createAgentAssetScene } from '../src/agent-asset.js';
 import { parseGltf } from '../src/gltf.js';
 import { assetCopyKey, recipeAssetNeeds } from '../src/agent-scene-assets.js';
+import { clipDisplayName, resolveClipIndex } from '../src/clip-name.js';
 import { exportGlb } from '../src/export.js';
+import { matrixFrame } from '../src/export-skeleton.js';
 import '../src/texture-update.js';
 import { staleRevisionMessage } from '../src/agent-errors.js';
 import { sampleMotionAtZeroForGround } from './motion-ground-sample.js';
@@ -778,7 +780,20 @@ function seekForExport(record, motionTime) {
 // The scene's parts already carry the current pose, including IK and node overrides, so skinned parts export it as is.
 function posedExport(record) {
   const rig = record.scene.rigExport?.() ?? { nodes: [], clips: [] };
-  return { parts: record.scene.parts.map(withoutRoundoffShear), options: rig.nodes.length ? rig : {} };
+  const options = rig.nodes.length ? rig : {};
+  return { parts: record.scene.parts.map(withoutRoundoffShear), options: { ...options, nodePaths: nodePathsOf(record.scene.exportRecipe().nodes) } };
+}
+
+/** "parent > child" for each node that has a parent, so an export error says where the node sits. */
+function nodePathsOf(nodes = []) {
+  const parentOf = new Map(nodes.map(node => [node.id, node.parent]));
+  const paths = {};
+  for (const node of nodes) {
+    const chain = [node.id];
+    for (let parent = node.parent; parent && chain.length <= nodes.length; parent = parentOf.get(parent)) chain.unshift(parent);
+    if (chain.length > 1) paths[node.id] = chain.join(' > ');
+  }
+  return paths;
 }
 
 // Chains of bone transforms leave world matrices with Float32 roundoff that the exporter reads as shear. Real shear
@@ -794,24 +809,22 @@ function withoutRoundoffShear(part) {
   });
   const dots = [[0, 1], [0, 2], [1, 2]].map(([first, second]) => Math.abs(columns[first].reduce((sum, value, axis) => sum + value * columns[second][axis], 0)));
   if (Math.max(...dots) > ROUNDOFF_SHEAR_LIMIT) return part;
-  const scale = mat4.getScaling([0, 0, 0], part.matrix);
-  const rotation = mat4.getRotation([0, 0, 0, 1], part.matrix);
-  const translation = mat4.getTranslation([0, 0, 0], part.matrix);
+  const { translation, rotation, scale } = matrixFrame(part.matrix);
   return { ...part, matrix: mat4.fromRotationTranslationScale(mat4.create(), rotation, translation, scale) };
 }
 
 // A source clip animates the source skeleton, so the scene must not carry a pose of its own that the clip would fight.
-function clipExport(record, clipIndex) {
+function clipExport(record, clipReference) {
   const { asset, scene } = record;
   if (!asset) throw new Error('clip needs an imported asset scene. Recipe scenes export their current pose.');
+  const clipIndex = resolveClipIndex(asset.animations, clipReference);
   const animation = asset.animations[clipIndex];
-  if (!animation) throw new RangeError(`clip ${clipIndex} does not exist. The asset has ${asset.animations.length} clips.`);
   const recipe = scene.exportRecipe();
   if (recipe.animation || recipe.nodeOverrides.length || recipe.motion) {
     throw new Error('Exporting a clip needs the unposed asset: remove animation, node overrides and motion first, or export without clip for the current pose.');
   }
   const sourceClip = clipFromGltfAnimation(animation);
-  const name = String(animation.name || `clip ${clipIndex}`);
+  const name = clipDisplayName(animation, clipIndex);
   const clip = { ...sourceClip, name, tracks: [...sourceClip.tracks, ...weightTracksFromGltfAnimation(animation)] };
   // Edited parts export their edited geometry on the source part's own matrix, skin and morph.
   const parts = asset.parts.map((part, index) => scene.parts[index].geometry === part.geometry ? part : { ...part, geometry: scene.parts[index].geometry });

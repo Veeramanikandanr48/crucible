@@ -7,6 +7,7 @@ import { fitPerspectiveDistance } from './camera.js';
 import { skinnedWorldBounds, validateSkinGeometry, validateSkinPose } from './skinning.js';
 import { validateMorphGeometry, validateMorphTransform } from './morph.js';
 import * as agentMotion from './agent-motion.js';
+import { clipDisplayName } from './clip-name.js';
 import { compileClipStrip } from './clip-strip.js';
 import { clipLayerContextFromAsset, retargetSourceFromAsset } from './agent-clip-layers.js';
 import { retargetAssetClip, retargetReport } from './agent-retarget.js';
@@ -1135,7 +1136,7 @@ export function createAgentAssetScene(asset, inputRecipe, { sources } = {}) {
         geometryBytes, animation: structuredClone(recipe.animation),
         motion: recipe.motion ? { duration: recipe.motion.duration, loop: recipe.motion.loop, tracks: recipe.motion.tracks.length, layers: recipe.motion.layers?.length ?? 0, time: motionTime } : null,
         physics: physicsSampler ? physicsSampler.report() : null,
-        animations: asset.animations.map((clip, index) => ({ id: index, label: String(clip.name ?? `Clip ${index}`).slice(0, 256), duration: clip.duration })),
+        animations: asset.animations.map((clip, index) => ({ id: index, label: clipDisplayName(clip, index).slice(0, 256), duration: clip.duration })),
         nodes, offset, truncated: selected.length > offset + nodes.length,
       };
     },

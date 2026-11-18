@@ -83,6 +83,49 @@ test('a game with physics steps its bodies, moves their nodes and lets a rules z
   }
 });
 
+test('a cone body and a compound body fall and rest on the floor in the live runtime', async () => {
+  const restore = withAnimationFrameStubs();
+  try {
+    const recipe = await exportedRecipe({
+      nodes: [
+        { id: 'floor', geometry: 'block', material: 'paint', translation: [0, -0.25, 0], scale: [10, 0.5, 10] },
+        { id: 'hero', geometry: 'block', material: 'paint', translation: [4, 0.8, 0], scale: [0.6, 1.6, 0.6] },
+        { id: 'cone', geometry: 'block', material: 'paint', translation: [-2, 3, 0] },
+        { id: 'stack', geometry: 'block', material: 'paint', translation: [2, 3, 0] },
+      ],
+      physics: {
+        duration: 1,
+        bodies: [
+          { node: 'floor', type: 'fixed', shape: 'box' },
+          { node: 'hero', type: 'kinematic', shape: 'capsule' },
+          { node: 'cone', shape: 'cone' },
+          {
+            node: 'stack', shape: 'compound',
+            shapes: [
+              { shape: 'box', halfExtents: [0.5, 0.25, 0.5], translation: [0, -0.25, 0] },
+              { shape: 'cylinder', radius: 0.25, halfHeight: 0.25, translation: [0, 0.25, 0] },
+            ],
+          },
+        ],
+      },
+      game: { player: { node: 'hero', footOffset: 0.8 }, camera: 'follow', input: 'keyboard', physics: true, ground: 0 },
+    });
+    assert.equal(gamePhysicsProblem(recipe), null);
+    const game = await playFor(recipe, 3);
+    const cone = game.physics.getPose('cone').translation;
+    const stack = game.physics.getPose('stack').translation;
+    // The cone fits the unit block: base on the floor puts its centre 0.5 up. The compound's lowest part reaches 0.5 below its origin.
+    assert.ok(Math.abs(cone[1] - 0.5) < 0.05, `the cone rests on its base, y ${cone[1]}`);
+    assert.ok(Math.abs(stack[1] - 0.5) < 0.05, `the compound rests on its wide part, y ${stack[1]}`);
+    for (const [name, position] of [['cone', cone], ['compound', stack]]) {
+      assert.ok(Math.hypot(position[0] - (name === 'cone' ? -2 : 2), position[2]) < 0.05, `the ${name} stays where it fell`);
+    }
+    game.dispose();
+  } finally {
+    restore();
+  }
+});
+
 test('the same recipe plays the same physics twice', async () => {
   const restore = withAnimationFrameStubs();
   try {
@@ -200,7 +243,7 @@ test('a game without physics starts none and does not load the engine files', as
 test('a physics game without a body list, with joints or with an unsupported shape says what to change', () => {
   assert.match(gamePhysicsProblem({}), /no physics section with bodies.*set-physics/);
   assert.match(gamePhysicsProblem(physicsRecipe({ physics: { duration: 1, bodies: [{ node: 'crate', type: 'dynamic', shape: 'box' }], joints: [{ type: 'fixed' }] } })), /no joints or ragdolls/);
-  assert.match(gamePhysicsProblem(physicsRecipe({ physics: { duration: 1, bodies: [{ node: 'floor', type: 'fixed', shape: 'trimesh' }] } })), /Body "floor" has shape trimesh.*shape "box"/);
+  assert.match(gamePhysicsProblem(physicsRecipe({ physics: { duration: 1, bodies: [{ node: 'floor', type: 'fixed', shape: 'trimesh' }] } })), /Body "floor" has shape trimesh.*builds box, ball, capsule, cylinder, cone, convex, compound.*"box"/);
   assert.equal(gamePhysicsProblem(physicsRecipe()), null);
 });
 

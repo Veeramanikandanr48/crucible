@@ -13,6 +13,11 @@ function numberInRange(value, fallback, minimum, maximum, name) {
   return result;
 }
 
+/** True when effects ask for a bloom pass. Strength 0 means bloom off: no extraction, blur or composite pass runs for it (#2025). The renderer asks only this. */
+export function isBloomActive(effects) {
+  return effects?.bloom?.strength > 0;
+}
+
 export function resolveEffects(effects = {}) {
   if (!effects || typeof effects !== 'object' || Array.isArray(effects)) throw new Error('Effects must be an object.');
   const bloom = effects.bloom ?? {};

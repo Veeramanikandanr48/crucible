@@ -1,0 +1,1 @@
+- The `cloud` geometry grows towers from `levels` (lobes on the surface of the level before), with `upBias`, `unionSoftness` and normals taken from the field gradient (#2039).

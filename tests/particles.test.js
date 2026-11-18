@@ -209,7 +209,7 @@ test('total particles and total vertices are bounded across systems', () => {
   const heavy = sparkRecipe({ systems: [{ node: 'sparks', count: 10 }] });
   heavy.nodes[0].geometry = 'ball';
   heavy.particles.systems[0].count = 40;
-  assert.throws(() => createAgentScene(heavy), /particles\.systems: got "\d+ vertices on node sparks"; expected shape vertices times count of at most 100000/);
+  assert.throws(() => createAgentScene(heavy), /particles\.systems: got "\d+ vertices"; expected at most 100000 vertices drawn in total; node sparks draws \d+ vertices per particle times count/);
 });
 
 test('a particle node cannot carry motion or physics, or be a cloth sheet', () => {
@@ -359,7 +359,7 @@ test('hair limits the vertices it draws, and an empty surface is refused', () =>
   const crowded = hairRecipe({ count: 2000, segments: 8 });
   crowded.particles.systems.push({ type: 'hair', node: 'extra', surface: 'head', count: 2000, segments: 8 });
   crowded.nodes.push({ id: 'extra', geometry: 'strands', material: 'fur' });
-  assert.throws(() => createAgentScene(crowded), /particles\.systems: got "\d+ vertices on node extra"; expected shape vertices times count of at most 100000/);
+  assert.throws(() => createAgentScene(crowded), /particles\.systems: got "\d+ vertices"; expected at most 100000 vertices drawn in total; node extra draws \d+ vertices per particle times count/);
   const flat = hairRecipe({});
   flat.nodes[0].scale = [0, 0, 0];
   assert.throws(() => createAgentScene(flat), /no triangle with area|scale/);

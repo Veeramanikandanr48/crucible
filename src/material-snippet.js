@@ -10,17 +10,22 @@ import {
 // shadow pass runs the same hook, so a discarded fragment casts no shadow.
 
 /** Names the engine provides to a snippet; a uniform cannot take one. */
-export const MATERIAL_SNIPPET_INPUTS = Object.freeze(['materialHook', 'snippetMask']);
+export const MATERIAL_SNIPPET_INPUTS = Object.freeze(['materialHook', 'waterHook', 'snippetMask']);
 const SNIPPET_FIELDS = ['fragment', 'uniforms', 'mask', 'feature'];
+const MATERIAL_HOOK_PATTERN = /\bvoid\s+materialHook\s*\(\s*inout\s+vec3\s+[A-Za-z_]\w*\s*,\s*inout\s+float\s+[A-Za-z_]\w*\s*,\s*vec2\s+[A-Za-z_]\w*\s*,\s*vec3\s+[A-Za-z_]\w*\s*\)\s*\{/;
+// The water entry runs after lighting on water surfaces only; the engine declares the WaterInputs struct for it.
+const WATER_HOOK_PATTERN = /\bvoid\s+waterHook\s*\(\s*inout\s+vec3\s+[A-Za-z_]\w*\s*,\s*WaterInputs\s+[A-Za-z_]\w*\s*\)\s*\{/;
+const WATER_INPUTS_FIELDS = 'vec3 normal; vec3 view; float foam; float depthBelow; float time; float lit;';
 const ENTRY_FUNCTION = Object.freeze({
-  pattern: /\bvoid\s+materialHook\s*\(\s*inout\s+vec3\s+[A-Za-z_]\w*\s*,\s*inout\s+float\s+[A-Za-z_]\w*\s*,\s*vec2\s+[A-Za-z_]\w*\s*,\s*vec3\s+[A-Za-z_]\w*\s*\)\s*\{/,
-  example: 'void materialHook(inout vec3 color, inout float alpha, vec2 uv, vec3 worldPosition) { }',
+  pattern: new RegExp(`${MATERIAL_HOOK_PATTERN.source}|${WATER_HOOK_PATTERN.source}`),
+  example: 'void materialHook(inout vec3 color, inout float alpha, vec2 uv, vec3 worldPosition) { } or void waterHook(inout vec3 color, WaterInputs water) { } (or both)',
 });
 
 /** What scene_capabilities reports under materialSnippet; it lives here so the scene entry does not carry the text. */
 export const MATERIAL_SNIPPET_CAPABILITIES = Object.freeze({
   fields: 'material.snippet { fragment (defines void materialHook(inout vec3 color, inout float alpha, vec2 uv, vec3 worldPosition)), uniforms, mask: "map" }; null clears it',
   inputs: 'color (albedo after the map), alpha (map alpha), uv, worldPosition; snippetMask (the material map, with mask "map"); discard',
+  waterHook: 'void waterHook(inout vec3 color, WaterInputs water) on tag "water" only, after lighting, before fog and tone mapping. color is the lit linear radiance, in and out. water.normal (shading normal with ripples), water.view (surface to eye), water.foam (0 to 1, the ocean foam mask), water.depthBelow (metres to the floor below; 0 for now), water.time (seconds), water.lit (key light facing times shadow, 0 to 1)',
   uniforms: 'as postPasses.uniforms',
   rules: 'as postPasses.rules',
   limits: Object.freeze({ maxBytes: SNIPPET_LIMITS.maxBytes, maxUniforms: SNIPPET_LIMITS.maxUniforms }),
@@ -87,10 +92,10 @@ function replaceName(code, name, replacement) {
 function prefixedCode(snippet) {
   const prefix = `u67_${snippet.feature}_`;
   let code = snippet.fragment;
-  const names = new Set([...topLevelNames(code), ...Object.keys(snippet.uniforms)]);
+  const names = new Set([...topLevelNames(code), ...Object.keys(snippet.uniforms), 'WaterInputs']);
   for (const name of names) code = replaceName(code, name, `${prefix}${name}`);
   const declarations = snippetUniformDeclarations(Object.fromEntries(Object.entries(snippet.uniforms).map(([name, uniform]) => [`${prefix}${name}`, uniform])));
-  return { code, declarations, hook: `${prefix}materialHook` };
+  return { code, declarations, prefix, hook: `${prefix}materialHook`, waterHook: `${prefix}waterHook`, waterInputs: `${prefix}WaterInputs` };
 }
 
 const DEPTH_FRAGMENT_HEAD = 'void main() {\n  if (alphaMasked < 0.5) return;\n  float alpha = materialOpacity;\n  if (hasBaseMap > 0.5) alpha *= texture(baseMap, mapUV(hasBaseMap)).a;\n';
@@ -117,14 +122,21 @@ function patchDepthVertex(source) {
 }
 
 function registerSnippetFeature(snippet) {
-  const { code, declarations, hook } = prefixedCode(snippet);
+  const { code, declarations, hook, waterHook, waterInputs } = prefixedCode(snippet);
   const flag = `u67_${snippet.feature}`;
-  const mainCode = replaceName(`uniform float ${flag};\n${declarations}\n${code}\n`, 'snippetMask', 'baseMap');
+  const hasMaterialHook = MATERIAL_HOOK_PATTERN.test(snippet.fragment);
+  const hasWaterHook = WATER_HOOK_PATTERN.test(snippet.fragment);
+  const waterStruct = hasWaterHook ? `struct ${waterInputs} { ${WATER_INPUTS_FIELDS} };\n` : '';
+  const mainCode = replaceName(`uniform float ${flag};\n${declarations}\n${waterStruct}${code}\n`, 'snippetMask', 'baseMap');
   const call = `if (${flag} > 0.5) ${hook}(hookColor, hookAlpha, textureUV, snippetWorld);\n`;
+  // The water values are locals of the main shader; the renderer compiles the world material code in for a snippet with a water hook.
+  const waterArguments = `${waterInputs}(normal, viewDirection, waterFoam, 0.0, time, clamp(dot(normal, normalize(lightDirection)), 0.0, 1.0) * visibility)`;
   registerShaderFeatureCode(snippet.feature, Object.freeze({
     libraries: mainCode,
-    surfaceHook: `  if (${flag} > 0.5) ${hook}(color, textureAlpha, textureUV, worldPosition);\n`,
+    ...(hasMaterialHook ? { surfaceHook: `  if (${flag} > 0.5) ${hook}(color, textureAlpha, textureUV, worldPosition);\n` } : {}),
+    ...(hasWaterHook ? { waterHook: `  if (TAG_WATER && ${flag} > 0.5) ${waterHook}(radiance, ${waterArguments});\n` } : {}),
     depth: (source) => {
+      if (!hasMaterialHook) return source;
       if (source.includes('lightProjection * world')) return patchDepthVertex(source);
       let text = source;
       if (!text.includes(DEPTH_CALL_MARK)) {
@@ -190,7 +202,14 @@ precision highp int;
 uniform sampler2D snippetMask;
 out vec4 u67_output;
 `;
-const PROBE_FOOTER = '\nvoid main() { vec3 color = vec3(0.5); float alpha = 1.0; materialHook(color, alpha, vec2(0.5), vec3(0.0)); u67_output = vec4(color, alpha); }\n';
+const waterStructDeclaration = (fragment) => (WATER_HOOK_PATTERN.test(fragment) ? `struct WaterInputs { ${WATER_INPUTS_FIELDS} };
+` : '');
+
+function probeFooter(fragment) {
+  const materialCall = MATERIAL_HOOK_PATTERN.test(fragment) ? 'materialHook(color, alpha, vec2(0.5), vec3(0.0));' : '';
+  const waterCall = WATER_HOOK_PATTERN.test(fragment) ? 'waterHook(color, WaterInputs(vec3(0.0, 1.0, 0.0), vec3(0.0, 1.0, 0.0), 0.5, 0.0, 0.0, 1.0));' : '';
+  return `\nvoid main() { vec3 color = vec3(0.5); float alpha = 1.0; ${materialCall} ${waterCall} u67_output = vec4(color, alpha); }\n`;
+}
 
 function newProbeContext() {
   const canvas = typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(1, 1) : document.createElement('canvas');
@@ -213,9 +232,9 @@ export function probeMaterialSnippets(parts, createContext = newProbeContext) {
   if (!context) return;
   try {
     for (const { snippet, parts: users } of snippets.values()) {
-      const header = `${PROBE_HEADER}${snippetUniformDeclarations(snippet.uniforms)}\n`;
+      const header = `${PROBE_HEADER}${waterStructDeclaration(snippet.fragment)}${snippetUniformDeclarations(snippet.uniforms)}\n`;
       const shader = context.createShader(context.FRAGMENT_SHADER);
-      context.shaderSource(shader, `${header}${snippet.fragment}${PROBE_FOOTER}`);
+      context.shaderSource(shader, `${header}${snippet.fragment}${probeFooter(snippet.fragment)}`);
       context.compileShader(shader);
       const compiled = context.getShaderParameter(shader, context.COMPILE_STATUS);
       const log = compiled ? '' : context.getShaderInfoLog(shader);

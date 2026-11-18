@@ -917,7 +917,7 @@ ${featureCode("irradianceGrid")}  vec3 keyResponse = keyColor / mix(vec3(5.2, 4.
 ${featureCode("worldLight")}  if (USES_SHEEN) radiance = sheenLayer(radiance, normal, viewDirection, visibility);
   if (USES_CLEARCOAT) radiance = clearCoatLayer(radiance, normal, viewDirection, visibility, materialCoat.x * coatKept);
   radiance += emission;
-${featureCode("afterEmission")}${featureCode("worldAfterEmission")}  if (TAG_FLOOR) {
+${featureCode("afterEmission")}${featureCode("worldAfterEmission")}${featureCode("waterHook")}  if (TAG_FLOOR) {
     float contact = 1.0 - 0.45 * exp(-dot(worldPosition.xz, worldPosition.xz) * 1.4);
     radiance = vec3(0.034, 0.041, 0.046) * (0.4 + visibility * 0.6) * contact;
     float fog = 1.0 - exp(-length(worldPosition.xz) * 0.05);

@@ -437,9 +437,18 @@ function surfaceInWorld(geometry, matrix) {
   return { positions, normals };
 }
 
-function checkVertexBudget(vertices, totalVertices, nodeId) {
+// What to change when the drawn vertices pass the limit: a default box has a bevel, so each particle is 1176 vertices, not 24.
+function bevelledBoxAdvice(nodeId, recipe) {
+  const node = recipe.nodes.find(candidate => candidate.id === nodeId);
+  const definition = (recipe.geometries ?? []).find(candidate => candidate.id === node?.geometry);
+  const base = definition?.type === 'mesh' ? definition.base : definition;
+  return base?.type === 'box' && base.bevel !== 0 ? '; the shape is a box with a bevel, so pass "bevel": 0 on it to make it 24 vertices' : '';
+}
+
+function checkVertexBudget(verticesPerItem, count, totalVertices, nodeId, recipe) {
+  const vertices = verticesPerItem * count;
   if (vertices > PARTICLE_LIMITS.maxVertices || totalVertices > PARTICLE_LIMITS.maxVertices) {
-    throw invalidField('particles.systems', `${totalVertices} vertices on node ${nodeId}`, `shape vertices times count of at most ${PARTICLE_LIMITS.maxVertices}; use a shape with fewer segments or a lower count`);
+    throw invalidField('particles.systems', `${totalVertices} vertices`, `at most ${PARTICLE_LIMITS.maxVertices} vertices drawn in total; node ${nodeId} draws ${verticesPerItem} vertices per particle times count ${count}, so use a shape with fewer vertices or a lower count${bevelledBoxAdvice(nodeId, recipe)}`);
   }
 }
 
@@ -650,7 +659,7 @@ export function bakeAgentParticles(particles, recipe, geometries, sea = null) {
     const node = nodes.get(system.node);
     const verticesPerItem = system.type === 'sparks' ? SPARK_VERTICES : system.type === 'hair' ? (system.segments + 1) * HAIR_LIMITS.ringSides : Math.max(...templateNodeIds(system).map(nodeId => geometries.get(nodes.get(nodeId).geometry).positions.length / 3));
     totalVertices += verticesPerItem * system.count;
-    checkVertexBudget(verticesPerItem * system.count, totalVertices, system.node);
+    checkVertexBudget(verticesPerItem, system.count, totalVertices, system.node, recipe);
     if (system.type === 'hair') {
       const surfaceNode = nodes.get(system.surface);
       return prepareHair(system, node, surfaceNode, geometries.get(surfaceNode.geometry), forces);
