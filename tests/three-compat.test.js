@@ -147,6 +147,21 @@ test('OrbitControls moves the camera around its target', () => {
   assert.ok(Math.abs(camera.position.z) < 1e-6);
 });
 
+test('MeshLambertMaterial and MeshPhongMaterial build matte Crucible materials', () => {
+  const lambert = new THREE.MeshLambertMaterial({ color: 0xff0000, metalness: 1, roughness: 0 }).toMaterial();
+  assert.equal(lambert.metallic, 0);
+  assert.equal(lambert.roughness, 1);
+  assert.deepEqual(lambert.color, new THREE.Color(0xff0000).toArray());
+  const defaultPhong = new THREE.MeshPhongMaterial({ color: 0x00ff00 }).toMaterial();
+  assert.equal(defaultPhong.metallic, 0);
+  assert.ok(Math.abs(defaultPhong.roughness - 0.5) < 1e-9);
+  const shiny = new THREE.MeshPhongMaterial({ shininess: 198, specular: 0xffffff }).toMaterial();
+  assert.ok(Math.abs(shiny.roughness - 0.01 ** 0.25) < 1e-9);
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshPhongMaterial());
+  assert.ok(mesh.material instanceof THREE.MeshStandardMaterial);
+  assert.ok(!unsupportedNames.includes('MeshLambertMaterial') && !unsupportedNames.includes('MeshPhongMaterial'));
+});
+
 test('unsupported three.js names throw an error that names the Crucible replacement', () => {
   const cases = [
     ['MeshBasicMaterial', /MeshStandardMaterial.*emission/],

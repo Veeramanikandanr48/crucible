@@ -48,7 +48,7 @@ body.marketplace > main { gap: 40px; }
 .market-install li { display: grid; gap: 8px; counter-increment: step; }
 .market-install li p { color: var(--muted); font-size: 15px; }
 .market-install li p::before { content: counter(step) ". "; font-variant-numeric: tabular-nums; }
-.market-install .command-row code { user-select: text; }
+.market-install .command-row code, .market-card .command-row code { user-select: text; }
 
 .marketplace button, .marketplace .market-button, .marketplace .section-heading a { user-select: none; }
 

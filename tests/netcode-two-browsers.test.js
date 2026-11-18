@@ -147,7 +147,7 @@ async function playTogether(context, transport, relayPort) {
   return { hostToClientLag, clientToHostLag, positions };
 }
 
-for (const transport of ['broadcast', 'websocket']) {
+for (const transport of ['broadcast', 'websocket', 'webrtc']) {
   test(`two browser pages converge and show a move within bounded lag over ${transport}`, async testContext => {
     let chromium;
     try {

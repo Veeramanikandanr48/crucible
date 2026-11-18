@@ -3,6 +3,7 @@
 // recipe never holds it, and it is left out when a part of the recipe already forms a floor or `environment.ground`
 // is false. Callers give it to the renderer as the `ground` option (renderer.js draws and shadows it like any part).
 import { mat4 } from 'gl-matrix';
+import { skinnedWorldBounds } from './skinning.js';
 
 const DISC_SEGMENTS = 48;
 // A part is a floor when it spans this share of the scene's width and depth, is thin, and is the lowest geometry.
@@ -14,20 +15,9 @@ const DISC_REACH = 6;
 const MINIMUM_RADIUS = 2;
 export const FLOOR_COLOR = [0.22, 0.22, 0.21];
 
-/** World-space axis-aligned bounds of one part, from its positions and matrix. */
+/** World-space axis-aligned bounds of one part, from its positions, its skin pose when it has one, and its matrix. */
 function partBounds(part) {
-  const { positions } = part.geometry;
-  const matrix = part.matrix;
-  const minimum = [Infinity, Infinity, Infinity];
-  const maximum = [-Infinity, -Infinity, -Infinity];
-  for (let offset = 0; offset < positions.length; offset += 3) {
-    for (let axis = 0; axis < 3; axis++) {
-      const value = matrix[axis] * positions[offset] + matrix[4 + axis] * positions[offset + 1] + matrix[8 + axis] * positions[offset + 2] + matrix[12 + axis];
-      minimum[axis] = Math.min(minimum[axis], value);
-      maximum[axis] = Math.max(maximum[axis], value);
-    }
-  }
-  return { minimum, maximum };
+  return skinnedWorldBounds(part.geometry, part.skin, part.matrix);
 }
 
 function sceneBounds(boundsList) {

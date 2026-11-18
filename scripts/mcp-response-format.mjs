@@ -100,3 +100,15 @@ export function withoutNotes(outline) {
   }
   return outline;
 }
+
+function withoutNotesOfAnswer(answer) {
+  return answer.fields === undefined ? answer : { ...answer, fields: withoutNotes(answer.fields) };
+}
+
+/** A scene_capabilities answer for concise format; a topic list drops the notes of each topic it holds. */
+export function conciseCapabilities(answer) {
+  if (answer.answers === undefined) return withoutNotesOfAnswer(answer);
+  const answers = {};
+  for (const [topic, topicAnswer] of Object.entries(answer.answers)) answers[topic] = withoutNotesOfAnswer(topicAnswer);
+  return { ...answer, answers };
+}

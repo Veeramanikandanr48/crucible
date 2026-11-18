@@ -1,1 +1,0 @@
-- Flat water that transmits light (glTF `KHR_materials_transmission` with an `ior` near 1.33) now shows the water reflection of the scene around it (#1178)

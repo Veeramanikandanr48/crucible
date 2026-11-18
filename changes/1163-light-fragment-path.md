@@ -1,1 +1,0 @@
-- The colour shader computes the sun shadow coordinate from the world position instead of carrying it as a varying, which cuts about 15 percent of the opaque pass on scans with about one triangle per pixel (#1163)

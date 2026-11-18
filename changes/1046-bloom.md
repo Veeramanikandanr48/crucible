@@ -1,1 +1,0 @@
-- A local volume that emits now feeds bloom in the rasterizer: the volumes are drawn before bloom extraction for a frame with bloom on (#1046).

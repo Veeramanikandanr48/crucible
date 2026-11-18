@@ -277,6 +277,7 @@ the foot short of its target and `reached` turns false. `motionIk[n].limited` li
 | --- | --- |
 | `hyperextended` | The middle joint is within 5 degrees of straight: the target is at or past the limb's reach |
 | `wrong-bend` | The middle joint bends opposite to its natural side, which a pole on the wrong side produces while the foot still arrives |
+| `target-at-root` | A two-bone target is within 0.1 percent of the limb's length from the root joint. The limb folds along the way it already points; move the target at least that far off the root. Unequal bones cannot fold fully, so `reached` stays false |
 
 The natural side is `bendToward` (a world direction, such as `[0, 0, 1]` for a knee on a character that faces +z) or, when
 that is absent, the way the limb is bent in its rest pose. A limb that rests perfectly straight and has no `bendToward` is
@@ -460,7 +461,7 @@ A body node takes its pose from the recording. A node cannot have a body and a m
 ## Bounds and checks
 
 The controller accepts durations between 0.1 and 30 seconds.
-A motion requires at least one track.
+A motion requires at least one track or driver (or an IK solver, constraint, layer, spring or drive); `tracks` can be left out of a motion made of drivers alone.
 It can contain at most 128 tracks, 64 keys per track, and 2048 keys in total.
 Values and tangents must remain finite at Float32 precision.
 The scene integration must also enforce its total recipe byte budget.

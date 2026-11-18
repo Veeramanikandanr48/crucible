@@ -20,7 +20,7 @@ export const FINAL_TIER_RENDERER = Object.freeze({ type: 'pathTracer', samples: 
 
 import { PATH_TRACER_JOB_LIMITS } from '../src/path-tracer-capabilities.js';
 
-const PATH_TRACER_ONLY_LIT_PNG = ['passes', 'transparent', 'region', 'multilayer'];
+const PATH_TRACER_ONLY_LIT_PNG = ['passes', 'mattes', 'transparent', 'region', 'multilayer'];
 
 export function parseQuality(value) {
   if (!QUALITY_TIERS.includes(value)) throw new TypeError(`quality must be one of ${QUALITY_TIERS.join(', ')}.`);

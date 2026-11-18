@@ -6,7 +6,7 @@ export const FOG_LIGHT_LIMIT = 8;
 export const DEFAULT_FLOW_STRENGTH = 1;
 export const DEFAULT_FLOW_PERIOD = 2;
 // What a fog without detail controls uses: one octave, no warp, the noise as is, the layer top fading from half its height.
-const DEFAULT_DETAIL = { detailOctaves: 1, detailAmount: 0.5, warp: 0, contrast: 1, profileSoftness: 0.5, keyScattering: 1, scatterOctaves: 1, multiScatter: 0.5, multiExtinction: 0.5, multiAnisotropy: 0.5, keyTransmittance: 0, surfaceTransmittance: 0 };
+const DEFAULT_DETAIL = { detailOctaves: 1, detailAmount: 0.5, warp: 0, contrast: 1, profileSoftness: 0.5, keyScattering: 1, scatterOctaves: 1, multiScatter: 0.5, multiExtinction: 0.5, multiAnisotropy: 0.5, keyTransmittance: 0, surfaceTransmittance: 0, beamRadius: 0 };
 const DETAIL_LIMITS = {
   detailOctaves: [1, 3, 'Volume detail octaves'],
   detailAmount: [0, 1, 'Volume detail amount'],
@@ -20,6 +20,7 @@ const DETAIL_LIMITS = {
   multiAnisotropy: [0, 1, 'Volume multi anisotropy'],
   keyTransmittance: [0, 1, 'Volume key transmittance'],
   surfaceTransmittance: [0, 1, 'Volume surface transmittance'],
+  beamRadius: [0, 20, 'Volume beam radius'],
 };
 
 /** The six detail fields of a resolved volume fog with defaults filled in. Anything unset or out of range throws like the core fields. */

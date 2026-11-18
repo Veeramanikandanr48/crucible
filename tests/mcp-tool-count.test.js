@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { createAgentMcpServer } from '../scripts/mcp-server.mjs';
@@ -37,10 +37,19 @@ test('documented MCP tool counts match the protocol listing', async () => {
     'docs/learn/models-and-ai-agents.md': /(\d+) tools for authoring/,
     'docs/mcp.md': /Lists all (\d+) tools/,
     'site/index.html': /(\d+) MCP tools/,
-    'scripts/smoke-mcp.mjs': /listing\.tools\.length, (\d+)\)/,
-    'scripts/smoke-mcp-package.mjs': /listTools\(\)\)\.tools\.length, (\d+)\)/,
   };
   for (const [file, pattern] of Object.entries(statements)) {
     assert.equal(await countStatedIn(file, pattern), listed, `${file} states a different tool count than tools/list`);
+  }
+});
+
+test('smoke scripts take the tool list from the server, not a hard-coded count', async () => {
+  const scriptsFolder = new URL('../scripts/', import.meta.url);
+  const smokeFiles = (await readdir(scriptsFolder)).filter(name => /^smoke-.*\.(mjs|py)$/.test(name));
+  assert.ok(smokeFiles.length > 10, 'expected the smoke scripts to be found');
+  const hardCodedCount = /tools\.length,\s*\d+|EXPECTED_TOOL_COUNT\s*=\s*\d+/;
+  for (const name of smokeFiles) {
+    const text = await readFile(new URL(name, scriptsFolder), 'utf8');
+    assert.doesNotMatch(text, hardCodedCount, `scripts/${name} hard-codes a tool count; use assertToolListMatchesServer from scripts/mcp-tool-list.mjs`);
   }
 });

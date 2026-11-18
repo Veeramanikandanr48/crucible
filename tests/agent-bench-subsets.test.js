@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { BENCH_TASKS } from '../bench/agent-modeling/suite.mjs';
+import { BENCH_TASKS, OPTIONAL_TASK_IDS } from '../bench/agent-modeling/suite.mjs';
 import { BENCH_TOPICS, PATH_RULES, parseList, selectTasks, subsetCommand, suggestSubset } from '../bench/agent-modeling/subsets.mjs';
 import { benchSummary } from '../bench/agent-modeling/bench-summary.mjs';
 import { compareBench } from '../bench/agent-modeling/compare-bench.mjs';
@@ -77,6 +77,22 @@ test('bench.mjs --dry-run lists the selected tasks and rejects unknown values wi
   const output = execFileSync(process.execPath, [benchPath, '--kinds', 'film', '--dry-run'], { encoding: 'utf8' });
   assert.match(output, /^2 of \d+ tasks: sunset-timelapse, film-reveal/);
   assert.throws(() => execFileSync(process.execPath, [benchPath, '--topics', 'nope', '--dry-run'], { encoding: 'utf8', stdio: 'pipe' }), /Unknown topic nope/);
+});
+
+test('--tasks accepts a scene task that the default run leaves out, and the default run stays on the 33 bench tasks', () => {
+  assert.deepEqual(OPTIONAL_TASK_IDS, ['findings-fix']);
+  assert.deepEqual(selectTasks({ tasks: 'findings-fix' }, BENCH_TASKS, OPTIONAL_TASK_IDS), ['findings-fix']);
+  assert.deepEqual(selectTasks({ tasks: 'findings-fix,bolt' }, BENCH_TASKS, OPTIONAL_TASK_IDS), ['bolt', 'findings-fix']);
+  assert.equal(selectTasks({}, BENCH_TASKS, OPTIONAL_TASK_IDS).length, 33);
+  assert.equal(selectTasks({ kinds: 'light' }, BENCH_TASKS, OPTIONAL_TASK_IDS).includes('findings-fix'), false);
+  assert.throws(() => selectTasks({ tasks: 'nope' }, BENCH_TASKS, OPTIONAL_TASK_IDS), /Unknown task nope\. Valid tasks: crate,.*findings-fix\./);
+});
+
+test('bench.mjs --tasks findings-fix --dry-run selects it, an unknown id lists the valid ids, the default dry run selects 33 tasks', () => {
+  const run = argumentsList => execFileSync(process.execPath, [benchPath, ...argumentsList, '--dry-run'], { encoding: 'utf8', stdio: 'pipe' });
+  assert.match(run(['--tasks', 'findings-fix']), /^1 of 33 tasks: findings-fix/);
+  assert.match(run([]), /^33 of 33 tasks: crate,/);
+  assert.throws(() => run(['--tasks', 'nope']), /Unknown task nope\. Valid tasks: crate,.*findings-fix\./s);
 });
 
 function record(task, pass, extra = {}) {

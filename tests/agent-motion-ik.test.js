@@ -159,7 +159,7 @@ test('recipes export and reload with their ik', () => {
 
 test('mistakes say what to pass', () => {
   const create = (ik, overrides) => createAgentScene(armRecipe({ duration: 1, tracks: [], ik }, overrides));
-  assert.throws(() => createAgentScene(armRecipe({ duration: 1, tracks: [] })), /at least one track, IK solver, constraint or driver/);
+  assert.throws(() => createAgentScene(armRecipe({ duration: 1, tracks: [] })), /at least one track or driver/);
   assert.throws(() => create([{ type: 'fabrik', target: [0, 0, 0] }]), /motion\.ik\[0\]\.type: got "fabrik"; expected one of two-bone, aim, chain or spline/);
   assert.throws(() => create([armIk([0, 0, 0], { root: 'nope' })]), /motion\.ik\[0\]\.root: got "nope"; expected a node ID in this recipe/);
   assert.throws(() => create([armIk({ node: 'nope' })]), /motion\.ik\[0\]\.target\.node: got "nope"; expected a node ID/);

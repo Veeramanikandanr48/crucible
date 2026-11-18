@@ -99,7 +99,7 @@ function rasterFrameSeconds({ size, settings }) {
   const drawSeconds = COST_MODEL.drawFrameSeconds + settings.width * settings.height * COST_MODEL.drawSecondsPerPixel
     + size.triangles * COST_MODEL.drawSecondsPerTriangle + size.assetParts * COST_MODEL.drawSecondsPerAssetPart + size.lights * COST_MODEL.drawSecondsPerLight;
   const outputSeconds = settings.kind === 'video' ? COST_MODEL.videoEncodeSeconds : COST_MODEL.imageCaptureSeconds;
-  return drawSeconds * (1 + (settings.passes?.length ?? 0) * COST_MODEL.passFactor) + outputSeconds;
+  return drawSeconds * (1 + ((settings.passes?.length ?? 0) + (settings.mattes?.length ?? 0)) * COST_MODEL.passFactor) + outputSeconds;
 }
 
 function peakMemoryMiB({ size, settings }) {

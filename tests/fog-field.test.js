@@ -84,7 +84,7 @@ const DETAIL_FIELDS = ['detailOctaves', 'detailAmount', 'warp', 'contrast', 'pro
 test('a fog without detail controls resolves to the default detail and needs no detail step', () => {
   const resolved = resolveVolumeFog({ density: 0.1 });
   for (const key of DETAIL_FIELDS) assert.equal(Object.hasOwn(resolved, key), false, key);
-  assert.deepEqual(resolveFogDetail(resolved), { detailOctaves: 1, detailAmount: 0.5, warp: 0, contrast: 1, profileSoftness: 0.5, keyScattering: 1, scatterOctaves: 1, multiScatter: 0.5, multiExtinction: 0.5, multiAnisotropy: 0.5, keyTransmittance: 0, surfaceTransmittance: 0 });
+  assert.deepEqual(resolveFogDetail(resolved), { detailOctaves: 1, detailAmount: 0.5, warp: 0, contrast: 1, profileSoftness: 0.5, keyScattering: 1, scatterOctaves: 1, multiScatter: 0.5, multiExtinction: 0.5, multiAnisotropy: 0.5, keyTransmittance: 0, surfaceTransmittance: 0, beamRadius: 0 });
   assert.equal(fogUsesDetail(resolved), false);
   assert.equal(fogUsesDetail(resolveVolumeFog({ density: 0.1, detailOctaves: 1, warp: 0, contrast: 1, profileSoftness: 0.2, keyScattering: 3 })), false, 'profile and key scattering are plain uniforms');
 });
@@ -113,4 +113,11 @@ test('the detail step is compiled in only on request', () => {
   assert.equal(POST_STEPS.includes('detail'), false);
   assert.match(createPostFragment(), /#define POST_DETAIL false/);
   assert.match(createPostFragment([...POST_STEPS, 'detail']), /#define POST_DETAIL \(true\)/);
+});
+
+test('beamRadius keeps the beam-local octave radius, defaults to off and stays within 0 to 20 metres', () => {
+  assert.equal(resolveFogDetail(resolveVolumeFog({ density: 0.1 })).beamRadius, 0);
+  assert.equal(resolveFogDetail(resolveVolumeFog({ density: 0.1, beamRadius: 1.5 })).beamRadius, 1.5);
+  assert.equal(normalizeAgentLook({ environment: { volumeFog: { density: 0.5, beamRadius: 2 } } }).environment.volumeFog.beamRadius, 2);
+  for (const bad of [-1, 21, '2', NaN]) assert.throws(() => resolveFogDetail(resolveVolumeFog({ beamRadius: bad })), /Volume beam radius must be between 0 and 20/, String(bad));
 });

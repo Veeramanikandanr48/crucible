@@ -57,6 +57,7 @@ function windShader(features) {
 }
 
 function vertexShaderSource(definitions, features) {
+  const retro = new Set(features).has('retro') ? requireFeatureCode('retro') : {};
   return `#version 300 es
 ${definitions}
 precision highp float;
@@ -99,7 +100,7 @@ out vec2 vertexWear;
 out vec4 shadowPosition;
 #endif
 out vec2 textureUV, lightmapUV;
-out vec3 boxPosition, boxNormal;
+${retro.head ?? ''}out vec3 boxPosition, boxNormal;
 ${skinningShader(features)}
 ${morphingShader(features)}
 ${windShader(features)}
@@ -159,7 +160,7 @@ void main() {
     vec4 lifted = gl_Position - (flushBias.x + flushBias.y * gl_Position.w) * clipPerMetre;
     gl_Position.z = (lifted.z / lifted.w + flushBias.z) * gl_Position.w;
   }
-}`;
+${retro.tail ?? ''}}`;
 }
 
 // Built when a renderer starts, so the crowd addon can install its skinning code first.
@@ -352,7 +353,7 @@ vec4 shadowPosition;
 in vec4 shadowPosition;
 #endif
 in vec2 textureUV, lightmapUV;
-uniform sampler2D lightMap;
+${featureCode("uv")}uniform sampler2D lightMap;
 uniform float lightMapScale;
 uniform float hasLightMap;
 uniform vec3 eye;
@@ -916,7 +917,7 @@ ${featureCode("irradianceGrid")}  vec3 keyResponse = keyColor / mix(vec3(5.2, 4.
 ${featureCode("worldLight")}  if (USES_SHEEN) radiance = sheenLayer(radiance, normal, viewDirection, visibility);
   if (USES_CLEARCOAT) radiance = clearCoatLayer(radiance, normal, viewDirection, visibility, materialCoat.x * coatKept);
   radiance += emission;
-${featureCode("afterEmission")}${featureCode("worldAfterEmission")}  if (TAG_FLOOR) {
+${featureCode("afterEmission")}${featureCode("worldAfterEmission")}${featureCode("waterHook")}  if (TAG_FLOOR) {
     float contact = 1.0 - 0.45 * exp(-dot(worldPosition.xz, worldPosition.xz) * 1.4);
     radiance = vec3(0.034, 0.041, 0.046) * (0.4 + visibility * 0.6) * contact;
     float fog = 1.0 - exp(-length(worldPosition.xz) * 0.05);

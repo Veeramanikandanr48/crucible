@@ -1,5 +1,5 @@
 import { MAX_POINT_LIGHTS } from './light-limits.js';
-import { volumeGridFloats, blackbodyRadiance } from './volume-grid.js';
+import { volumeGridFloats, gridTemperature, blackbodyRadiance } from './volume-grid.js';
 
 // Fire is light (#1046). A local volume with `lightsScene: true` adds one point light at the centre of its emission, so the ground, the
 // props and the smoke around a fireball are lit by it. The light's intensity is the emission integrated over the volume: a medium that
@@ -25,24 +25,26 @@ const totalsByGrid = new WeakMap();
 
 // The summed emission of one grid frame in grid cell units and its luminance-weighted centroid in the unit cube. Decoded once per frame of the sequence.
 function gridEmissionSums(gridData, volume) {
-  const key = `${volume.emission}|${volume.emissionStrength}|${volume.temperatureScale}|${volume.blackbodyIntensity}`;
+  const key = `${volume.emission}|${volume.emissionStrength}|${volume.temperatureScale}|${volume.blackbodyIntensity}|${volume.flameTemperature?.ignition}|${volume.flameTemperature?.maximum}`;
   const cached = totalsByGrid.get(gridData);
   if (cached?.key === key) return cached;
   const floats = volumeGridFloats(gridData);
   const [width, height, depth] = gridData.resolution;
   const flame = floats.flame ?? floats.density;
-  const temperature = floats.temperature ?? null;
+  const temperature = gridTemperature(gridData, volume.flameTemperature) ?? null;
   const total = [0, 0, 0];
   const centroidWeight = [0, 0, 0];
   const blackbody = [0, 0, 0];
+  const emitted = [0, 0, 0];
+  const glows = volume.blackbodyIntensity > 0 && temperature;
   for (let z = 0; z < depth; z++) {
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const cell = x + y * width + z * width * height;
         const flameValue = flame ? flame[cell] : 0;
-        const emitted = [0, 0, 0];
+        if (flameValue === 0 && !glows) continue; // an empty cell emits nothing; a sequence runs this over every frame, so it stays free of allocations
         for (let channel = 0; channel < 3; channel++) emitted[channel] = volume.emission[channel] * volume.emissionStrength * flameValue;
-        if (volume.blackbodyIntensity > 0 && temperature) {
+        if (glows) {
           blackbodyRadiance(temperature[cell] * volume.temperatureScale, blackbody);
           for (let channel = 0; channel < 3; channel++) emitted[channel] += blackbody[channel] * volume.blackbodyIntensity * volume.emissionStrength;
         }

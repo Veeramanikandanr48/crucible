@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAgentScene } from '../src/agent-scene.js';
 import { fitSettingsToBudget } from '../src/agent-bake.js';
-import { estimateBake } from '../src/light-bake.js';
-import { BAKE_PRESETS, BAKE_PRESET_PATH_WORK } from '../src/agent-scene-capabilities.js';
+import { estimateBake, MAX_BAKE_TEXELS } from '../src/light-bake.js';
+import { BAKE_PRESETS, BAKE_PRESET_PATH_WORK, BAKE_EXPLICIT_PATH_WORK_LIMIT } from '../src/agent-scene-capabilities.js';
 import { closedRoom, clothRoom } from './support/agent-bake-rooms.mjs';
 
 test('a cloth sheet is skipped by the bake and still has no lightmap after a seek past t=0', () => {
@@ -65,7 +65,21 @@ test('a preset keeps its bounces when only samples and density need to shrink, a
   assert.deepEqual([small.reduced, small.reduction], [false, null]);
 });
 
+test('explicit settings that need more texels than a bake takes shrink until the texels and the path steps fit (#1218)', () => {
+  const house = syntheticPlan(Array.from({ length: 800 }, () => 900));
+  const asked = { samples: 32, bounces: 2, texelsPerUnit: 3, probes: 'room' };
+  assert.ok(estimateBake(house, asked).texels > MAX_BAKE_TEXELS, 'the asked density needs too many texels');
+  const { used, reduced, reduction } = fitSettingsToBudget(house, asked);
+  assert.equal(reduced, true);
+  assert.ok(estimateBake(house, used).texels <= MAX_BAKE_TEXELS);
+  assert.ok(pathWork(house, used) <= BAKE_EXPLICIT_PATH_WORK_LIMIT);
+  assert.ok(used.texelsPerUnit < asked.texelsPerUnit);
+  assert.match(reduction, /^The explicit settings asked for samples 32, bounces 2, texelsPerUnit 3;/);
+  const fitting = { ...asked, samples: 8, bounces: 1, texelsPerUnit: 1 };
+  assert.deepEqual(fitSettingsToBudget(house, fitting).used, fitting, 'settings that fit are left alone');
+});
+
 test('a scene too large for one bounce at the floor is still refused, with the budget in the message', () => {
-  const impossible = syntheticPlan(Array.from({ length: 2000 }, () => 900));
+  const impossible = syntheticPlan(Array.from({ length: 800 }, () => 900));
   assert.throws(() => fitSettingsToBudget(impossible, { ...BAKE_PRESETS.draft, probes: 'room' }), /preset budget/);
 });

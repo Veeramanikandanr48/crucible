@@ -34,12 +34,11 @@ globalThis.OffscreenCanvas = class {
 
 const { bakeLightmapsAsync } = await import('../src/light-bake-gpu.js');
 
-const cube = box(0, 1);
-
-function cubeParts(count) {
+// Each cube has a geometry of its own: copies that share one are held once by the WebGL2 tracer (#2239), so they would not reach the bound.
+function cubeParts(count, geometryOf = () => box(0, 1)) {
   return Array.from({ length: count }, (_, index) => ({
     name: `cube-${index}`,
-    geometry: cube,
+    geometry: geometryOf(),
     matrix: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, index * 2, 0, 0, 1]),
     material: { tag: 'surface', color: [0.7, 0.7, 0.7], metallic: 0, roughness: 0.8, emission: 0 },
   }));
@@ -57,4 +56,10 @@ test('the WebGL2 light bake refuses a scene past the context bound with its coun
 
 test('the WebGL2 light bake takes a scene inside the context bound as far as the kernel', async () => {
   await assert.rejects(bakeLightmapsAsync(cubeParts(cubesUnderLimit), lamp, bakeOptions), { message: KERNEL_REACHED });
+});
+
+test('the WebGL2 light bake counts copies of one shared cube once, so they pass a bound their flattened triangles exceed', async () => {
+  const sharedCube = box(0, 1);
+  assert.ok(cubesOverLimit * CUBE_TRIANGLES > DEVICE_TRIANGLE_LIMIT);
+  await assert.rejects(bakeLightmapsAsync(cubeParts(cubesOverLimit, () => sharedCube), lamp, bakeOptions), { message: KERNEL_REACHED });
 });

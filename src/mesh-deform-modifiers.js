@@ -2,19 +2,25 @@ import { withPositions } from './mesh-field-edits.js';
 import { vertexNormals } from './mesh-normals.js';
 import { invalidField } from './field-error.js';
 import { editField, editInteger, editBoolean, editAxis } from './mesh-edit-field.js';
+import { vertexGroupWeights } from './mesh-data.js';
 
 // Modifiers that only move vertices, each from a few numbers: lattice (a coarse grid of moved control points), curve (bend
-// along a path), hook (pull the vertices near a point) and wave (a travelling ripple). Every list is bounded, and the
+// along a path), hook (pull the vertices near a point), wave (a travelling ripple), smooth_laplacian (smoothing that keeps
+// volume) and warp (carry a point to another with a falloff). Every list is bounded, and the
 // errors name the field and the limit.
 
 export const MAX_LATTICE_DIVISIONS = 8;
 export const MAX_LATTICE_MOVES = 64;
 export const MAX_CURVE_POINTS = 64;
 export const HOOK_FALLOFFS = Object.freeze(['smooth', 'linear', 'constant']);
+export const MAX_LAPLACIAN_ITERATIONS = 64;
 export const WAVE_AXES = Object.freeze(['xy', 'x', 'y']);
 const AXIS_NAMES = Object.freeze({ x: 0, y: 1, z: 2 });
 const CURVE_SAMPLES_PER_SEGMENT = 16;
 const MINIMUM_SPAN = 1e-9;
+const GROUP_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/;
+// Taubin's pass band: the shrinking step of size factor is followed by an inflating step that cancels it on smooth shapes.
+const TAUBIN_PASS_BAND = 0.1;
 
 function meshBounds(mesh) {
   const low = [Infinity, Infinity, Infinity];
@@ -111,6 +117,105 @@ export function waveDeform(mesh, { height, width, narrowness, speed, time, timeO
     } else {
       positions[vertex * 3 + 2] += displacement;
     }
+  }
+  return positions;
+}
+
+/** Vertices on an edge that only one face uses: the rim of an open mesh. */
+function boundaryVertices(mesh) {
+  const faceCounts = new Map();
+  for (let face = 0; face < mesh.faceCount; face++) {
+    const start = mesh.faceOffsets[face];
+    const end = mesh.faceOffsets[face + 1];
+    for (let corner = start; corner < end; corner++) {
+      const first = mesh.cornerVertices[corner];
+      const second = mesh.cornerVertices[corner + 1 < end ? corner + 1 : start];
+      const key = Math.min(first, second) * mesh.vertexCount + Math.max(first, second);
+      faceCounts.set(key, (faceCounts.get(key) ?? 0) + 1);
+    }
+  }
+  const pinned = new Uint8Array(mesh.vertexCount);
+  for (const [key, count] of faceCounts) {
+    if (count !== 1) continue;
+    pinned[Math.floor(key / mesh.vertexCount)] = 1;
+    pinned[key % mesh.vertexCount] = 1;
+  }
+  return pinned;
+}
+
+function laplacianStep(mesh, positions, sums, counts, stepSizes) {
+  sums.fill(0);
+  counts.fill(0);
+  for (let edge = 0; edge < mesh.edgeCount; edge++) {
+    const first = mesh.edgeVertices[edge * 2];
+    const second = mesh.edgeVertices[edge * 2 + 1];
+    for (let axis = 0; axis < 3; axis++) {
+      sums[first * 3 + axis] += positions[second * 3 + axis];
+      sums[second * 3 + axis] += positions[first * 3 + axis];
+    }
+    counts[first]++;
+    counts[second]++;
+  }
+  for (let vertex = 0; vertex < mesh.vertexCount; vertex++) {
+    if (counts[vertex] === 0 || stepSizes[vertex] === 0) continue;
+    for (let axis = 0; axis < 3; axis++) {
+      const index = vertex * 3 + axis;
+      positions[index] += stepSizes[vertex] * (sums[index] / counts[vertex] - positions[index]);
+    }
+  }
+}
+
+/**
+ * Laplacian smoothing that keeps volume. Plain smoothing pulls every vertex toward the mean of its neighbours and so shrinks a
+ * closed mesh; with preserveVolume each iteration is a shrinking step of size factor followed by an inflating step (Taubin's
+ * lambda and mu), which cancels the shrink for a smooth shape. Group weights scale each vertex's step, and the rim of an open
+ * mesh stays where it is unless pinBoundary is false.
+ */
+export function smoothLaplacianDeform(mesh, { factor, iterations, preserveVolume, pinBoundary, group }) {
+  const weights = group === undefined ? null : vertexGroupWeights(mesh, group);
+  const pinned = pinBoundary ? boundaryVertices(mesh) : null;
+  const shrinkSizes = new Float64Array(mesh.vertexCount);
+  const inflateSizes = new Float64Array(mesh.vertexCount);
+  const inflateFactor = 1 / (TAUBIN_PASS_BAND - 1 / factor);
+  for (let vertex = 0; vertex < mesh.vertexCount; vertex++) {
+    const weight = (weights ? weights[vertex] : 1) * (pinned && pinned[vertex] ? 0 : 1);
+    shrinkSizes[vertex] = factor * weight;
+    inflateSizes[vertex] = preserveVolume ? inflateFactor * weight : 0;
+  }
+  const positions = Float64Array.from(mesh.positions);
+  const sums = new Float64Array(positions.length);
+  const counts = new Uint32Array(mesh.vertexCount);
+  for (let iteration = 0; iteration < iterations; iteration++) {
+    laplacianStep(mesh, positions, sums, counts, shrinkSizes);
+    if (preserveVolume) laplacianStep(mesh, positions, sums, counts, inflateSizes);
+  }
+  return Float32Array.from(positions);
+}
+
+function rotateAbout(offset, axis, angle) {
+  const cosine = Math.cos(angle);
+  const sine = Math.sin(angle);
+  const along = dotProduct(axis, offset);
+  const across = crossProduct(axis, offset);
+  return offset.map((value, component) => value * cosine + across[component] * sine + axis[component] * along * (1 - cosine));
+}
+
+/**
+ * Carry the mesh from point `from` to point `to`: a vertex within `radius` of `from` moves by (to - from) times the curve
+ * weight, so the vertex at `from` lands on `to` and vertices beyond the radius stay. A twist turns each vertex about the
+ * axis from `from` toward `to` by that many degrees times the same weight.
+ */
+export function warpDeform(mesh, { from, to, radius, curve, twist }) {
+  const shift = to.map((value, axis) => value - from[axis]);
+  const shiftLength = Math.hypot(...shift);
+  const direction = shiftLength > MINIMUM_SPAN ? shift.map(component => component / shiftLength) : null;
+  const positions = new Float32Array(mesh.positions);
+  for (let vertex = 0; vertex < mesh.vertexCount; vertex++) {
+    const offset = [0, 1, 2].map(axis => mesh.positions[vertex * 3 + axis] - from[axis]);
+    const weight = hookWeight(curve, Math.hypot(...offset), radius);
+    if (weight === 0) continue;
+    const turned = twist !== 0 && direction ? rotateAbout(offset, direction, twist * Math.PI / 180 * weight) : offset;
+    for (let axis = 0; axis < 3; axis++) positions[vertex * 3 + axis] = from[axis] + turned[axis] + shift[axis] * weight;
   }
   return positions;
 }
@@ -272,8 +377,33 @@ function normalizeWave(edit, normalized, index, { finiteNumber }) {
   if (!WAVE_AXES.includes(normalized.axes)) throw editField(index, 'axes', normalized.axes, `one of ${WAVE_AXES.join(', ')}`);
 }
 
-const NORMALIZERS = Object.freeze({ lattice: normalizeLattice, curve: normalizeCurve, hook: normalizeHook, wave: normalizeWave });
-const DEFORMERS = Object.freeze({ lattice: latticeDeform, curve: curveDeform, hook: hookDeform, wave: waveDeform });
+function normalizeSmoothLaplacian(edit, normalized, index, { finiteNumber }) {
+  normalized.factor = edit.factor === undefined ? 0.5 : finiteNumber(edit.factor, index, 'factor', { minimum: 0, maximum: 1, exclusiveMinimum: true });
+  normalized.iterations = edit.iterations === undefined ? 1 : editInteger(edit.iterations, index, 'iterations', 1, MAX_LAPLACIAN_ITERATIONS);
+  normalized.preserveVolume = edit.preserveVolume ?? true;
+  normalized.pinBoundary = edit.pinBoundary ?? true;
+  editBoolean(normalized.preserveVolume, index, 'preserveVolume');
+  editBoolean(normalized.pinBoundary, index, 'pinBoundary');
+  if (edit.group === undefined) return;
+  if (typeof edit.group !== 'string' || !GROUP_NAME_PATTERN.test(edit.group)) {
+    throw editField(index, 'group', edit.group, '1 to 48 letters, digits, dots, dashes or underscores naming a vertex group, such as "mask"');
+  }
+  normalized.group = edit.group;
+}
+
+function normalizeWarp(edit, normalized, index, { finiteNumber }) {
+  normalized.from = checkedVector(edit.from, index, 'from', finiteNumber);
+  normalized.to = checkedVector(edit.to, index, 'to', finiteNumber);
+  normalized.radius = edit.radius === undefined ? 1 : finiteNumber(edit.radius, index, 'radius', { minimum: 0, maximum: 1e4, exclusiveMinimum: true });
+  normalized.curve = edit.curve ?? 'smooth';
+  if (!HOOK_FALLOFFS.includes(normalized.curve)) throw editField(index, 'curve', normalized.curve, `one of ${HOOK_FALLOFFS.join(', ')}`);
+  normalized.twist = edit.twist === undefined ? 0 : finiteNumber(edit.twist, index, 'twist', { minimum: -3600, maximum: 3600 });
+  const apart = Math.hypot(...normalized.to.map((value, axis) => value - normalized.from[axis])) > MINIMUM_SPAN;
+  if (normalized.twist !== 0 && !apart) throw editField(index, 'twist', edit.twist, 'left out, or with "to" apart from "from", because the twist turns about the axis between them');
+}
+
+const NORMALIZERS = Object.freeze({ lattice: normalizeLattice, curve: normalizeCurve, hook: normalizeHook, wave: normalizeWave, smooth_laplacian: normalizeSmoothLaplacian, warp: normalizeWarp });
+const DEFORMERS = Object.freeze({ lattice: latticeDeform, curve: curveDeform, hook: hookDeform, wave: waveDeform, smooth_laplacian: smoothLaplacianDeform, warp: warpDeform });
 
 export const isDeformModifier = operation => Object.hasOwn(DEFORMERS, operation);
 

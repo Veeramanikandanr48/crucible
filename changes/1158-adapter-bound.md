@@ -1,1 +1,0 @@
-- A chunked native trace packs up to the unique triangles the adapter reports (`maxUniqueTriangles`, 4.79 million on a 12 GB RTX 3060) instead of a fixed 4,000,000, up to a ceiling of 16,000,000, and a scene over the bound is refused with the count, the limit and how many triangles too many (#1158)

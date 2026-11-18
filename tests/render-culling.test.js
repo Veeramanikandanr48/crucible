@@ -4,6 +4,7 @@ import { mat4 } from 'gl-matrix';
 import { box, sphere } from '../src/geometry.js';
 import { generateGeometryLods } from '../src/mesh-lod.js';
 import { CrucibleRenderer } from '../src/renderer.js';
+import { WebGL2GlazeBackend } from '../src/glaze-backend-webgl2.js';
 import { InstanceSelection, chooseLevel, extractFrustumPlanes, geometryBoundingSphere, selectInstances } from '../src/render-culling.js';
 
 const STRIDE = 42;
@@ -102,6 +103,7 @@ function drawingRenderer(parts) {
     bufferSubData: (target, offset, data, start, length) => calls.push({ upload: length / STRIDE }),
     drawElementsInstanced: (mode, count, type, offset, instances) => calls.push({ indices: count, instances }),
   };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   renderer.createTexture = () => null;
   renderer.partLocations = new Map();
   renderer.uploadBuffer = (target, data) => {

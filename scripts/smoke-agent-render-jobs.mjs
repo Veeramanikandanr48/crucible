@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { createTexturedRigFixture } from './agent-asset-fixture.mjs';
+import { assertToolListMatchesServer } from './mcp-tool-list.mjs';
 import { inflateSync } from 'node:zlib';
 
 /** The alpha of each pixel in the first row of an 8-bit RGBA PNG; the first row has nothing above it, so only the left neighbour matters. */
@@ -78,7 +79,7 @@ async function close() {
 }
 try {
   await connect();
-  assert.equal((await client.listTools()).tools.length, 25);
+  await assertToolListMatchesServer(client);
   const catalog = (await call('scene_asset_catalog')).structuredContent;
   const created = (await call('scene_create_asset', { recipe: {
     format: 'crucible.asset', schemaVersion: 1, assetId: catalog.assets[0].assetId,
@@ -161,13 +162,13 @@ try {
   assert.equal(fastVideo.data.subarray(4, 8).toString('latin1'), 'ftyp');
   const longJob = (await call('scene_render_submit', { sessionId, expectedRevision: 1,
     settings: { kind: 'video', width: 320, height: 320, fps: 30, duration: 30 } })).structuredContent;
-  await status(longJob.jobId, record => record.progress.frames > 0);
+  await status(longJob.jobId, record => record.frames > 0);
   await call('scene_render_cancel', { jobId: longJob.jobId });
   assert.equal((await status(longJob.jobId)).state, 'cancelled');
   assert.equal((await call('scene_look', { sessionId, width: 320, height: 320 })).content[0].data, before);
   const interrupted = (await call('scene_render_submit', { sessionId, expectedRevision: 1,
     settings: { kind: 'video', width: 320, height: 320, fps: 30, duration: 30 } })).structuredContent;
-  await status(interrupted.jobId, record => record.progress.frames > 0);
+  await status(interrupted.jobId, record => record.frames > 0);
   await close();
   await connect();
   const recovered = (await call('scene_capabilities')).structuredContent;

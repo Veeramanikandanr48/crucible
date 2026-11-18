@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { collectExportChunks } from '../scripts/agent-native-trace.mjs';
+import { collectExportBlob } from '../scripts/agent-native-trace.mjs';
 import {
   NATIVE_CHUNKED_DEFAULT_TRIANGLES, NATIVE_CHUNKED_MAXIMUM_TRIANGLES, NATIVE_EXPORT_CHUNK_BYTES, NATIVE_EXPORT_MAXIMUM_CHARACTERS, NATIVE_JOB_MAXIMUM_TRIANGLES,
-  encodedExportLength, exportNativeSceneTables, nativeTableBytes, readExportChunk, splitExportForChunks,
+  encodedExportLength, exportNativeSceneTables, nativeTableBytes, splitExportForChunks,
 } from '../scripts/native-bake-page.js';
 import { MAX_NATIVE_TRACE_TRIANGLES } from '../src/path-tracer-scene.js';
 
@@ -19,10 +19,10 @@ function patternedBytes(byteLength) {
   return bytes;
 }
 
-function readerOf(tables, calls = []) {
-  return async (name, offset) => {
-    calls.push([name, offset]);
-    return readExportChunk(tables, name, offset);
+function blobReaderOf(tables, calls = []) {
+  return async byteLength => {
+    calls.push(byteLength);
+    return Uint8Array.from(Object.values(tables).flatMap(bytes => [...bytes]));
   };
 }
 
@@ -60,8 +60,8 @@ test('a table longer than one chunk arrives byte for byte, and the manifest is s
   assert.deepEqual(manifest.chunks, { tables: { large: large.byteLength, small: 5, empty: 0 }, chunkBytes: NATIVE_EXPORT_CHUNK_BYTES });
   assert.ok(JSON.stringify(manifest).length < 1000);
   const calls = [];
-  const collected = await collectExportChunks(JSON.parse(JSON.stringify(manifest)), readerOf(tables, calls));
-  assert.deepEqual(calls, [['large', 0], ['large', NATIVE_EXPORT_CHUNK_BYTES], ['small', 0]], 'an empty table needs no read');
+  const collected = await collectExportBlob(JSON.parse(JSON.stringify(manifest)), blobReaderOf(tables, calls));
+  assert.deepEqual(calls, [large.byteLength + 5], 'one read carries every table, the empty one included');
   assert.equal(collected.chunks, undefined);
   assert.equal(collected.triangles, 3);
   assert.deepEqual(collected.counts, { triangleCount: 3 });
@@ -71,19 +71,11 @@ test('a table longer than one chunk arrives byte for byte, and the manifest is s
   assert.equal(collected.tables.large.byteOffset, 0, 'a collected table starts its own buffer');
 });
 
-test('reading a chunk names what is wrong with the request', () => {
-  const tables = { triangles: new Uint8Array(10) };
-  assert.throws(() => readExportChunk(tables, 'materials', 0), /there is no table "materials" in the held export \(tables: triangles\)/);
-  assert.throws(() => readExportChunk(null, 'triangles', 0), /tables: none/);
-  assert.throws(() => readExportChunk(tables, 'triangles', 10), /offset 10 of table "triangles" must be a multiple of \d+ below its 10 bytes/);
-  assert.throws(() => readExportChunk(tables, 'triangles', 3), /must be a multiple of/);
-});
-
-test('a chunk of the wrong length, or an export without a manifest, is refused', async () => {
+test('a blob of the wrong length, or an export without a manifest, is refused', async () => {
   const manifest = { chunks: { tables: { triangles: 12 }, chunkBytes: NATIVE_EXPORT_CHUNK_BYTES } };
-  const shortReader = async () => Buffer.alloc(9).toString('base64');
-  await assert.rejects(collectExportChunks(manifest, shortReader), /sent 9 bytes of table "triangles" at offset 0, expected 12/);
-  await assert.rejects(collectExportChunks({ tables: {} }, shortReader), /carries no `chunks` manifest/);
+  const shortReader = async () => new Uint8Array(9);
+  await assert.rejects(collectExportBlob(manifest, shortReader), /sent 9 bytes, expected 12/);
+  await assert.rejects(collectExportBlob({ tables: {} }, shortReader), /carries no `chunks` manifest/);
 });
 
 test('splitExportForChunks refuses the base64 tables of a one-message export', () => {

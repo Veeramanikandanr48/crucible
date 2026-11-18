@@ -1,1 +1,0 @@
-- Internal variables, parameters and helpers in the mesh, cloth, soft body, glTF, decal, path tracer and export code, and in the Python bench and Blender scripts, now have descriptive names, and `npm run check:names` fails a one-letter or abbreviated name in a declaration, destructuring pattern, function, arrow or method parameter, Python assignment, `def` or `for` (#1522)

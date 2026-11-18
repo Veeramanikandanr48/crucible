@@ -60,7 +60,7 @@ test('a grid volume without the field resolves, packs and compiles as before, an
   assert.ok(!/localGridDetail|LocalGridDetail/.test(createLocalVolumeCompositeFragment(true, 'grid')));
 });
 
-// Taken on main before #1832: every local-volume composite variant (motion, kind, octaves) and the full post pass, hashed together. A frame without detail noise must not move it.
+// Taken on main (509707b3, after #1736 and #1735) without #1832: every local-volume composite variant (motion, kind, octaves) and the full post pass, hashed together. A frame without detail noise must not move it.
 test('every shader a frame without detail noise compiles is the text main compiled', () => {
   const hash = createHash('sha256');
   for (const motion of [false, true]) {
@@ -69,7 +69,7 @@ test('every shader a frame without detail noise compiles is the text main compil
     }
   }
   hash.update(createPostFragment());
-  assert.equal(hash.digest('hex'), 'b5730c49a98eecdca93f6bd382bd7db6eeb5788d34d8869cdc8ccf550508573c');
+  assert.equal(hash.digest('hex'), '9a39db46fab1305a50e508b30eb95dac18c96aef14796f45b619adaf6ef3128a');
 });
 
 test('the shader of a frame with detail noise carries the erosion in the grid sampler and the blackbody tap', () => {

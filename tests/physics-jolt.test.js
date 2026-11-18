@@ -137,16 +137,35 @@ test('unsupported scenes fail with a message that names the fix', async () => {
     joints: [{ name: 'hinge', type: 'spherical', bodyA: 'a', bodyB: 'b' }],
   };
   await assert.rejects(createPhysicsSystem(jointed, { adapter: joltAdapter }), /does not build joints yet.*rapierAdapter/);
-  const cone = {
+  const trimesh = {
     bodies: [{ name: 'a', type: 'fixed' }],
-    colliders: [{ name: 'tip', body: 'a', shape: 'cone', halfHeight: 1, radius: 0.5 }],
+    colliders: [{ name: 'ground', body: 'a', shape: 'trimesh', vertices: [0, 0, 0, 1, 0, 0, 0, 0, 1], indices: [0, 1, 2] }],
   };
-  await assert.rejects(createPhysicsSystem(cone, { adapter: joltAdapter }), /collider "tip" is cone/);
-  const pair = {
+  await assert.rejects(createPhysicsSystem(trimesh, { adapter: joltAdapter }), /collider "ground" is trimesh/);
+  const crowd = {
     bodies: [{ name: 'a' }],
-    colliders: [{ name: 'one', body: 'a', shape: 'ball', radius: 0.5, mass: 1 }, { name: 'two', body: 'a', shape: 'ball', radius: 0.5, translation: [1, 0, 0] }],
+    colliders: Array.from({ length: 17 }, (_, index) => ({ name: `part${index}`, body: 'a', shape: 'ball', radius: 0.1, mass: 1, translation: [index, 0, 0] })),
   };
-  await assert.rejects(createPhysicsSystem(pair, { adapter: joltAdapter }), /one collider per body; body "a" has 2/);
+  await assert.rejects(createPhysicsSystem(crowd, { adapter: joltAdapter }), /at most 16 colliders per body; body "a" has 17/);
+});
+
+test('cone and compound bodies fall on a floor and rest at the heights their shapes give', async () => {
+  const definition = {
+    bodies: [{ name: 'floor', type: 'fixed' }, { name: 'cone', translation: [-2, 3, 0] }, { name: 'stack', translation: [2, 3, 0] }],
+    colliders: [
+      { name: 'floor', body: 'floor', shape: 'cuboid', halfExtents: [10, 0.5, 10], translation: [0, -0.5, 0] },
+      { name: 'cone', body: 'cone', shape: 'cone', halfHeight: 0.5, radius: 0.5, density: 1 },
+      { name: 'stack', body: 'stack', shape: 'cuboid', halfExtents: [0.5, 0.25, 0.5], translation: [0, -0.25, 0], density: 1 },
+      { name: 'stack#1', body: 'stack', shape: 'cylinder', halfHeight: 0.25, radius: 0.25, translation: [0, 0.25, 0], density: 1 },
+    ],
+  };
+  const physics = await createPhysicsSystem(definition, { adapter: joltAdapter });
+  stepMany(physics, 240);
+  const cone = physics.getPose('cone').translation;
+  const stack = physics.getPose('stack').translation;
+  assert.ok(Math.abs(cone[1] - 0.5) < 0.05, `the cone rests on its base, y ${cone[1]}`);
+  assert.ok(Math.abs(stack[1] - 0.5) < 0.05, `the compound rests on its wide part, y ${stack[1]}`);
+  physics.dispose();
 });
 
 test('force fields push dynamic bodies under jolt', async () => {

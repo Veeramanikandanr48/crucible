@@ -932,7 +932,7 @@ One-shot `traceNative` images (both kernels) and S1 session frames hash the same
 
 ## Sequence jobs through a persistent session (#896, slice S3)
 
-A stills or video job with `renderer.backend: "native"` and more than one frame holds one native session for the whole job. Frame 1 creates it; each later frame is decided by comparing its FORMAT-v2 tables with the ones the session holds: the same tables (a camera move) render with the frame's own `kernelParams`; changed `materials`, lights or instance transforms go through `session.update`; changed counts, geometry, textures or environment close the session and create a new one for that frame. A failed update (which closes the session by design), a failed render or a package without sessions falls to a new session or a one-shot trace for that frame and the job carries on. `metrics.pathTracer.nativeSession` names the route of each frame (`path`: `new-session`, `reused`, `updated` or `one-shot`, with `reason`, `changedTables`, `pipelineReused`, `accelerationReused`, `frameIndex`). Every frame equals the one-shot render of the same input byte for byte (`tests/native-sequence.test.js`, and the SHA-256 of all 24 frames in each run below).
+A stills or video job with `renderer.backend: "native"` and more than one frame holds one native session for the whole job. Frame 1 creates it; each later frame is decided by comparing its FORMAT-v2 tables with the ones the session holds: the same tables (a camera move) render with the frame's own `kernelParams`; changed `materials`, lights, instance transforms or `triangles` go through `session.update` (new triangles rebuild only the changed meshes' BLASes and the TLAS, and the route carries `changedMeshes`); changed counts, placed meshes, emissive meshes, textures or environment close the session and create a new one for that frame. A failed update (which closes the session by design), a failed render or a package without sessions falls to a new session or a one-shot trace for that frame and the job carries on. `metrics.pathTracer.nativeSession` names the route of each frame (`path`: `new-session`, `reused`, `updated` or `one-shot`, with `reason`, `changedTables`, `pipelineReused`, `accelerationReused`, `frameIndex`). Every frame equals the one-shot render of the same input byte for byte (`tests/native-sequence.test.js`, and the SHA-256 of all 24 frames in each run below).
 
 Measured on one NVIDIA RTX 4090 (Vast instance, 24 frames, 480 x 270, 16 samples, `bench/cycles-parity/sequence-timing.mjs`, one process per mode so the cold compile of one mode never warms the other; medians of three runs; milliseconds) `[measured]`:
 
@@ -1089,8 +1089,9 @@ The bridge is not exact. Cycles on the exported JSON has a mean radiance of 0.17
 | the same JSON, 3 bounces | 0.4065 / 0.3795 / 0.3391 |
 | the same JSON, 2 bounces | 0.3416 / 0.3190 / 0.2850 (0.91 / 0.96 / 0.92 of the original) |
 | the same JSON, 1 bounce | 0.2555 / 0.2386 / 0.2132 |
+| original `.blend`, every light's own bounce limit cleared (`--variant sun-only-unlimited-bounces`) | 0.6371 / 0.5605 / 0.5272 (the export at 8 bounces is 0.91 / 0.97 / 0.92 of it) |
 
-The gap is now the other way round: the export is 1.6 times brighter, not 10 times dimmer, so the sun fix is in and the sun-only gate is not met. The sun in the file has a per-light limit of 2 bounces (`cyclesSettings.max_bounces`), which the JSON format cannot carry, so the original's sun light stops at two bounces and the export's runs to eight. Capping the whole export at 2 bounces lands within 4 to 9 percent of the original `[inferred: it caps camera paths and every other light as well, which are off here, so only the sun matters; a run that clears the sun's limit in the original would settle it]`; the remainder is not explained. Cook was not measured: its native addon is not built on this machine. This does not affect the Cook against Cycles comparison above, which reads one file on both sides; it means the scene Cook was tested on is a faithful reading of the Classroom only in its camera, the 886 instances it exports, the sun and the world.
+The gap is now the other way round: the export is 1.6 times brighter, not 10 times dimmer, so the sun fix is in and the sun-only gate against the original as it stands is not met. The cause is shown, not only inferred: the original has per-light bounce limits (`cyclesSettings.max_bounces`: sun 2, corridor ceiling light 2, blackboard light 1, one point light 1) that the JSON format cannot carry, so the original's sun stops at two bounces and the export's runs to eight. Clearing those limits in the original (`classroom_bridge.py reference --variant sun-only-unlimited-bounces`, same 960x540, 256 spp, seed 1, 8 bounces) raises its sun-only mean from 0.3762 / 0.3310 / 0.3113 to 0.6371 / 0.5605 / 0.5272, and the export is then 0.91 / 0.97 / 0.92 of it, 3 to 9 percent dimmer. So the 1.6 times is the bounce limit, and a bridge that cannot carry the limit differs from the file by that limit; the 3 to 9 percent left, a little more in red and blue than in green, is not explained. Capping the whole export at 2 bounces lands within 4 to 9 percent of the original only because it applies the limit to every path. Cook was not measured: its native addon is not built on this machine. This does not affect the Cook against Cycles comparison above, which reads one file on both sides; it means the scene Cook was tested on is a faithful reading of the Classroom only in its camera, the 886 instances it exports, the sun and the world.
 
 ### Commands
 
@@ -1142,6 +1143,26 @@ uv run --no-project --with numpy --with pillow python bench/cycles-parity/make-d
 ```
 
 Not covered: the legacy kernel, the WebGPU and WebGL tracers, the raster renderer and glTF `KHR_materials_diffuse_transmission` import ignore the field; a base colour map or vertex colours with a transmitting sheet (Cook tints the far-side lobe by them; `render-cycles.py` refuses that case); a material that also has a specular lobe, coat or sheen, as above; metal, glass and subsurface (refused by the reference script).
+
+## Dispersion (#1714)
+
+A glass material with `dispersion` above 0 (`20 / Abbe number`, Blender 5.3's Principled BSDF `Dispersion`) is traced spectrally by the `cycles` kernel: one hero wavelength per path, refracted by a Cauchy index. The parity scenes live with the kernel in the Cook repository, in `tools/dispersion-scenes.mjs`, which both renderers read: Cook packs them, and `tools/dispersion-parity-cycles.py` builds the same meshes, materials and camera in Blender 5.3 Cycles from the JSON `tools/dispersion-parity.mjs` writes.
+
+| Scene | What it shows | Status |
+| :--- | :--- | :--- |
+| `prism-view` | a prism in front of a row of thin bright slits on black: each slit seen through the glass is a spectrum | measured |
+| `gem` | a round brilliant gem on black under four small lights | measured |
+| `prism-floor` | a prism lying under a small sun over a grey floor: the rainbow on the floor | not resolved: it is a caustic, which Cook does not trace smoothly yet (#1715) |
+
+`[measured]` on an RTX 3060 at 256 samples: the prism and gem views take Cook 3.1 to 4.5 s against Cycles 1.0 to 1.8 s, and with the signed spectral weights (codepawl/cook#53) the prism view's fringe saturation is 0.94 times Cycles' and its mean colour is within 0.2%. The numbers and the 1080p times (8.6 s at 64 samples, 34.1 s at 256, 138 s at 1024) are in [path-tracer.md](path-tracer.md#dispersion-issue-1714), and the pictures are in the pull request that landed the field (#1764).
+
+Commands, in a Cook checkout on a machine with Blender 5.3, Node, `uv`, a GPU and the built addon:
+
+```sh
+node tools/dispersion-parity.mjs gem artifacts/gem --samples 256
+blender -b --factory-startup --python tools/dispersion-parity-cycles.py -- artifacts/gem.scene.json artifacts/gem --samples 256
+uv run --no-project --with numpy python tools/dispersion-parity-compare.py artifacts/gem
+```
 
 ## Reproducible Commands
 
@@ -1737,3 +1758,19 @@ To split a gap between Cook and Cycles, switch the same feature off on both side
 `render-cycles.py` builds a Normal Map node (tangent space, UV map, strength from `normalScale`) for a material with a `normalMap`. Cook's V runs down the image and Blender's runs up, so the green channel is inverted with nodes before the Normal Map node and one set of texels means the same on both sides. `bench/cycles-parity/run-normal-map-parity.py <outputDirectory>` writes the `normal-*` scenes of `texture-scenes.mjs` (a plane and a UV sphere, each with a bumpy map and constant tilts along the map's red and green axes), renders them on both sides at 480 x 270, 256 spp and prints mean ratio, relMSE and the 8 x 8 tile ratios; `make-normal-map-figure.py` draws the tile map. `--instancing` traces with instances, and the `-shared` scenes carry a second part on the same geometry so that works.
 
 Cycles builds the tilted normal in object space and moves it to world space as a normal, so the tilt shrinks along the axes of a non-uniformly scaled object. Cook now does the same for instances (the plane of `normal-plane-shared`, scaled 1.8 x 1.8 x 1: mean ratio 1.0015, relMSE 4e-6, 0 of 64 tiles over 5 percent, from 0.956, 0.0032 and 15). A flattened scene has the matrix baked into the vertices before packing and still tilts the full amount. A UV sphere (uniform scale) had 5 of 64 tiles over 5 percent (worst 1.12, mean ratio 1.012) in both modes. It was not the tangents: the error did not change with 16, 48 or 96 segments, did not sit at the poles, and the normal Cycles builds (rendered as an emission colour with `CYCLES_PARITY_DEBUG_NORMAL=1`) is within 0.5 degrees of the analytic one. It was the light: Cycles scales a diffuse lobe whose normal came from a map by the GGX shadowing term of the tilt (`bump_shadowing_term`, Blender's default bump map correction), which dims the band within about 12 degrees of the terminator, where Cook kept the full cosine (Cook matched an analytic Lambert model there, Cycles kept 21 to 77 percent of it). With that term in Cook the sphere reads 0.9998, relMSE 1.8e-5 and 0 tiles over (bumpy map), 0.9992 and 0 tiles over (tilt along red), 1.0000 and 0 tiles over (tilt along green), at 16, 48 and 96 segments. `CYCLES_PARITY_TERMINATOR_GEOMETRY_OFFSET` sets the object's shadow terminator geometry offset for a check; it changed nothing here. A flattened plane with a non-uniform scale still tilts the full amount (0.951, 43 of 64 tiles within 5 percent). `[measured]`
+
+## Measuring the soft edge of a volume (#1894)
+
+A fog or fire sphere is judged by how soft its edge is, not only by its mean brightness. `bench/cycles-parity/edge-width.py` measures that on a rendered disc: it casts 360 rays out from the centre, samples the luminance bilinearly along each, smooths it with 9 taps and takes the distance between the 90 percent and the 10 percent crossing, where 0 percent is the background pixel and 100 percent is the mean of the core (inside 0.1 radii). The answer is the median over the rays, in disc radii, so a wider edge reads larger and frames of different sizes compare. It prints JSON with `core`, `edgeWidthRadii` and `raysUsed`.
+
+It reads headerless little-endian float32 files in linear light, row 0 at the top. To make them from Crucible's rasterizer, run these from the repository root (the capture is a light GPU job):
+
+```sh
+bash ~/.agents/tools/gpu-lock.sh node bench/cycles-parity/capture-volume-edge.mjs --label after --output-folder artifacts/volume-edge
+node bench/cycles-parity/linearize-display-floats.mjs --width 960 --height 540 artifacts/volume-edge/after-1.f32 artifacts/volume-edge/after-4.f32
+uv run --no-project --with numpy python bench/cycles-parity/edge-width.py --width 960 --height 540 --channels 3 --radius 174.79775107469544 artifacts/volume-edge/after-1-linear.f32 artifacts/volume-edge/after-4-linear.f32
+```
+
+`capture-volume-edge.mjs` renders the #1816 sphere (radius 1, density 7, noise amount 1) with 1 and 4 noise octaves and an empty frame, and writes the displayed RGBA floats; `linearize-display-floats.mjs` undoes the view transform and the 1 / 2.2 gamma and writes `*-linear.f32` with three channels. The radius in pixels (174.8 for this camera) is the sphere's projected radius; a Cycles frame goes straight into `edge-width.py` if it is saved as linear float with the same layout. `--center-x`, `--center-y`, `--background` and `--background-pixel` override the defaults (image centre, pixel column 2 row 2). `uv run --no-project --with numpy python -m unittest bench/cycles-parity/test_edge_width.py` checks the script on a synthetic disc with a known linear falloff.
+
+Example, from #1893 (edge width in radii, 1 and 4 octaves, `[measured]`): Cycles 0.233 and 0.271; Glaze before 0.293 and 0.310; Glaze after #1893 0.293 and 0.284.

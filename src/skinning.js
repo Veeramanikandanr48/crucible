@@ -312,3 +312,38 @@ export function reflectedSkinDiagnostics(partLocations) {
 }
 
 registerDeformationSupport({ validateSkinGeometry, validateSkinPose, reflectedSkinDiagnostics, skinTextureLayout, packSkinInfluences });
+
+/**
+ * Bounds of a mesh as it is drawn: each vertex blended by its joint weights through the pose's palette, then moved
+ * by `worldMatrix`. Bind-pose positions alone miss where the skin puts the mesh. A mesh with no skin uses the matrix alone.
+ * Returns `{ minimum, maximum }`.
+ */
+export function skinnedWorldBounds(geometry, pose, worldMatrix) {
+  const minimum = [Infinity, Infinity, Infinity];
+  const maximum = [-Infinity, -Infinity, -Infinity];
+  const { positions, skinIndices, skinWeights } = geometry;
+  const palette = pose?.jointMatrices;
+  const skinned = Boolean(palette && skinIndices && skinWeights);
+  const blended = mat4.create();
+  for (let vertex = 0; vertex < positions.length / 3; vertex++) {
+    const offset = vertex * 3;
+    let matrix = worldMatrix;
+    if (skinned) {
+      blended.fill(0);
+      for (let slot = 0; slot < 4; slot++) {
+        const weight = skinWeights[vertex * 4 + slot];
+        if (weight === 0) continue;
+        const jointOffset = skinIndices[vertex * 4 + slot] * 16;
+        for (let element = 0; element < 16; element++) blended[element] += weight * palette[jointOffset + element];
+      }
+      matrix = mat4.multiply(blended, worldMatrix, blended);
+    }
+    for (let axis = 0; axis < 3; axis++) {
+      const value = matrix[axis] * positions[offset] + matrix[4 + axis] * positions[offset + 1] +
+        matrix[8 + axis] * positions[offset + 2] + matrix[12 + axis];
+      minimum[axis] = Math.min(minimum[axis], value);
+      maximum[axis] = Math.max(maximum[axis], value);
+    }
+  }
+  return { minimum, maximum };
+}

@@ -113,3 +113,62 @@ test('a trace that passes its time limit returns the parts as they were', () => 
   assert.equal(result.parts, parts);
   assert.equal(result.report.reason, 'passed maxSeconds');
 });
+
+// A box of unit size with flat faces, six faces of four vertices each, scaled and moved by its matrix.
+function boxPart(name, [x, y, z], [width, height, depth]) {
+  const faces = [[[1, 0, 0], [0, 1, 0], [0, 0, 1]], [[-1, 0, 0], [0, 0, 1], [0, 1, 0]], [[0, 1, 0], [0, 0, 1], [1, 0, 0]], [[0, -1, 0], [1, 0, 0], [0, 0, 1]], [[0, 0, 1], [1, 0, 0], [0, 1, 0]], [[0, 0, -1], [0, 1, 0], [1, 0, 0]]];
+  const positions = [];
+  const normals = [];
+  const indices = [];
+  for (const [normal, tangent, bitangent] of faces) {
+    const first = positions.length / 3;
+    for (const [along, across] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+      positions.push(...[0, 1, 2].map(axis => 0.5 * (normal[axis] + along * tangent[axis] + across * bitangent[axis])));
+      normals.push(...normal);
+    }
+    indices.push(first, first + 1, first + 2, first, first + 2, first + 3);
+  }
+  const matrix = [width, 0, 0, 0, 0, height, 0, 0, 0, 0, depth, 0, x, y, z, 1];
+  const geometry = { positions: new Float32Array(positions), normals: new Float32Array(normals), indices: new Uint32Array(indices) };
+  return { name, geometry, matrix, material: { color: [0.7, 0.7, 0.7] } };
+}
+
+// The window room of the interior exposure probe (#1334): walls of 0.2 m that overlap at the corners, a window only in the front wall.
+function windowRoomParts() {
+  return [
+    boxPart('floor', [0, -0.1, 0.25], [8.4, 0.2, 6.9]),
+    boxPart('ceiling', [0, 3.1, 0.25], [8.4, 0.2, 6.9]),
+    boxPart('wall-left', [-4.1, 1.5, 0.25], [0.2, 3, 6.9]),
+    boxPart('wall-right', [4.1, 1.5, 0.25], [0.2, 3, 6.9]),
+    boxPart('wall-back', [0, 1.5, 3.6], [8, 3, 0.2]),
+    boxPart('front-left', [-2.7, 1.5, -3.1], [2.6, 3, 0.2]),
+    boxPart('front-right', [2.7, 1.5, -3.1], [2.6, 3, 0.2]),
+    boxPart('front-sill', [0, 0.45, -3.1], [2.8, 0.9, 0.2]),
+    boxPart('front-head', [0, 2.7, -3.1], [2.8, 0.6, 0.2]),
+  ];
+}
+
+// The brightest sky visibility among the vertices of one face of a part whose world depth is at least `minimumDepth`: the half of the room away from the window.
+function brightestRoomSide(result, partName, normalAxis, normalSign, minimumDepth = 2) {
+  const part = result.parts.find(candidate => candidate.name === partName);
+  const { positions, normals, skyVisibility } = part.geometry;
+  const { matrix } = part;
+  let brightest = 0;
+  for (let vertex = 0; vertex < skyVisibility.length; vertex++) {
+    const depth = matrix[2] * positions[vertex * 3] + matrix[6] * positions[vertex * 3 + 1] + matrix[10] * positions[vertex * 3 + 2] + matrix[14];
+    if (depth >= minimumDepth && normals[vertex * 3 + normalAxis] * normalSign > 0.9) brightest = Math.max(brightest, skyVisibility[vertex]);
+  }
+  return brightest;
+}
+
+test('walls that run into the back wall do not glow near its corners: their buried end vertices read as occluded (#2166)', () => {
+  const result = applyFloorSkyVisibility(windowRoomParts(), { onlyClosedRooms: true, surfaces: 'all' });
+  assert.equal(result.report.reason, null);
+  // The far half of the room sees the sky only through a 2.8 x 1.5 m window at least 5 m away, so these inner faces stay dark:
+  // no brighter than the interior fill every point of the room gets (#1334) plus 0.1.
+  const darkest = result.report.interiorFill + 0.1;
+  assert.ok(brightestRoomSide(result, 'wall-left', 0, 1) < darkest, 'left wall inner face');
+  assert.ok(brightestRoomSide(result, 'wall-right', 0, -1) < darkest, 'right wall inner face');
+  assert.ok(brightestRoomSide(result, 'ceiling', 1, -1) < darkest, 'ceiling underside');
+  assert.ok(brightestRoomSide(result, 'wall-back', 2, -1) < darkest, 'back wall inner face');
+});

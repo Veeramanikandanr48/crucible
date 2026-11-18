@@ -1,6 +1,6 @@
 # Crucible implementation roadmap
 
-Crucible develops 3D authoring and rendering tools for agents, with browser previews, deterministic animation and exported media.
+Crucible develops realtime web 3D and authoring tools for designers and AI agents, with browser Studio controls, deterministic animation and exported media.
 This document separates shipping capabilities from work in progress. Performance claims require measurements on matching scenes and hardware.
 
 The end goal is to be as capable as Blender, as light as three.js and as AI friendly as possible. `docs/goal.md` defines each part, and the GitHub milestones order the work. `docs/parity.md` in that repository records the coverage of each Blender feature.
@@ -46,11 +46,11 @@ The npm package includes the prebuilt `crucible-mcp` command with lazy browser s
 The work is ordered in six GitHub milestones. Each milestone lists its own issues.
 
 1. Measure: benchmarks, size budgets and reference-scene scores that make each goal checkable.
-2. Lighter: remove weight so that new features fit under the package size budget.
+2. Lighter: compile runtime-only web packs (#2178), sleep when idle and use compact HDR targets (#2179).
 3. Modeling: close the mesh, rigging and procedural gaps against Blender.
 4. Look: close the material, lighting and rendering gaps against Blender.
 5. Motion and simulation: close the animation, physics and timeline gaps against Blender.
-6. Agent surface: make the tools cheaper to use and harder to misuse.
+6. Agent surface: add a shared web Studio (#2177) for designers and lower agent tool cost.
 
 ## Longer term
 

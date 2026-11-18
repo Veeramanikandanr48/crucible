@@ -5,6 +5,7 @@ import { createAgentScene } from '../src/agent-scene.js';
 import { buildWithKernels, kernelKey, runKernel } from '../src/kernel-offload.js';
 import { answerKernelRequest } from '../src/kernel-registry.js';
 import { createInProcessWorker, kernelRoom, sceneDigest } from './support/kernel-offload-fixture.mjs';
+import { oversizedRoom } from './support/agent-bake-rooms.mjs';
 import './support/load-agent-scene-modules.mjs';
 
 const BUILD_SCRIPT = new URL('./support/kernel-offload-build.mjs', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
@@ -73,19 +74,14 @@ test('an error a kernel raises on the worker comes back as the same class and me
   );
 });
 
-test('an explicit bake setting over the budget fails on the worker with the message that names numbers that fit', async () => {
-  // Surfaces four times as wide, so the explicit settings are over the hard path work limit in this small room too.
-  const heavyRoom = () => {
-    const room = kernelRoom();
-    const nodes = room.nodes.map(node => (node.scale ? { ...node, scale: node.scale.map(side => side * 4) } : node));
-    return { ...room, nodes, bake: { preset: 'draft', samples: 256, bounces: 3, texelsPerUnit: 12 } };
-  };
+test('a scene too large for even the lowest explicit settings fails on the worker with the same message as inline', async () => {
+  const heavyRoom = () => oversizedRoom({ samples: 256, bounces: 3, texelsPerUnit: 12 });
   let inlineMessage = '';
   assert.throws(() => createAgentScene(heavyRoom()), error => {
     inlineMessage = error.message;
     return error instanceof RangeError;
   });
-  assert.match(inlineMessage, /samples \d+ or fewer/);
+  assert.match(inlineMessage, /^Even samples 16, bounces 1 and texelsPerUnit 1 is [0-9]+ texels/);
   const requestedKernels = [];
   await assert.rejects(
     buildWithKernels(() => createAgentScene(heavyRoom()), { createWorker: () => createInProcessWorker(requestedKernels), available: true }),

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mat4, mat3 } from 'gl-matrix';
 import { box } from '../src/geometry.js';
 import { CrucibleRenderer, groupParts } from '../src/renderer.js';
+import { WebGL2GlazeBackend } from '../src/glaze-backend-webgl2.js';
 import { createMorphPose, validateMorphGeometry } from '../src/morph.js';
 import { materialLayerState } from '../src/material-layers.js';
 
@@ -97,6 +98,7 @@ test('main and shadow draws upload the retained morph weights and disable morphs
     TEXTURE0: 33984, activeTexture() {}, bindTexture() {}, bindVertexArray() {}, drawElementsInstanced() {},
     uniform1f(name, value) { uploads.push([name, value]); }, uniform1i() {}, uniform1fv(name, values) { uploads.push([name, values]); },
   };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   const batch = { morph: {}, morphTexture: { info: { vertexCount: 3, targetCount: 1 }, texture: {} }, morphWeights: new Float32Array([0.5]) };
   renderer.drawBatch(batch, true);
   renderer.drawBatch(batch);
@@ -116,6 +118,7 @@ test('a batch with more than 64 targets uploads its 64 largest weights with thei
     TEXTURE0: 33984, activeTexture() {}, bindTexture() {}, bindVertexArray() {}, drawElementsInstanced() {},
     uniform1f() {}, uniform1i(name, value) { uploads[name] = value; }, uniform1fv(name, values) { uploads[name] = [...values]; },
   };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   const morphWeights = new Float32Array(175);
   morphWeights[170] = 0.25;
   morphWeights[7] = 1;

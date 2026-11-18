@@ -1,2 +1,0 @@
-- entry:mesh: `generateGeometryLods` could not reduce a textured geometry (its levels lost the uvs and failed to draw), and the attribute-keeping edge collapse that fixes it is about 2.1 KB gzip; on the Monster scan it cuts the frame from 5.5 to 1.7 ms, so the bytes buy that speed gain for scenes that call addLodsToDenseParts.
-- scene:agent-scene+lazy: the agent scene loads the mesh engine lazily, and the same edge collapse (about 2.1 KB gzip) comes with it; it fixes level reduction of textured geometry and cuts the Monster scan frame from 5.5 to 1.7 ms.

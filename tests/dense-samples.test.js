@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CrucibleRenderer, samplesForDensity, DENSE_TRIANGLES_PER_PIXEL } from '../src/renderer.js';
+import { WebGL2GlazeBackend } from '../src/glaze-backend-webgl2.js';
 
 function partWithTriangles(count) {
   return { geometry: { indices: new Uint32Array(count * 3) } };
@@ -57,7 +58,7 @@ function resizingRenderer({ clientWidth, clientHeight, parts }) {
   const renderer = Object.create(CrucibleRenderer.prototype);
   const allocations = [];
   Object.assign(renderer, {
-    context, canvas, pixelRatio: 1, hdr: false, benchmark: false, shading: 'full', baseSamples: 4, denseSamples: 2, densityParts: parts, fitParts: [...parts, partWithTriangles(5000)], world: false,
+    context, backend: new WebGL2GlazeBackend(context), canvas, pixelRatio: 1, hdr: false, benchmark: false, shading: 'full', baseSamples: 4, denseSamples: 2, densityParts: parts, fitParts: [...parts, partWithTriangles(5000)], world: false,
     projection: new Float32Array(16), capabilities: { samples: 4 }, geometryBytes: 0, textureBytes: 0, depth: false, memoryBudgetMiB: 4096, maximumMemoryBudgetMiB: 4096,
     allocateFrameTargets(width, height) { allocations.push([width, height, this.multisampleSamples]); },
   });

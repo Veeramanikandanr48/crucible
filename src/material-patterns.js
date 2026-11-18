@@ -1,5 +1,6 @@
 import { MATERIAL_PATTERN_TYPES, MATERIAL_MAPPINGS } from './agent-scene-capabilities.js';
-import { bakeMaterialGraph, graphImageData, normalizeMaterialGraph } from './material-graph.js';
+import { bakeMaterialGraph, graphImageData, graphVertexGroupNames, normalizeMaterialGraph } from './material-graph.js';
+import { vertexGroupMap } from './material-vertex-group-map.js';
 import { kernelKey, runKernel } from './kernel-offload.js';
 
 // Procedural surface patterns for recipe materials: seeded, tileable and baked on the CPU into the same texture
@@ -173,9 +174,13 @@ function normalizeGraphPattern(value, mappingField) {
   if (!['x', 'y', 'z'].includes(axis)) throw patternError('axis must be x, y or z: the object axis the texture V runs along.');
   const resolution = value.resolution ?? 512;
   if (!RESOLUTIONS.includes(resolution)) throw patternError(`resolution must be one of ${RESOLUTIONS.join(', ')}.`);
+  const graph = normalizeMaterialGraph(value.graph, resolution);
+  if (graphVertexGroupNames(graph).length > 0 && mappingField.mapping !== 'uv') {
+    throw patternError('uses a vertexGroup node, which reads the mesh in UV space: set "mapping": "uv" on the pattern (the mesh needs UVs).');
+  }
   return {
     type: GRAPH_TYPE,
-    graph: normalizeMaterialGraph(value.graph, resolution),
+    graph,
     size: checkedNumber(value.size ?? GRAPH_DEFAULTS.size, 'size', 0.01, 100),
     bump: checkedNumber(value.bump ?? GRAPH_DEFAULTS.bump, 'bump', 0, 4),
     axis,
@@ -222,12 +227,12 @@ export function normalizeMaterialPattern(value) {
 
 
 /** Bake a normalized pattern into { map, normalMap, metallicRoughnessMap } texture descriptors. Deterministic. */
-export function bakeMaterialPattern(pattern, images) {
+export function bakeMaterialPattern(pattern, images, groups) {
   const placement = {
     boxMapScale: pattern.mapping === 'uv' ? 0 : 1 / pattern.size,
     boxMapAxis: ['x', 'y', 'z'].indexOf(pattern.axis),
   };
-  if (pattern.type === GRAPH_TYPE) return { ...bakeMaterialGraph(pattern.graph, pattern, images), ...placement };
+  if (pattern.type === GRAPH_TYPE) return { ...bakeMaterialGraph(pattern.graph, pattern, images, groups), ...placement };
   const { resolution, type, seed, count, colors, bump } = pattern;
   if (!Object.hasOwn(PATTERN_SAMPLERS, type)) throw patternError(`type must be one of ${MATERIAL_PATTERN_TYPES.join(', ')}.`);
   const sampler = PATTERN_SAMPLERS[type];
@@ -271,10 +276,14 @@ const MAX_BAKED_PATTERNS = 32;
 // keeps the same descriptors alive for as long as a material holds them, because a renderer rejects changed textures.
 const bakedByPatternObject = new WeakMap();
 
-/** The baked textures of a pattern, shared by every material with the same definition. */
-export function materialPatternTextures(pattern, imagePool) {
+/**
+ * The baked textures of a pattern, shared by every material with the same definition. `groups` holds the weight maps
+ * of the vertex groups its graph reads, for one mesh (see materialViewForGeometry); the key then covers their bytes.
+ */
+export function materialPatternTextures(pattern, imagePool, groups) {
   const images = pattern.graph ? graphImageData(pattern.graph, imagePool) : {};
   const hasImages = Object.keys(images).length > 0;
+  if (groups) return bakeWithGroups(pattern, images, groups);
   const remembered = bakedByPatternObject.get(pattern);
   // An image graph is remembered only for the very frames it was baked from, so another pool with the same asset ID
   // but different pixels bakes again.
@@ -293,9 +302,77 @@ export function materialPatternTextures(pattern, imagePool) {
   return baked;
 }
 
+function bakeWithGroups(pattern, images, groups) {
+  const arguments_ = [pattern, images, groups];
+  const key = kernelKey('pattern', arguments_);
+  let baked = bakedPatterns.get(key);
+  if (baked) {
+    bakedPatterns.delete(key);
+  } else {
+    baked = runKernel('pattern', arguments_, bakeMaterialPattern);
+    if (bakedPatterns.size >= MAX_BAKED_PATTERNS) bakedPatterns.delete(bakedPatterns.keys().next().value);
+  }
+  bakedPatterns.set(key, baked);
+  return baked;
+}
+
+const viewsByGeometry = new WeakMap();
+const groupNamesByPattern = new WeakMap();
+
+function vertexGroupNamesOf(pattern) {
+  if (!pattern?.graph) return [];
+  let names = groupNamesByPattern.get(pattern);
+  if (!names) {
+    names = graphVertexGroupNames(pattern.graph);
+    groupNamesByPattern.set(pattern, names);
+  }
+  return names;
+}
+
+function groupMapsOf(pattern, geometry, nodeId) {
+  const maps = {};
+  for (const name of vertexGroupNamesOf(pattern)) maps[name] = vertexGroupMap(geometry, name, pattern.resolution, nodeId);
+  return maps;
+}
+
+/**
+ * The material a part of `geometry` renders with. A material whose graph has no `vertexGroup` node is returned as it
+ * is. Otherwise the result is a view of it whose baked textures come from the graph baked with this mesh's vertex
+ * group weights, cached per geometry and material so the renderer sees the same textures on every rebuild.
+ */
+export function materialViewForGeometry(material, geometry, nodeId, imagePool) {
+  const pattern = material.pattern;
+  if (vertexGroupNamesOf(pattern).length === 0) return material;
+  // The groups are checked now, so a mesh without UVs or without the group fails when the part is built.
+  const groups = groupMapsOf(pattern, geometry, nodeId);
+  let views = viewsByGeometry.get(geometry);
+  if (!views) {
+    views = new WeakMap();
+    viewsByGeometry.set(geometry, views);
+  }
+  let view = views.get(material);
+  if (view) return view;
+  const output = {};
+  for (const field of Object.keys(material)) {
+    Object.defineProperty(output, field, { enumerable: true, configurable: true, get: () => material[field] });
+  }
+  let baked;
+  const bakedTextures = () => {
+    baked ??= materialPatternTextures(material.pattern, imagePool, groupMapsOf(material.pattern, geometry, nodeId));
+    return baked;
+  };
+  for (const field of Object.keys(material).filter(name => PATTERN_TEXTURE_FIELDS.includes(name))) {
+    Object.defineProperty(output, field, { enumerable: true, configurable: true, get: () => bakedTextures()[field] });
+  }
+  view = Object.freeze(output);
+  views.set(material, view);
+  return view;
+}
+
 function sameFrames(rememberedImages, images) {
   const ids = Object.keys(images);
   return ids.length === Object.keys(rememberedImages).length && ids.every(id => rememberedImages[id]?.data === images[id].data);
 }
 
 export { PATTERN_DEFAULTS };
+const PATTERN_TEXTURE_FIELDS = ['map', 'normalMap', 'metallicRoughnessMap', 'emissiveMap', 'layerMaps', 'transmissionMap', 'aovMap', 'emissionFresnel', 'boxMapScale', 'boxMapAxis'];

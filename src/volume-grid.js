@@ -214,17 +214,29 @@ export function findVolumeGrid(name, label) {
 
 const decodedByGrid = new WeakMap();
 
+let halfFloatLookup = null;
+
+// Every half float bit pattern as a float, built once for the process: a sequence decodes a grid per frame, and building the table for each one cost about as much as the decode.
+function halfFloatTable() {
+  if (halfFloatLookup) return halfFloatLookup;
+  halfFloatLookup = new Float32Array(65536);
+  for (let bits = 0; bits < 65536; bits++) halfFloatLookup[bits] = halfToFloat(bits);
+  return halfFloatLookup;
+}
+
 /** The grid's channels as Float32Arrays, decoded once; a missing temperature or flame channel is left out. */
 export function volumeGridFloats(grid) {
   let floats = decodedByGrid.get(grid);
   if (floats) return floats;
   floats = Object.create(null);
-  const table = new Float32Array(65536);
-  for (let bits = 0; bits < 65536; bits++) table[bits] = halfToFloat(bits);
+  const table = halfFloatTable();
   // Only the known channel names become keys, so a name read from a grid file can never write another property.
   for (const name of VOLUME_GRID_CHANNELS) {
     const values = grid.channels[name];
-    if (values) floats[name] = Float32Array.from(values, bits => table[bits]);
+    if (!values) continue;
+    const decoded = new Float32Array(values.length);
+    for (let index = 0; index < values.length; index++) decoded[index] = table[values[index]];
+    floats[name] = decoded;
   }
   decodedByGrid.set(grid, floats);
   return floats;
@@ -333,18 +345,45 @@ function mixCorners(data) {
 }
 
 const bakedEmissionByGrid = new WeakMap();
+const temperatureByGrid = new WeakMap();
+
+/** Blender's flame cut-off: a voxel with a flame value at or below it is cold (rna_fluid.cc, where the flame grid becomes the temperature grid). */
+export const FLAME_TEMPERATURE_THRESHOLD = 0.01;
+
+/** The temperature of one voxel from its flame as Blender remaps it: `flame > 0.01 ? ignition + flame * (maximum - ignition) : 0`, in temperature units. */
+export function flameToTemperature(flame, flameTemperature) {
+  return flame > FLAME_TEMPERATURE_THRESHOLD ? flameTemperature.ignition + flame * (flameTemperature.maximum - flameTemperature.ignition) : 0;
+}
+
+/**
+ * The temperature channel a grid volume emits from: the grid's own, or with `flameTemperature` ({ ignition, maximum }) the flame channel remapped by
+ * flameToTemperature, so every voxel with flame sits between the ignition and the maximum however thin its smoke. Float32Array, decoded once per grid and
+ * remap; undefined when the grid lacks the source channel.
+ */
+export function gridTemperature(grid, flameTemperature = null) {
+  if (!flameTemperature) return volumeGridFloats(grid).temperature;
+  const key = `${flameTemperature.ignition}|${flameTemperature.maximum}`;
+  let byRemap = temperatureByGrid.get(grid);
+  if (!byRemap) temperatureByGrid.set(grid, byRemap = new Map());
+  if (!byRemap.has(key)) {
+    const flame = volumeGridFloats(grid).flame;
+    byRemap.set(key, flame ? flame.map(value => flameToTemperature(value, flameTemperature)) : undefined);
+  }
+  return byRemap.get(key);
+}
 
 /**
  * The blackbody radiance of every voxel's temperature times `temperatureScale`, as three Float32Arrays (`red`, `green`, `blue`) with the grid's voxel order,
- * decoded once per grid and scale. Values past the half float limit (HALF_FLOAT_MAXIMUM, above about 35,000 K) are
- * clamped by the rasterizer's upload. The blackbody intensity and emission strength stay uniforms. A grid without a temperature channel bakes to all zeros.
+ * decoded once per grid, scale and flame remap (gridTemperature). Values past the half float limit (HALF_FLOAT_MAXIMUM, above about 35,000 K) are
+ * clamped by the rasterizer's upload. The blackbody intensity and emission strength stay uniforms. A grid without the source channel bakes to all zeros.
  */
-export function bakedGridEmission(grid, temperatureScale) {
+export function bakedGridEmission(grid, temperatureScale, flameTemperature = null) {
+  const remapKey = flameTemperature ? `${flameTemperature.ignition}|${flameTemperature.maximum}` : '';
   const cached = bakedEmissionByGrid.get(grid);
-  if (cached?.temperatureScale === temperatureScale) return cached;
-  const temperature = volumeGridFloats(grid).temperature;
+  if (cached?.temperatureScale === temperatureScale && cached.remapKey === remapKey) return cached;
+  const temperature = gridTemperature(grid, flameTemperature);
   const voxels = grid.resolution[0] * grid.resolution[1] * grid.resolution[2];
-  const baked = { temperatureScale, red: new Float32Array(voxels), green: new Float32Array(voxels), blue: new Float32Array(voxels) };
+  const baked = { temperatureScale, remapKey, red: new Float32Array(voxels), green: new Float32Array(voxels), blue: new Float32Array(voxels) };
   const radiance = [0, 0, 0];
   if (temperature) {
     for (let voxel = 0; voxel < voxels; voxel++) {

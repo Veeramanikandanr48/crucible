@@ -1,7 +1,7 @@
 import { mat4, vec3 } from 'gl-matrix';
 import { invalidField } from './field-error.js';
 
-export { crashImpulse, dentDepth, dentGeometry, detachedPartIds, findDriveImpact } from './vehicle-damage.js';
+export { crashImpulse, dentDepth, dentGeometry, detachedPartFlight, detachedPartIds, findDriveImpact, hingedDoorSwing } from './vehicle-damage.js';
 
 // Local vehicle frame: x is left, y is up, z is forward, origin on the ground under the wheel centroid.
 const FORWARD_AXES = Object.freeze({

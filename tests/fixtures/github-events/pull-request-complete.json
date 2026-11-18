@@ -1,0 +1,37 @@
+{
+  "action": "opened",
+  "number": 2001,
+  "pull_request": {
+    "number": 2001,
+    "title": "Add a thing (#1944)",
+    "body": "Closes #1944",
+    "user": {
+      "login": "anxuanng"
+    },
+    "author_association": "OWNER",
+    "labels": [
+      {
+        "name": "goal:ai"
+      },
+      {
+        "name": "priority:must"
+      },
+      {
+        "name": "enhancement"
+      }
+    ],
+    "assignees": [
+      {
+        "login": "anxuanng"
+      }
+    ],
+    "milestone": {
+      "number": 7,
+      "title": "4 Motion and simulation"
+    },
+    "draft": false
+  },
+  "repository": {
+    "full_name": "codepawl/crucible"
+  }
+}

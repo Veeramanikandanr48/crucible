@@ -21,6 +21,9 @@ vec2 equirectangularFromDirection(vec3 direction) {
 }
 `;
 
+/** The half-angle of the sun in radians when the environment gives no sunAngularRadius; the path tracer's sun uses the same default. */
+export const DEFAULT_SUN_ANGULAR_RADIUS = Math.PI / 360;
+
 export const environmentLookupGlsl = `
 uniform sampler2D environmentSpecular;
 uniform vec2 environmentRotation;

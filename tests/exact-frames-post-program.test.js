@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CrucibleRenderer } from '../src/renderer.js';
+import { WebGL2GlazeBackend } from '../src/glaze-backend-webgl2.js';
 
 // A frame drawn while the driver still builds its post program uses the program with every step, whose maths differs from the
 // specialised program by a half-float step on some pixels, so a cold first frame differed from a warm one (#1767). A renderer
@@ -34,6 +35,7 @@ function createStubRenderer({ exactFrames }) {
   const renderer = Object.create(CrucibleRenderer.prototype);
   Object.assign(renderer, {
     context,
+    backend: new WebGL2GlazeBackend(context),
     exactFrames,
     postProgram: { name: 'fallback' },
     postUniforms: { name: 'fallback uniforms' },

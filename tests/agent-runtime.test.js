@@ -39,7 +39,8 @@ import { filmTimelineDuration, filmTimelineShotStarts, sampleFilmTimeline } from
 import { normalizeReview, REVIEW_LIMITS } from '../scripts/agent-review.mjs';
 import { BRANCH_LIMITS, validateBranchName } from '../src/agent-branches.js';
 import { sessionProblem, SCENE_STORE_LIMITS } from '../src/agent-errors.js';
-import { ANNOTATE_LIMITS } from '../src/agent-annotate.js';
+import { ANNOTATE_LIMITS, describeMarks, validateMarks } from '../src/agent-annotate.js';
+import { openReviewPage } from './support/review-page-dom.mjs';
 import * as packLimits from '../src/pack-manifest.js';
 import { createPackRegistry } from '../scripts/agent-packs.mjs';
 
@@ -109,8 +110,18 @@ async function importedBindings(source) {
   return bindings;
 }
 
+const ANNOTATE_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
+const ANNOTATE_CAMERA = { eye: [0, 0, 10], target: [0, 0, 0], up: [0, 1, 0], fov: 60, near: 0.1, far: 100 };
+function annotateFrameOf({ width, height }, revision, motionTime) {
+  return { mimeType: 'image/png', data: ANNOTATE_PNG, metadata: { width, height, revision, motionTime: motionTime ?? null }, width, height, camera: ANNOTATE_CAMERA };
+}
+// A scene with one lamp on the view axis: a ray that starts left of the axis misses it, the others hit it.
+function hitNearestLamp(ray) {
+  return ray.direction[0] < -0.2 ? null : { id: 'lamp', point: [0, 1, 0], normal: [0, 1, 0], distance: 10, material: 'brass' };
+}
+
 async function reviewRuntimeHarness({ failShot, blockShot = false, oversize = false, deadlineMs,
-  failDispose = false, heapSize = 1024, stallPrivatePage = false, blockPrivateCreate = false, resumeDelayMs = 0, suspendDelayMs = 0, failResume = false, hangMethod, failPrivateCreate = false, disposeGate, jobRender, sceneBake, exportedRecipe, runtimeOptions = {}, contextOverrides = {}, lookBytesPerPixel = 0, inspection } = {}) {
+  failDispose = false, heapSize = 1024, stallPrivatePage = false, blockPrivateCreate = false, resumeDelayMs = 0, suspendDelayMs = 0, failResume = false, hangMethod, failPrivateCreate = false, failPrivateCreateMessage, disposeGate, disposeLostBridge = false, hangBrowserClose = false, closeTimeoutMs, failFirstGoto = false, jobRender, sceneBake, exportedRecipe, runtimeOptions = {}, contextOverrides = {}, lookBytesPerPixel = 0, inspection } = {}) {
   const events = [];
   const sourceCalls = [];
   const sandboxTimers = new Set();
@@ -130,7 +141,12 @@ async function reviewRuntimeHarness({ failShot, blockShot = false, oversize = fa
     route() {}
     setDefaultTimeout() {}
     setViewportSize(size) { this.viewport = size; viewports.push(size); }
-    goto() {}
+    goto() {
+      if (!this.privateTarget && failFirstGoto) {
+        failFirstGoto = false;
+        throw new Error('page.goto: Timeout 15000ms exceeded.');
+      }
+    }
     waitForFunction() {}
     isClosed() { return this.closed; }
     context() { return { newCDPSession: async () => ({
@@ -144,8 +160,9 @@ async function reviewRuntimeHarness({ failShot, blockShot = false, oversize = fa
       if (method === hangMethod && !this.privateTarget) return new Promise(() => {});
       if (method === 'create' && this.privateTarget && failPrivateCreate) {
         failPrivateCreate = false;
-        throw new Error('Injected private create failure');
+        throw new Error(typeof failPrivateCreateMessage === 'string' ? failPrivateCreateMessage : 'Injected private create failure');
       }
+      if (method === 'dispose' && this.privateTarget && disposeLostBridge) throw new TypeError("page.evaluate: TypeError: Cannot read properties of undefined (reading 'dispose')");
       if (method === 'dispose' && disposeGate) await disposeGate;
       if (method === 'resume' && failResume) throw new Error('Injected resume failure');
       if (method === 'create' && this.privateTarget && blockPrivateCreate) return new Promise((resolve, reject) => { this.rejectShot = reject; });
@@ -168,6 +185,8 @@ async function reviewRuntimeHarness({ failShot, blockShot = false, oversize = fa
         const { width, height } = this.viewport;
         return { mimeType: 'image/png', data: Buffer.alloc(Math.round(width * height * lookBytesPerPixel)).toString('base64'), metadata: { width, height } };
       }
+      if (method === 'annotateFrame') return annotateFrameOf(this.viewport, sourceRevision, input.motionTime);
+      if (method === 'pickMarks') return { revision: sourceRevision, marks: describeMarks(validateMarks(input.marks, input), input.camera, { width: input.width, height: input.height, raycast: hitNearestLamp }) };
       if (method === 'reviewResult') return { mimeType: 'image/png',
         data: Buffer.alloc(oversize ? 1024 * 1024 + 1 : 16).toString('base64') };
       if (method === 'dispose' && failDispose) throw new Error('Injected disposal failure');
@@ -192,7 +211,7 @@ async function reviewRuntimeHarness({ failShot, blockShot = false, oversize = fa
       resolveAcquisitionStarted();
       return stallPrivatePage ? acquiredPage : (privatePage = new FakePage(true));
     },
-    close: async () => { await privatePage?.close(); await sourcePage.close(); events.push('browser:close'); },
+    close: async () => { if (hangBrowserClose) { hangBrowserClose = false; return new Promise(() => {}); } await privatePage?.close(); await sourcePage.close(); events.push('browser:close'); },
   };
   const originalSource = await readFile(new URL('../scripts/agent-runtime.mjs', import.meta.url), 'utf8');
   let source = originalSource
@@ -201,6 +220,7 @@ async function reviewRuntimeHarness({ failShot, blockShot = false, oversize = fa
     .replace('export function createAgentRuntime', 'function createAgentRuntime')
     .replaceAll('import.meta.url', JSON.stringify(import.meta.url))
     .replace("import('playwright-core')", 'Promise.resolve({ chromium: globalThis.chromium })');
+  if (closeTimeoutMs) source = source.replace('const BROWSER_CLOSE_TIMEOUT_MS = 5000;', `const BROWSER_CLOSE_TIMEOUT_MS = ${closeTimeoutMs};`);
   if (deadlineMs) source = source.replace('const EVALUATION_TIMEOUT_MS = 30000;', `const EVALUATION_TIMEOUT_MS = ${deadlineMs};`);
   const context = createContext({ ...(await importedBindings(originalSource)),
     packageMetadata: { version: 'test' }, existsSync: () => true, readFile: async () => '',
@@ -388,6 +408,47 @@ runTest('a job cut short by its deadline leaves the runtime usable although the 
   } finally { await runtime.close(); }
 });
 
+runTest('scene_render_status of a finished job still answers while a newer job holds the renderer', async () => {
+  const finishedJobId = randomUUID();
+  const runningJobId = randomUUID();
+  const records = [{ jobId: finishedJobId, state: 'completed' }, { jobId: runningJobId, state: 'running' }];
+  const controller = {
+    list: () => records,
+    status: jobId => records.find(record => record.jobId === jobId),
+    close: async () => {},
+    submit: async () => ({ jobId: runningJobId }),
+  };
+  const { runtime, sessionId } = await reviewRuntimeHarness({
+    runtimeOptions: { jobs: join(tmpdir(), 'crucible-job-root-test') },
+    contextOverrides: { createAgentRenderJobs: async () => controller } });
+  try {
+    await runtime.submitJob({ sessionId, expectedRevision: 0, settings: { kind: 'image', width: 64, height: 64 } });
+    assert.equal((await runtime.jobStatus({ jobId: runningJobId })).state, 'running');
+    assert.equal((await runtime.jobStatus({ jobId: finishedJobId })).state, 'completed');
+    assert.equal((await runtime.capabilities()).phase, 'rendering', 'the renderer stays leased to the running job');
+  } finally { await runtime.close(); }
+});
+
+runTest('a tool blocked by a render job names the job, how far it is and the tools to call next (#2050)', async () => {
+  const runningJobId = randomUUID();
+  const records = [{ jobId: runningJobId, state: 'running', progress: { frames: 3, maximumPendingFrames: 1 }, settings: { frameCount: 24 } }];
+  const controller = { list: () => records, status: jobId => records.find(record => record.jobId === jobId), close: async () => {}, submit: async () => ({ jobId: runningJobId }) };
+  const { runtime, sessionId } = await reviewRuntimeHarness({
+    runtimeOptions: { jobs: join(tmpdir(), 'crucible-job-root-test') },
+    contextOverrides: { createAgentRenderJobs: async () => controller } });
+  try {
+    await runtime.submitJob({ sessionId, expectedRevision: 0, settings: { kind: 'image', width: 64, height: 64 } });
+    for (const blocked of [() => runtime.look({ sessionId }), () => runtime.dispose({ sessionId }), () => runtime.exportGlb({ sessionId })]) {
+      await assert.rejects(blocked(), error => {
+        assert.ok(error.message.includes(runningJobId), error.message);
+        assert.match(error.message, /running \(frame 3 of 24\)/);
+        assert.match(error.message, /scene_render_status.*scene_render_cancel/);
+        return true;
+      });
+    }
+  } finally { await runtime.close(); }
+});
+
 async function runOversizeJob({ requested, jobRender, memory }) {
   let runJob;
   const controller = { list: () => [], close: async () => {}, submit: async () => ({ jobId: 'job' }) };
@@ -505,6 +566,65 @@ runTest('a scene page that times out fails the runtime with the recovery hint, a
   } finally { await runtime.close(); }
 });
 
+runTest('a timed-out preview call names the operation that ran long (#2200)', async () => {
+  const { runtime, sessionId } = await reviewRuntimeHarness({ hangMethod: 'apply', deadlineMs: 40 });
+  try {
+    await assert.rejects(runtime.apply({ sessionId, operations: [{ type: 'add-material', material: { id: 'stone', pattern: 'stone' } }, { type: 'add-material', material: { id: 'tiles', pattern: 'tiles' } }] }),
+      /operation "apply" \(2 operations: add-material\) exceeded 0\.04 seconds/);
+  } finally { await runtime.close(); }
+});
+
+runTest('the next scene_create after a timeout succeeds first try even when the old browser never finishes closing (#2200)', async () => {
+  const { runtime, sessionId } = await reviewRuntimeHarness({ hangMethod: 'inspect', deadlineMs: 40, hangBrowserClose: true, closeTimeoutMs: 30 });
+  try {
+    await assert.rejects(runtime.inspect({ sessionId }), /operation "inspect" exceeded.*scene_create/s);
+    const fresh = await runtime.create({ recipe: FRESH_RECIPE });
+    assert.equal((await runtime.apply({ sessionId: fresh.sessionId })).revision, 1);
+  } finally { await runtime.close(); }
+});
+
+runTest('a browser start whose page load times out is retried once on a fresh browser (#2200)', async () => {
+  const harness = await reviewRuntimeHarness({ failFirstGoto: true });
+  try {
+    assert.equal(typeof harness.sessionId, 'string');
+  } finally { await harness.runtime.close(); }
+});
+
+runTest('a job whose page navigates under it fails with the page loss and the budget, then the next scene works (#2198)', async () => {
+  let runJob;
+  const controller = { list: () => [], close: async () => {}, submit: async () => ({ jobId: 'job' }) };
+  const submitted = { kind: 'video', width: 1280, height: 720, fps: 24, duration: 12 };
+  const settings = { ...submitted, frameCount: 288 };
+  const { runtime, sessionId } = await reviewRuntimeHarness({ failPrivateCreate: true, disposeLostBridge: true,
+    failPrivateCreateMessage: 'page.evaluate: Execution context was destroyed, most likely because of a navigation',
+    runtimeOptions: { jobs: join(tmpdir(), 'crucible-job-root-test'), memory: 192 },
+    contextOverrides: { createAgentRenderJobs: async ({ run }) => { runJob = run; return controller; } } });
+  try {
+    await runtime.submitJob({ sessionId, expectedRevision: 0, settings: submitted });
+    const failure = await runJob({ jobId: randomUUID(), sessionId, directory: tmpdir(), snapshot: { recipe: {} }, settings,
+      signal: new AbortController().signal, progress: async () => {} }).then(() => assert.fail('the job must fail'), error => error);
+    assert.match(failure.message, /preview page navigated or reloaded before the first frame at 1280x720/);
+    assert.match(failure.message, /raise --memory \(now 192 MiB\)/);
+    assert.doesNotMatch(failure.message, /reading 'dispose'/);
+    const fresh = await runtime.create({ recipe: FRESH_RECIPE });
+    assert.equal((await runtime.apply({ sessionId: fresh.sessionId })).revision, 1);
+  } finally { await runtime.close(); }
+});
+
+runTest('a job that fails for its own reason is not masked by a lost page bridge on dispose (#2198)', async () => {
+  let runJob;
+  const controller = { list: () => [], close: async () => {}, submit: async () => ({ jobId: 'job' }) };
+  const { runtime, sessionId } = await reviewRuntimeHarness({ failPrivateCreate: true, disposeLostBridge: true, failPrivateCreateMessage: 'Injected scene problem',
+    runtimeOptions: { jobs: join(tmpdir(), 'crucible-job-root-test') },
+    contextOverrides: { createAgentRenderJobs: async ({ run }) => { runJob = run; return controller; } } });
+  try {
+    await runtime.submitJob({ sessionId, expectedRevision: 0, settings: { kind: 'image', width: 64, height: 64 } });
+    const failure = await runJob({ jobId: randomUUID(), sessionId, directory: tmpdir(), snapshot: { recipe: {} },
+      settings: { kind: 'image', width: 64, height: 64 }, signal: new AbortController().signal, progress: async () => {} }).then(() => assert.fail('the job must fail'), error => error);
+    assert.match(failure.message, /Injected scene problem/);
+  } finally { await runtime.close(); }
+});
+
 runTest('a failed resume after a render job fails the runtime, and the next scene starts fresh (#1256)', async () => {
   let runJob;
   const controller = { list: () => [], close: async () => {}, submit: async () => ({ jobId: 'job' }) };
@@ -519,6 +639,41 @@ runTest('a failed resume after a render job fails the runtime, and the next scen
     const fresh = await runtime.create({ recipe: FRESH_RECIPE });
     assert.equal((await runtime.capabilities()).phase, 'ready');
     assert.equal((await runtime.apply({ sessionId: fresh.sessionId })).revision, 1);
+  } finally { await runtime.close(); }
+});
+
+runTest('a browser lost under a stills job fails the job with its size and limit, and the runtime recovers (#2018)', async () => {
+  let runJob;
+  const controller = { list: () => [], close: async () => {}, submit: async () => ({ jobId: 'job' }) };
+  const submitted = { kind: 'stills', width: 1920, height: 1080, stillCount: 12, fps: 24, passes: ['depth'] };
+  const settings = { ...submitted, frameCount: 12 };
+  const { runtime, sessionId } = await reviewRuntimeHarness({ failPrivateCreate: true, failPrivateCreateMessage: 'Target page, context or browser has been closed', failResume: true,
+    runtimeOptions: { jobs: join(tmpdir(), 'crucible-job-root-test'), memory: 1024 },
+    contextOverrides: { createAgentRenderJobs: async ({ run }) => { runJob = run; return controller; } } });
+  try {
+    await runtime.submitJob({ sessionId, expectedRevision: 0, settings: submitted });
+    const failure = await runJob({ jobId: randomUUID(), sessionId, directory: tmpdir(), snapshot: { recipe: {} }, settings,
+      signal: new AbortController().signal, progress: async () => {} }).then(() => assert.fail('the job must fail'), error => error);
+    assert.match(failure.message, /preview browser crashed before the first frame at 1920x1080 with depth pass/);
+    assert.match(failure.message, /Lower the size or the frame count, or raise --memory \(now \d+ MiB\)/);
+    assert.doesNotMatch(failure.message, /Preview recovery failed/);
+    const fresh = await runtime.create({ recipe: FRESH_RECIPE });
+    assert.equal((await runtime.apply({ sessionId: fresh.sessionId })).revision, 1);
+  } finally { await runtime.close(); }
+});
+
+runTest('a stills job that fails for another reason keeps its own message (#2018)', async () => {
+  let runJob;
+  const controller = { list: () => [], close: async () => {}, submit: async () => ({ jobId: 'job' }) };
+  const submitted = { kind: 'stills', width: 64, height: 64, stillCount: 2, fps: 24 };
+  const settings = { ...submitted, frameCount: 2 };
+  const { runtime, sessionId } = await reviewRuntimeHarness({ failPrivateCreate: true, failPrivateCreateMessage: 'Injected scene problem',
+    runtimeOptions: { jobs: join(tmpdir(), 'crucible-job-root-test') },
+    contextOverrides: { createAgentRenderJobs: async ({ run }) => { runJob = run; return controller; } } });
+  try {
+    await runtime.submitJob({ sessionId, expectedRevision: 0, settings: submitted });
+    await assert.rejects(runJob({ jobId: randomUUID(), sessionId, directory: tmpdir(), snapshot: { recipe: {} }, settings,
+      signal: new AbortController().signal, progress: async () => {} }), /^Error: Injected scene problem$/);
   } finally { await runtime.close(); }
 });
 
@@ -630,6 +785,116 @@ runTest('runtime close settles a pending scene_ask_user at once and stops its pa
   assert.match(await askingOutcome, /closed|closing/);
   assert.ok(sessionSignal.aborted);
   assert.ok(performance.now() - started < 3000);
+});
+
+runTest('a scene_ask_user fixture answers without a browser, in the same shape as the browser answer, and unset changes nothing (#1956)', async () => {
+  const fixtureMarks = [{ x: 384, y: 256, note: 'make this red' }, { x: 40, y: 60, note: 'and this' }];
+  let browserSessions = 0;
+  const browserAnswer = async () => {
+    browserSessions++;
+    return { outcome: 'sent', marks: fixtureMarks, image: ANNOTATE_PNG };
+  };
+  const browser = await reviewRuntimeHarness({ contextOverrides: { runAnnotateSession: browserAnswer } });
+  const fromBrowser = await browser.runtime.askUser({ sessionId: browser.sessionId });
+  assert.equal(browserSessions, 1, 'without the fixture the browser flow runs');
+
+  const fixture = await reviewRuntimeHarness({
+    runtimeOptions: { askUserFixture: { name: 'pin.json', marks: fixtureMarks } },
+    contextOverrides: { runAnnotateSession: browserAnswer } });
+  const fromFixture = await fixture.runtime.askUser({ sessionId: fixture.sessionId });
+  assert.equal(browserSessions, 1, 'with the fixture no browser session opens');
+
+  assert.equal(fromFixture.content.outcome, 'sent');
+  assert.equal(fromFixture.content.marks[0].note, 'make this red');
+  assert.equal(fromFixture.content.marks[0].partId, 'lamp');
+  assert.equal(fromFixture.content.marks[1].partId, null);
+  assert.equal(typeof fromFixture.image, 'string');
+  assert.deepEqual(Object.keys(fromFixture), Object.keys(fromBrowser));
+  // The runtime runs in a vm, so compare the JSON the tool sends, as the MCP server does.
+  const asSent = answer => JSON.parse(JSON.stringify(answer.content));
+  assert.deepEqual(asSent(fromFixture), { ...asSent(fromBrowser), sessionId: fixture.sessionId });
+  const inline = await fixture.runtime.askUser({ sessionId: fixture.sessionId, inline: true });
+  assert.equal(inline.content.outcome, 'sent', 'an inline ask is answered by the fixture too');
+  await assert.rejects(fixture.runtime.askUser({ sessionId: fixture.sessionId, maxMarks: 1 }), /at most 1 marks/);
+});
+
+runTest('a lasso mark resolves to the parts under its outline, through the same pick as a pin, and a lasso over sky has none (#922)', async () => {
+  const wholeView = [[0, 0], [768, 0], [768, 512], [0, 512]];
+  const skyCorner = [[10, 10], [60, 10], [60, 100], [10, 100]];
+  const fixture = await reviewRuntimeHarness({
+    runtimeOptions: { askUserFixture: { name: 'lasso.json', marks: [
+      { kind: 'lasso', points: wholeView, note: 'make these blue' }, { kind: 'lasso', points: skyCorner, note: 'nothing here' }, { x: 384, y: 256, note: 'a pin' }] } } });
+  const answer = JSON.parse(JSON.stringify((await fixture.runtime.askUser({ sessionId: fixture.sessionId })).content));
+  const [whole, corner, pin] = answer.marks;
+  assert.equal(whole.kind, 'lasso');
+  assert.deepEqual(whole.points, wholeView);
+  assert.equal(whole.note, 'make these blue');
+  assert.equal(whole.partId, 'lamp');
+  assert.deepEqual(whole.parts.map(part => part.partId), ['lamp']);
+  assert.ok(whole.parts[0].coverage > 0.5 && whole.parts[0].coverage < 1, 'the left of the view is sky, so the lamp covers only part of the outline');
+  assert.equal(whole.parts[0].material, 'brass');
+  assert.equal(corner.partId, null);
+  assert.deepEqual(corner.parts, []);
+  assert.equal('kind' in pin, false, 'a pin keeps its old shape');
+  assert.equal(pin.partId, 'lamp');
+  const pickCall = fixture.sourceCalls.find(call => call.method === 'pickMarks');
+  assert.equal(pickCall.input.marks[0].kind, 'lasso', 'the lasso reaches the page as an outline, not as a pixel');
+});
+
+runTest('an inline scene_ask_user hands its nonce to the view only and resolves marks once (#923)', async () => {
+  let browserSessions = 0;
+  const { runtime, sessionId } = await reviewRuntimeHarness({ contextOverrides: { runAnnotateSession: async () => { browserSessions++; return { outcome: 'timeout' }; } } });
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(16)]).toString('base64');
+  const pending = await runtime.askUser({ sessionId, inline: true, prompt: 'Pin it' });
+  assert.equal(browserSessions, 0, 'an inline ask opens no browser page');
+  assert.equal(pending.content.outcome, 'pending');
+  assert.equal(pending.content.prompt, 'Pin it');
+  const { nonce } = pending.viewMeta;
+  assert.match(nonce, /^[a-f0-9]{32}$/);
+  assert.ok(!JSON.stringify(pending.content).includes(nonce), 'the nonce is not in what the model reads');
+  assert.deepEqual([pending.content.view.width, pending.content.view.height], [768, 512]);
+  assert.ok(pending.image);
+  await assert.rejects(runtime.submitAskUser({ nonce: 'f'.repeat(32), marks: [{ x: 5, y: 5 }], image: png }), /only accepts the marks of an open annotate view/);
+  await assert.rejects(runtime.submitAskUser({ nonce, marks: [{ x: 5000, y: 5, note: 'outside' }], image: png }), /x must be a pixel from 0 to 768/);
+  await assert.rejects(runtime.submitAskUser({ nonce, marks: [], image: png }), /at least one pin/);
+  await assert.rejects(runtime.submitAskUser({ nonce, marks: [{ x: 5, y: 5, note: 'dull' }], image: 'not a png' }), /PNG/);
+  const sent = await runtime.submitAskUser({ nonce, marks: [{ x: 384, y: 256, note: ' dull ' }], image: png });
+  assert.equal(sent.content.outcome, 'sent');
+  assert.equal(sent.content.marks[0].partId, 'lamp');
+  assert.equal(sent.content.marks[0].note, 'dull');
+  assert.equal(sent.image, png);
+  assert.deepEqual(Object.keys(sent.content).sort(), ['marks', 'outcome', 'revision', 'sessionId', 'view']);
+  await assert.rejects(runtime.submitAskUser({ nonce, marks: [{ x: 5, y: 5 }], image: png }), /only accepts the marks of an open annotate view/);
+  await runtime.close();
+});
+
+runTest('scene_ask_user draws the view at motionTime, names it in the answer and puts the scene back there to pick the marks (#922)', async () => {
+  const { runtime, sessionId, sourceCalls } = await reviewRuntimeHarness({ contextOverrides: { runAnnotateSession: async () => ({ outcome: 'sent', image: ANNOTATE_PNG, marks: [{ x: 384, y: 256, note: 'too bright now' }] }) } });
+  const sent = await runtime.askUser({ sessionId, motionTime: 2.5 });
+  assert.equal(sourceCalls.find(call => call.method === 'annotateFrame').input.motionTime, 2.5);
+  assert.equal(sourceCalls.find(call => call.method === 'pickMarks').input.motionTime, 2.5);
+  assert.equal(sent.content.view.motionTime, 2.5);
+  assert.equal(sent.content.marks[0].partId, 'lamp');
+  const still = await runtime.askUser({ sessionId });
+  assert.equal('motionTime' in still.content.view, false, 'a view with no time leaves the field out');
+  assert.equal('motionTime' in sourceCalls.filter(call => call.method === 'pickMarks').at(-1).input, false);
+  await runtime.close();
+});
+
+runTest('an inline ask times out, and dispose and close forget it (#923)', async () => {
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(16)]).toString('base64');
+  const { runtime, sessionId } = await reviewRuntimeHarness();
+  const expired = await runtime.askUser({ sessionId, inline: true, timeoutSeconds: 0.05 });
+  await new Promise(resolve => setTimeout(resolve, 80));
+  await assert.rejects(runtime.submitAskUser({ nonce: expired.viewMeta.nonce, marks: [{ x: 5, y: 5 }], image: png }), /timed out before the marks were sent/);
+  const disposed = await runtime.askUser({ sessionId, inline: true });
+  await runtime.dispose({ sessionId });
+  await assert.rejects(runtime.submitAskUser({ nonce: disposed.viewMeta.nonce, marks: [{ x: 5, y: 5 }], image: png }), /only accepts the marks of an open annotate view/);
+  const { runtime: otherRuntime, sessionId: otherSession } = await reviewRuntimeHarness();
+  const open = await otherRuntime.askUser({ sessionId: otherSession, inline: true });
+  await otherRuntime.close();
+  await assert.rejects(otherRuntime.submitAskUser({ nonce: open.viewMeta.nonce, marks: [{ x: 5, y: 5 }], image: png }), /only accepts the marks of an open annotate view/);
+  await runtime.close();
 });
 
 runTest('a failed browser launch leaves the runtime idle so the next call retries (#1246)', async () => {
@@ -879,6 +1144,56 @@ runTest('scene_create_asset opens a catalog GLB by assetName and refuses assetNa
   await assert.rejects(runtime.createAsset({ recipe: { ...assetRecipe, assetId: sheepId, assetName: 'sheep_body.glb' } }), /exactly one of recipe\.assetId/);
 });
 
+// Files that arrive or leave the --assets folder after the server started (#2209).
+async function rescanHarness(context) {
+  const directory = await mkdtemp(join(tmpdir(), 'crucible-rescan-assets-'));
+  context.after(() => rm(directory, { recursive: true, force: true }));
+  await cp(new URL('./fixtures/kenney-boat/', import.meta.url), directory, { recursive: true });
+  const boatBytes = await readFile(join(directory, 'boat-fishing-small.glb'));
+  await rm(join(directory, 'boat-fishing-small.glb'));
+  await writeFile(join(directory, 'first.glb'), boatBytes);
+  const harness = await reviewRuntimeHarness({ runtimeOptions: { assets: directory } });
+  const addGlb = (name, marker) => writeFile(join(directory, name), withDistinctDocument(boatBytes, marker));
+  return { ...harness, directory, addGlb };
+}
+
+function radianceFile() {
+  return Buffer.concat([Buffer.from('#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 2 +X 4\n'), Buffer.alloc(2 * 4 * 4, 128)]);
+}
+
+const listedNames = async runtime => (await runtime.assetCatalog()).assets.map(asset => asset.name);
+
+runTest('a GLB and an HDRI copied into --assets after start are listed by the next catalog call and placed by name (#2209)', async context => {
+  const { runtime, sessionId, sourceCalls, directory, addGlb } = await rescanHarness(context);
+  assert.deepEqual(await listedNames(runtime), ['first.glb']);
+  await addGlb('downloaded.glb', 'downloaded');
+  await writeFile(join(directory, 'sky.hdr'), radianceFile());
+  const listing = await runtime.assetCatalog();
+  assert.deepEqual(listing.assets.map(asset => asset.name).sort(), ['downloaded.glb', 'first.glb', 'sky.hdr']);
+  const downloadedId = listing.assets.find(asset => asset.name === 'downloaded.glb').assetId;
+  await runtime.apply({ sessionId, operations: [{ type: 'add-node', node: { id: 'new-boat', asset: { name: 'downloaded.glb' } } }] });
+  assert.deepEqual(sourceCalls.filter(call => call.method === 'apply').at(-1).input.operations[0].node.asset, { id: downloadedId });
+});
+
+runTest('an asset name that appeared since the last catalog call is found without listing the catalog first (#2209)', async context => {
+  const { runtime, sessionId, sourceCalls, addGlb } = await rescanHarness(context);
+  await listedNames(runtime);
+  await addGlb('late.glb', 'late');
+  await runtime.apply({ sessionId, operations: [{ type: 'add-node', node: { id: 'late-boat', asset: { name: 'late.glb' } } }] });
+  assert.equal(sourceCalls.filter(call => call.method === 'apply').at(-1).input.operations[0].node.asset.id.length, 64);
+});
+
+runTest('a file removed from --assets leaves the catalog and a rewritten file gets its new id (#2209)', async context => {
+  const { runtime, directory, addGlb } = await rescanHarness(context);
+  await addGlb('temporary.glb', 'one');
+  const before = (await runtime.assetCatalog()).assets.find(asset => asset.name === 'temporary.glb').assetId;
+  await addGlb('temporary.glb', 'two');
+  const after = (await runtime.assetCatalog()).assets.find(asset => asset.name === 'temporary.glb').assetId;
+  assert.notEqual(after, before);
+  await rm(join(directory, 'temporary.glb'));
+  assert.deepEqual(await listedNames(runtime), ['first.glb']);
+});
+
 // The same GLB with one extra field in its JSON chunk, so the catalog gives it another asset id.
 function withDistinctDocument(bytes, marker) {
   const jsonLength = bytes.readUInt32LE(12);
@@ -941,7 +1256,7 @@ runTest('the preview server accepts only its own loopback host', () => {
   assert.equal(isPreviewHost(undefined, 4100), false);
 });
 
-async function webExportHarness({ exportedRecipe, failCopy = () => false, seedJobsDirectory } = {}) {
+async function webExportHarness({ exportedRecipe, failCopy = () => false, seedJobsDirectory, extraOverrides = {} } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'crucible-web-runtime-'));
   const buildDirectory = join(root, 'build');
   await mkdir(join(buildDirectory, 'mcp'), { recursive: true });
@@ -959,7 +1274,7 @@ async function webExportHarness({ exportedRecipe, failCopy = () => false, seedJo
   const harness = await reviewRuntimeHarness({
     exportedRecipe,
     runtimeOptions: { jobs: jobsDirectory, previewUrl: pathToFileURL(join(buildDirectory, 'mcp', 'preview.js')) },
-    contextOverrides: { writeWebBuild: failingWriteWebBuild },
+    contextOverrides: { writeWebBuild: failingWriteWebBuild, ...extraOverrides },
   });
   const keptBuilds = async () => (await readdir(join(jobsDirectory, EXPORT_DIRECTORY_NAME))).filter(name => name.startsWith('web-'));
   after(() => harness.runtime.close());
@@ -1143,4 +1458,72 @@ runTest('without --gpu-queue the job store gets no card hook', async () => {
     contextOverrides: { createAgentRenderJobs: async hooks => { jobHooks = hooks; return controller; } } });
   await runtime.submitJob({ sessionId, expectedRevision: 0, settings: { kind: 'image', width: 64, height: 64 } });
   assert.equal(jobHooks.acquireGpu, undefined);
+});
+
+runTest('a review page export, marks saved in the page and read back equal the local scene_ask_user answer (#924)', async () => {
+  const { runtime, sessionId } = await webExportHarness({ exportedRecipe: PLAYABLE_RECIPE });
+  const exported = await runtime.exportWeb({ sessionId, title: 'Kitchen', review: true });
+  assert.equal(exported.review, true);
+  assert.ok((await stat(join(dirname(exported.entry), 'frame.png'))).isFile());
+  const page = openReviewPage(await readFile(exported.entry, 'utf8'));
+  page.tap(384, 256);
+  page.tap(40, 60);
+  page.write(1, 'brass looks dull');
+  const reviewFile = page.saveFileText();
+
+  const fromReview = await runtime.askUser({ sessionId, reviewFile });
+
+  const savedMarks = JSON.parse(reviewFile).marks;
+  const local = await webExportHarness({ exportedRecipe: PLAYABLE_RECIPE,
+    extraOverrides: { runAnnotateSession: async () => ({ outcome: 'sent', marks: savedMarks, image: ANNOTATE_PNG }) } });
+  const fromLocal = await local.runtime.askUser({ sessionId: local.sessionId });
+
+  assert.equal(fromReview.image, undefined);
+  assert.equal(fromLocal.content.marks.length, 2);
+  assert.equal(fromLocal.content.marks[1].partId, null);
+  // The runtime runs in a vm, so compare the JSON the tool sends, as the MCP server does.
+  assert.deepEqual(JSON.parse(JSON.stringify(fromReview.content)), JSON.parse(JSON.stringify({ ...fromLocal.content, sessionId })));
+});
+
+runTest('a review file is refused when it is forged, for another scene, empty or too long (#924)', async () => {
+  const { runtime, sessionId } = await webExportHarness({ exportedRecipe: PLAYABLE_RECIPE });
+  const exported = await runtime.exportWeb({ sessionId, review: true });
+  const page = openReviewPage(await readFile(exported.entry, 'utf8'));
+  page.tap(100, 100);
+  const file = JSON.parse(page.saveFileText());
+  const forged = JSON.stringify({ ...file, reviewId: 'f'.repeat(32) });
+  await assert.rejects(runtime.askUser({ sessionId, reviewFile: forged }), /Export the review page again/);
+  await assert.rejects(runtime.askUser({ sessionId: 'other-scene', reviewFile: JSON.stringify(file) }), /Unknown|other-scene|made for scene/);
+  await assert.rejects(runtime.askUser({ sessionId, reviewFile: JSON.stringify({ ...file, marks: [] }) }), /no marks/);
+  await assert.rejects(runtime.askUser({ sessionId, reviewFile: JSON.stringify({ ...file, marks: [{ x: 9999, y: 1, note: '' }] }) }), /mark 1 x/);
+  await assert.rejects(runtime.askUser({ sessionId, reviewFile: 'x'.repeat(20000) }), /over 16384 bytes/);
+});
+
+runTest('a review file is read once, is forgotten when its scene is disposed, and keeps the page limit of 16 marks (#924)', async () => {
+  const { runtime, sessionId } = await webExportHarness({ exportedRecipe: PLAYABLE_RECIPE });
+  const exported = await runtime.exportWeb({ sessionId, review: true });
+  const page = openReviewPage(await readFile(exported.entry, 'utf8'));
+  page.tap(384, 256);
+  const reviewFile = page.saveFileText();
+  const file = JSON.parse(reviewFile);
+  const seventeenMarks = Array.from({ length: 17 }, (unused, index) => ({ x: 10 + index, y: 10, note: '' }));
+  await assert.rejects(runtime.askUser({ sessionId, reviewFile: JSON.stringify({ ...file, marks: seventeenMarks }), maxMarks: 32 }), /at most 16 marks/);
+  const first = await runtime.askUser({ sessionId, reviewFile });
+  assert.equal(first.content.outcome, 'sent');
+  await assert.rejects(runtime.askUser({ sessionId, reviewFile }), /already read by an earlier scene_ask_user call/);
+
+  const second = await runtime.exportWeb({ sessionId, review: true });
+  const secondFile = openReviewPage(await readFile(second.entry, 'utf8'));
+  secondFile.tap(384, 256);
+  const secondText = secondFile.saveFileText();
+  await runtime.dispose({ sessionId });
+  await assert.rejects(runtime.askUser({ sessionId, reviewFile: secondText }), /does not match a review page exported by this server run/);
+});
+
+runTest('a review page needs no game and is kept with the newest four web builds (#924)', async () => {
+  const { runtime, sessionId, keptBuilds } = await webExportHarness({ exportedRecipe: { format: 'crucible.scene', schemaVersion: 1, geometries: [], materials: [], nodes: [] } });
+  const entries = [];
+  for (let index = 0; index < 5; index++) entries.push((await runtime.exportWeb({ sessionId, review: true })).entry);
+  assert.equal((await keptBuilds()).length, 4);
+  await assert.rejects(stat(entries[0]), { code: 'ENOENT' });
 });

@@ -22,7 +22,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
-      - run: npm audit --audit-level=high
+      # Runtime dependencies fail on high. Dev-only ones fail on critical, so an unpatched high advisory in build tooling
+      # (picomatch through vite, #2009) does not block every pull request. Revisit when a patched release exists.
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit all dependencies
+        run: npm audit --audit-level=critical
 
   # The cheap gates of `npm run preflight` that need no tests: protected files and the change note. The pre-push hook runs them
   # too, but `git push --no-verify` skips the hook, so CI is where they cannot be skipped. A release run has no base to compare.
@@ -160,9 +165,10 @@ jobs:
       - run: npm run build:lib
       - run: node --test --import ./scripts/test-hang-guard.mjs --test-timeout=300000 $(git grep -l "support/cook.js" -- tests)
 
-  # The Blender add-on's Python tests that need no Blender (packages/blender-addon/tests/conftest.py leaves the bpy script out).
+  # The Blender add-on's Python tests that need no Blender (packages/blender-addon/tests/conftest.py leaves the bpy script out),
+  # and the cycles-parity bench tests that need no Blender, named one by one so a future test that needs Blender stays out.
   # The job always runs so `test` can require it, but its steps run only when a pull request changes a file under
-  # packages/blender-addon/. The tested tree is the merge commit, so its first parent is the base. A release run has no base to
+  # packages/blender-addon/ or bench/cycles-parity/, or changes this workflow. The tested tree is the merge commit, so its first parent is the base. A release run has no base to
   # compare and runs the tests.
   addon-python:
     runs-on: ubuntu-latest
@@ -171,10 +177,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
-      - name: Find changes under packages/blender-addon/
+      - name: Find changes under packages/blender-addon/ and bench/cycles-parity/
         id: changes
         run: |
-          if [ "$GITHUB_EVENT_NAME" != "pull_request" ] || [ -n "$(git diff --name-only HEAD^1 HEAD -- packages/blender-addon/)" ]; then
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ] || [ -n "$(git diff --name-only HEAD^1 HEAD -- packages/blender-addon/ bench/cycles-parity/ .github/workflows/test.yml)" ]; then
             echo "addon=true" >> "$GITHUB_OUTPUT"
           else
             echo "addon=false" >> "$GITHUB_OUTPUT"
@@ -187,6 +193,10 @@ jobs:
       - name: Run the add-on tests
         if: steps.changes.outputs.addon == 'true'
         run: '"$RUNNER_TEMP/addon-venv/bin/python" -m pytest packages/blender-addon/tests'
+      - name: Run the cycles-parity tests that need no Blender
+        if: steps.changes.outputs.addon == 'true'
+        working-directory: bench/cycles-parity
+        run: '"$RUNNER_TEMP/addon-venv/bin/python" -m unittest -v test_cycles_switches test_edge_width test_compare_depth test_run_classroom_parity'
 
   test:
     if: always()

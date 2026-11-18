@@ -47,10 +47,12 @@ on:
       - 'scripts/agent-native-temporal.mjs'
       - 'scripts/agent-native-trace.mjs'
       - 'scripts/asset-server.mjs'
+      - 'scripts/cdp-blob-read.mjs'
       - 'scripts/file-scene.mjs'
       - 'scripts/make-spark-spec.mjs'
       - 'scripts/native-bake-page.js'
       - 'scripts/native-capacity.mjs'
+      - 'scripts/native-export-delta.js'
       - 'scripts/native-png.mjs'
       - 'scripts/native-post-look.mjs'
       - 'scripts/render-engine.mjs'
@@ -58,11 +60,13 @@ on:
       - 'scripts/render-file-native.mjs'
       - 'scripts/render-vite.config.mjs'
       - 'scripts/vite-site-pages.mjs'
+      - 'src/agent-apply-report.js'
       - 'src/agent-bake-gpu.js'
       - 'src/agent-bake.js'
       - 'src/agent-clip-layers.js'
       - 'src/agent-cloth.js'
       - 'src/agent-crowd.js'
+      - 'src/agent-diagnostics.js'
       - 'src/agent-drive-schema.js'
       - 'src/agent-drive.js'
       - 'src/agent-explosion.js'
@@ -81,7 +85,9 @@ on:
       - 'src/agent-retarget.js'
       - 'src/agent-scene-assets.js'
       - 'src/agent-scene-capabilities.js'
+      - 'src/agent-scene.js'
       - 'src/agent-scene-modules.js'
+      - 'src/agent-scene.js'
       - 'src/agent-settle.js'
       - 'src/agent-terrain.js'
       - 'src/agent-texture-sequence.js'
@@ -102,6 +108,8 @@ on:
       - 'src/cloth-fields.js'
       - 'src/cloth-self-collision.js'
       - 'src/cloth.js'
+      - 'src/cloud-geometry.js'
+      - 'src/cloud-levels.js'
       - 'src/cooperative.js'
       - 'src/coplanar-overlap.js'
       - 'src/crowd-skinning.js'
@@ -145,6 +153,7 @@ on:
       - 'src/geometry-simplify.js'
       - 'src/geometry.js'
       - 'src/gl-program.js'
+      - 'src/glitter-shader.js'
       - 'src/grid-medium.js'
       - 'src/ground-bounce.js'
       - 'src/hair.js'
@@ -152,13 +161,15 @@ on:
       - 'src/impostor-shader.js'
       - 'src/irradiance-grid.js'
       - 'src/kernel-offload.js'
+      - 'src/legacy-names.js'
       - 'src/light-bake-gpu.js'
       - 'src/light-bake.js'
-      - 'src/light-limits.js'
       - 'src/light-limit-advice.js'
+      - 'src/light-limits.js'
       - 'src/light-link-bits.js'
       - 'src/light-linking.js'
       - 'src/light-modules.js'
+      - 'src/legacy-names.js'
       - 'src/light-profile.js'
       - 'src/light-shapes.js'
       - 'src/lighting-setups.js'
@@ -178,11 +189,14 @@ on:
       - 'src/local-volumes.js'
       - 'src/look-catalog.js'
       - 'src/material-graph.js'
+      - 'src/material-wear.js'
       - 'src/material-layer-shaders.js'
       - 'src/material-layers.js'
       - 'src/material-patterns.js'
       - 'src/material-snippet.js'
       - 'src/material-texture-kit.js'
+      - 'src/material-vertex-group-map.js'
+      - 'src/material-wear.js'
       - 'src/mesh-attribute-edits.js'
       - 'src/mesh-bevel.js'
       - 'src/mesh-bisect.js'
@@ -261,8 +275,11 @@ on:
       - 'src/particle-emitter-mesh.js'
       - 'src/particle-sparks.js'
       - 'src/particles.js'
+      - 'src/path-trace-terms.js'
       - 'src/path-tracer-blue-noise.js'
       - 'src/path-tracer-denoise.js'
+      - 'src/path-tracer-gpu-instance-pack.js'
+      - 'src/path-tracer-gpu-instancing.js'
       - 'src/path-tracer-gpu-pack.js'
       - 'src/path-tracer-gpu-shader.js'
       - 'src/path-tracer-gpu-subsurface.js'
@@ -273,6 +290,7 @@ on:
       - 'src/path-tracer-radiance-cache.js'
       - 'src/path-tracer-realtime-gl.js'
       - 'src/path-tracer-reprojection.js'
+      - 'src/path-trace-terms.js'
       - 'src/path-tracer-scene.js'
       - 'src/path-tracer-shading.js'
       - 'src/path-tracer-subsurface.js'
@@ -282,6 +300,7 @@ on:
       - 'src/path-tracer-webgpu-medium.js'
       - 'src/path-tracer-webgpu.js'
       - 'src/path-tracer.js'
+      - 'src/gradient-sky.js'
       - 'src/physical-sky.js'
       - 'src/physics-boat.js'
       - 'src/physics-buoyancy.js'
@@ -300,9 +319,11 @@ on:
       - 'src/reflection-probes.js'
       - 'src/render-culling.js'
       - 'src/retarget.js'
+      - 'src/retro-shader.js'
       - 'src/rig-presets.js'
       - 'src/rig.js'
       - 'src/rotation-euler.js'
+      - 'src/scene-graph.js'
       - 'src/sculpt-strokes.js'
       - 'src/seeded-random.js'
       - 'src/settle.js'
@@ -318,6 +339,7 @@ on:
       - 'src/subsurface-shader.js'
       - 'src/sun-bounce.js'
       - 'src/surface-nets.js'
+      - 'src/terrain-hole-cells.js'
       - 'src/terrain-sky.js'
       - 'src/terrain.js'
       - 'src/text-geometry.js'
@@ -328,6 +350,7 @@ on:
       - 'src/triangle-bvh.js'
       - 'src/triangle-math.js'
       - 'src/triangulate.js'
+      - 'src/unsupported-part.js'
       - 'src/user-pass.js'
       - 'src/vegetation-geometry.js'
       - 'src/vegetation-impostors.js'
@@ -340,8 +363,10 @@ on:
       - 'src/view-transform-names.js'
       - 'src/view-transform-shader.js'
       - 'src/view-transform.js'
+      - 'src/view-transform-inverse.js'
       - 'src/volume-grid-sequence.js'
       - 'src/volume-grid.js'
+      - 'src/volume-step-integral.js'
       - 'src/volumetric.js'
       - 'src/water-mirror-glsl.js'
       - 'src/world-material-shader.js'
@@ -353,9 +378,11 @@ on:
       - 'tests/cycles-sphere-light-parity.test.js'
       - 'tests/denoise-oidn-persistent.test.js'
       - 'tests/helpers/camera-environment-scenes.js'
+      - 'tests/native-albedo-reference.test.js'
       - 'tests/native-bake.test.js'
       - 'tests/native-camera-environment.test.js'
       - 'tests/native-camera-params.test.js'
+      - 'tests/native-clip-start.test.js'
       - 'tests/native-cycles-russian-roulette.test.js'
       - 'tests/native-denoise.test.js'
       - 'tests/native-diffuse-transmission.test.js'
@@ -363,7 +390,9 @@ on:
       - 'tests/native-dispatch-determinism.test.js'
       - 'tests/native-dispersion.test.js'
       - 'tests/native-exit-code.test.js'
+      - 'tests/native-export-delta.test.js'
       - 'tests/native-filter.test.js'
+      - 'tests/native-glass-albedo.test.js'
       - 'tests/native-grid-volumes.test.js'
       - 'tests/native-instancing-emissive-offsets.test.js'
       - 'tests/native-instancing-equivalence.test.js'
@@ -421,8 +450,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      # Six tests failed on Intel AVX-512 runners and passed on AMD (#1760). Keep lavapipe's JIT on 256-bit vectors so every runner
-      # compiles the Cook kernel the same way, as the AVX-512 path miscompiled it before (cook#45).
+      # Tests failed on Intel and AMD runners with AVX2 and AVX-512 and passed on others (#1760). lavapipe's JIT gives a different
+      # result for the Cook kernel on a CPU with AVX2 (a magnified mip read off by 8 to 80, the albedo sum 0.9 percent low, the light
+      # tree mean 0.7044 against 0.6905), and the same kernel is right with LLVM's optimisation passes off and right when the JIT
+      # is held to AVX. Limit lavapipe to AVX so every runner compiles the kernel the same way (cook#42 found it first on the flat
+      # light pick). On Xeon 6975P-C and EPYC 9V45, GALLIUM_OVERRIDE_CPU_CAPS=avx passed all 74 tests of the seven files that
+      # failed in the default JIT, and GALLIUM_OVERRIDE_CPU_CAPS=avx2 failed the same two tests as the default. Drop this once
+      # Mesa's LLVM stops doing that.
+      GALLIUM_OVERRIDE_CPU_CAPS: avx
       LP_NATIVE_VECTOR_WIDTH: '256'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -476,7 +511,7 @@ jobs:
             echo '### Vulkan adapter'
             echo '```'
             grep -m1 'model name' /proc/cpuinfo || true
-            echo "avx512f: $(grep -o -m1 avx512f /proc/cpuinfo | head -1 | grep . || echo no), LP_NATIVE_VECTOR_WIDTH=$LP_NATIVE_VECTOR_WIDTH"
+            echo "avx2: $(grep -o -m1 avx2 /proc/cpuinfo | head -1 | grep . || echo no), avx512f: $(grep -o -m1 avx512f /proc/cpuinfo | head -1 | grep . || echo no), GALLIUM_OVERRIDE_CPU_CAPS=$GALLIUM_OVERRIDE_CPU_CAPS, LP_NATIVE_VECTOR_WIDTH=$LP_NATIVE_VECTOR_WIDTH"
             vulkaninfo --summary 2>&1 | grep -E 'deviceName|driverInfo|apiVersion|deviceType' || true
             echo
             vulkaninfo 2>&1 | grep -E 'VK_KHR_(ray_query|acceleration_structure)' | sort -u || echo 'no VK_KHR_ray_query or VK_KHR_acceleration_structure'
@@ -503,7 +538,8 @@ jobs:
           # and with the default concurrency the light-tree file crashed (SIGSEGV) and byte-for-byte tests differed, while each
           # passed alone and two runs of one render were byte-identical on lavapipe (#1717).
           set +e
-          node --test --test-concurrency=2 --import ./scripts/test-hang-guard.mjs --test-timeout=300000 --test-reporter=tap --test-reporter-destination=addon-tests.tap $(git grep -l "support/cook.js" -- tests)
+          test_options="--test-concurrency=2 --import ./scripts/test-hang-guard.mjs --test-timeout=300000 --test-reporter=tap"
+          node --test $test_options --test-reporter-destination=addon-tests.tap $(git grep -l "support/cook.js" -- tests)
           status=$?
           echo "test_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
           echo "node --test exit code $status"

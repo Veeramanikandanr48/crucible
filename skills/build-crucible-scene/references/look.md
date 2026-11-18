@@ -27,14 +27,22 @@ Tool `scene_apply`:
 
 `world: true` makes the sky the background too.
 
+Flat dark backdrop for one object (item card, turntable): video has no alpha, so put an emissive `box` card about 1.5 m behind the
+target, square to the camera, with `color` black, the tint in `emissiveColor` and `emission` above 0. A setup such as `studio` still
+lights that card through its environment light, so set `environmentIntensity` near 0.02 (range 0 to 100) and the emissive alone sets
+its colour. Set overall brightness with `effects.exposure` (0.01 to 16), then measure a corner pixel of a `scene_look` against the
+target hex and scale `emission`.
+
 Time of day comes from the sun alone: `"sky": { "type": "physical", "preset": "golden-hour" }` (also `sunset`, `blue-hour`) sets sun elevation and azimuth, and the key, sky and haze follow from one atmosphere, so a low sun reads warm with no grading. Put `sunElevation` or `sunRotation` beside a preset to move the sun; a preset starts the sky again, so earlier sky fields are dropped.
+
+For a mood that physics does not give, pick the colours: `"sky": { "type": "gradient", "stops": [{ "at": 0, "color": "#1a8a9c" }, { "at": 1, "color": "#0e5d73" }], "horizonGlow": { "color": "#19d0e8", "width": 1, "intensity": 1 } }` runs from the horizon (`at` 0) to the zenith (1), adds a bright band at the horizon, and lights the scene and shows in water like any sky. It leaves the sun to the setup. The stop and glow colours show as the hex you give, under any view transform (the sky compensates for it; it assumes exposure 1 and no look or post effect).
 
 ## HDRI from the catalog
 
 Call `scene_asset_catalog` (no arguments). It lists two shipped HDRIs, `sky-clouds` and `studio-softbox`, two shipped
 looks, `teal-orange` and `noir`, and every `.hdr` (kind `environment`) and `.cube` (kind `look`) file in the server's
 `--assets` folder as a 64-character ID. A recipe names an entry and never carries a path or URL. For a bigger HDRI,
-tell the user to put a 1k or 2k `.hdr` (4 MiB at most) in the assets folder and restart the server for its ID.
+tell the user to put a 1k or 2k `.hdr` (8 MiB at most) in the assets folder and restart the server for its ID.
 
 Tool `scene_apply`:
 
@@ -47,13 +55,14 @@ Tool `scene_apply`:
 ```
 
 `keyIntensity: 0` drops the setup's sun when the HDRI has its own; keep it above 0 when you want shadows from the
-key light. `"hdri": null` clears it.
+key light. `"hdri": null` clears it. `ambientIntensity` also scales the HDRI's diffuse light and reflections, so `0` makes an HDRI-lit scene black even with a high `environmentIntensity`. For an HDRI-only scene set `keyIntensity` and `fillIntensity` to 0 and keep `ambientIntensity` above 0.
 
 ## Color look and tone mapping
 
 `environment.look` is one of `warm`, `cool`, `contrast`, `faded`, a shipped cube (`teal-orange`, `noir`) or the
-64-character ID of a `.cube` file from `scene_asset_catalog`. `environment.viewTransform` is `aces` (default), `agx` or
-`neutral`.
+64-character ID of a `.cube` file from `scene_asset_catalog`. `environment.viewTransform` is `aces` (default), `agx`,
+`neutral` or `standard` (Blender Standard: sRGB, no tone curve, values above 1 clip; pick it to match a Cycles
+reference rendered with Standard).
 
 Tool `scene_apply`:
 

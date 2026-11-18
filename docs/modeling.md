@@ -46,7 +46,7 @@ The base contour validation does not establish that an arbitrary bevel produces 
 `tube(path, { radius = 0.1, segments = 64, radialSegments = 12, closed = false, maxVertices = 250000 })`
 sweeps a circular cross-section along a centripetal Catmull-Rom curve through XYZ points.
 Open paths need two points. Closed paths need three. Closed paths join the final sample back to the first.
-Open tube ends have no caps. Paths can intersect themselves.
+Open tube ends have no caps. Paths can intersect themselves. A bad radius, `closed` flag, profile, contour or torus arc throws an error that names the field, the value received and an example; in a scene recipe the field starts with `geometries[i]`.
 
 Segments range from 3 to 2048. Radial segments range from 3 to 128.
 
@@ -62,6 +62,7 @@ sweeps a cross-section along a chain of cubic Bezier spans, the way a Blender cu
 - `profile` is 3 to 256 `[x, y]` points of a closed cross-section in units of `radius`, either winding. Without it the
   section is a circle of `radialSegments` sides (3 to 128). Corners sharper than 40 degrees stay flat shaded.
 - Open curves get flat caps with their own vertices, so the surface is closed and works with booleans.
+- A `radius` of 0 or less, or a `closed` flag that is not true or false, throws an error that names that one field (`radius`, `closed` or `splines[1].closed`), the value received and an example; in a scene recipe the field starts with `geometries[i]`.
 
 Volume, area and bounds match Blender 5.2 for an open and a closed Bezier curve with a round bevel to 2e-5
 (`tests/blender-curve-text.test.js`). A Blender bevel resolution of `n` is `radialSegments: 4 + 2n`.
@@ -134,6 +135,28 @@ through its depth. `"\n"` starts a new line 1.2 em lower. `size` is the em heigh
 - `curveSegments` straight pieces per outline curve (1 to 16). Rings inside an odd number of others become holes.
 - One glyph and a word match Blender 5.2 with the same font in volume, area and bounds to 2e-5. Blender's text size unit is not the em,
   so the golden script calibrates it on the capital I. There is no kerning, bevel or text on a curve.
+
+## Cloud
+
+`cloudGeometry({ seed, puffs, width, height, flatBase, resolution })` builds a cumulus as one closed mesh: a wide base of big lobes with smaller puffs on a dome above it, joined by a smooth union and meshed by surface nets. The same record gives the same bytes. Shade it with `toon` (for example `"toon": 3`) and the lobes read as clean bands.
+
+| Field | Default | Range | Meaning |
+| --- | --- | --- | --- |
+| `seed` | 1 | whole, 0 to 2147483647 | Another seed makes another cloud. |
+| `puffs` | 14 | whole, 2 to 48 | Lobes in the cluster. |
+| `width` | 10 | 0.5 to 2000 | Widest side in metres, centred on x and z. |
+| `height` | 5 | 0.25 to 2000 | Top to base in metres, measured before the base is cut. |
+| `flatBase` | 0.6 | 0 to 1 | 0 keeps a round underside; 1 cuts it flat the furthest. The base always sits on y = 0. |
+| `resolution` | 48 (128 with `levels`) | whole, 16 to 96 (16 to 160 with `levels`) | Cells along the longest side; it sets the triangle count. |
+| `levels` | none | 1 to 4 of `{count, sizeRatio}`, 1000 lobes in all | Grows a tower: the first level is the dome layout (`count` 1 to 48 lobes), and each later level puts its lobes on the surface of the level before. `sizeRatio` (0.02 to 2) is the lobe size as a share of the first level's. `puffs` is not used with levels. |
+| `upBias` | 0.5 | 0 to 1, with `levels` | 0 grows lobes in every direction; 1 never grows them downward. |
+| `unionSoftness` | 0.14 (0.3 with `levels`) | 0.02 to 1 | The blend between lobes as a share of lobe radius; with levels each level blends by its own radius. Lower is tighter. |
+
+A scene geometry takes the same fields with `"type": "cloud"` (see `scene_capabilities` `cloud`). A bad value throws an error that names the field and the accepted range. Lobes are stretched with the box, so a tall or flat cloud has taller or flatter puffs.
+
+With `levels` such as `[{"count": 7, "sizeRatio": 1}, {"count": 60, "sizeRatio": 0.35}, {"count": 680, "sizeRatio": 0.12}]` the cloud becomes a tower covered in rounded lobes. Normals come from the gradient of the blended field at each vertex, not from the mesh faces, so toon steps follow the lobes without fine rings. Later levels find their neighbours in a grid, so 680 bumps cost little per sample; three such towers at `resolution` 128 take about 2.3 s together. A mesh over 150000 faces is refused with the resolution to pass instead.
+
+For a sky with many clouds, keep `resolution` at 48 or lower and repeat a few cloud shapes with a node's `instances` (see [agent-scene.md](agent-scene.md)) instead of building one mesh per cloud. Triangles grow with the square of `resolution`.
 
 ## Resource and precision limits
 

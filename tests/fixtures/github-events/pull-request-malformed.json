@@ -1,0 +1,7 @@
+{
+  "action": "opened",
+  "pull_request": {
+    "number": "two",
+    "labels": null
+  }
+}

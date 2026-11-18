@@ -10,6 +10,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { deflateSync, crc32 } from 'node:zlib';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { assertToolListMatchesServer } from './mcp-tool-list.mjs';
 
 setPriority(0, constants.priority.PRIORITY_BELOW_NORMAL);
 
@@ -93,7 +94,7 @@ async function completed(jobId) {
 
 try {
   await client.connect(transport);
-  assert.equal((await client.listTools()).tools.length, 22);
+  await assertToolListMatchesServer(client);
   const catalog = (await call('scene_asset_catalog')).structuredContent;
   const frames = catalog.assets.filter(asset => asset.kind === 'image').sort((left, right) => left.name.localeCompare(right.name)).map(asset => asset.assetId);
   assert.equal(frames.length, 4);

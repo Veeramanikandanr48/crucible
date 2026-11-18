@@ -76,7 +76,7 @@ test('a bad frame ID, frame count, fps or loop is rejected with a message that n
   assert.throws(() => normalizeMapSequence({ sequence: { ...good, fps: 61 } }), /map\.sequence\.fps: got 61; expected a number above 0 and at most 60/);
   assert.throws(() => normalizeMapSequence({ sequence: { ...good, fps: Number.NaN } }), /fps/);
   assert.throws(() => normalizeMapSequence({ sequence: { ...good, loop: 'yes' } }), /map\.sequence\.loop: got "yes"; expected true or false/);
-  assert.throws(() => normalizeMapSequence({ sequence: { ...good, url: 'https://example.com/a.png' } }), /map\.sequence\.url: got "https:\/\/example\.com\/a\.png"; expected no such field; use one of frames, fps, loop/);
+  assert.throws(() => normalizeMapSequence({ sequence: { ...good, url: 'https://example.com/a.png' } }), /map\.sequence\.url: got "https:\/\/example\.com\/a\.png"; expected no such field; use one of frames, catalog, fps, loop/);
   assert.throws(() => normalizeMapSequence({ url: 'https://example.com/a.png' }), /map\.url: got "https:\/\/example\.com\/a\.png"; expected no such field; use one of sequence/);
 });
 

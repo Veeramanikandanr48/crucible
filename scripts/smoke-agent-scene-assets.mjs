@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { createTexturedRigFixture } from './agent-asset-fixture.mjs';
+import { assertToolListMatchesServer } from './mcp-tool-list.mjs';
 
 setPriority(0, constants.priority.PRIORITY_BELOW_NORMAL);
 await rm('artifacts/scene-assets-jobs', { recursive: true, force: true });
@@ -57,7 +58,7 @@ function psnr(firstPath, secondPath) {
 }
 try {
   await client.connect(transport, { timeout: 180000 });
-  assert.equal((await client.listTools()).tools.length, 22);
+  await assertToolListMatchesServer(client);
   const catalog = (await call('scene_asset_catalog')).structuredContent;
   const robot = catalog.assets.find(asset => asset.name === 'wall-e.glb').assetId;
   const rig = catalog.assets.find(asset => asset.name === 'textured-rig.glb').assetId;

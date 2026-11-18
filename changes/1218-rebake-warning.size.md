@@ -1,3 +1,0 @@
-- scene:agent-scene: 67 bytes gzip of core wire the skipped-bake reason into the staged state and the inspect diagnostics; the catch and the message live in the lazy bake module.
-- scene:agent-scene+lazy: 424 bytes gzip for the bake-skipped diagnostic with its fix text and the refusal wrapper, so a size limit stops failing a whole scene_apply on a big scene.
-- goal:agent-scene: the growth is the hook that makes an over-limit rebake a warning instead of a failed apply; nothing else in the core moved.

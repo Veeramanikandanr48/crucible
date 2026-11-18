@@ -1,1 +1,0 @@
-- A `scene_apply` whose rebake cannot run (part cap, path work limit) now keeps the edit, drops the old bake and returns a `bake-skipped` warning with how to fit, and the irradiance grid and probe part errors say they trace on the CPU (#1218)

@@ -1,0 +1,156 @@
+// <crucible-scene src="scene.pack" poster="poster.webp">: the runtime of `crucible pack` (docs/pack.md).
+// It shows the poster at once, loads the packed scene and the renderer, then swaps the canvas in. It imports no
+// agent-scene module: the recipe was compiled ahead of time, so the page pays for the renderer and nothing else.
+import { decodePack } from './scene-pack-format.js';
+import { loadPackShaderModules } from './scene-pack-shaders.js';
+import { partsWithImageData } from './scene-pack-images.js';
+
+export const SCENE_STATES = Object.freeze(['loading', 'live', 'error']);
+
+const TEMPLATE = `
+<style>
+  :host { display: block; position: relative; overflow: hidden; background: #111; }
+  canvas, img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  img { object-fit: cover; transition: opacity 240ms ease; }
+  canvas { opacity: 0; transition: opacity 240ms ease; }
+  :host([state="live"]) canvas { opacity: 1; }
+  :host([state="live"]) img { opacity: 0; pointer-events: none; }
+</style>
+<img part="poster" alt="" hidden>
+<canvas part="canvas"></canvas>
+`;
+
+async function fetchPack(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`<crucible-scene src="${url}"> answered ${response.status}; point src at the scene.pack that crucible pack wrote.`);
+  return decodePack(await response.arrayBuffer());
+}
+
+// The renderer and its lighting load after the poster is on screen, so the first paint never waits for them.
+async function createLiveRenderer(canvas, scene) {
+  const [{ CrucibleRenderer }, { createLightingSetupMap }] = await Promise.all([
+    import('./renderer.js'),
+    import('./lighting-setups.js'),
+    loadPackShaderModules(scene.shaderModules),
+  ]);
+  const environment = {
+    ...scene.environment,
+    map: createLightingSetupMap(scene.environment.setup, {
+      intensity: scene.environment.environmentIntensity,
+      rotation: scene.environment.environmentRotation,
+      showBackground: scene.environment.world,
+    }),
+  };
+  // Baked lightmaps arrive as plain bytes; the renderer uploads ImageData.
+  const renderer = new CrucibleRenderer(canvas, partsWithImageData(scene.parts), {
+    ground: false,
+    hdr: true,
+    depth: true,
+    world: scene.environment.world,
+    environment,
+    shadowBounds: scene.shadowBounds,
+  });
+  return { renderer, environment };
+}
+
+// The package is imported in Node too (server rendering, the package smoke), where there is no DOM;
+// the element only registers in a browser.
+const ElementBase = typeof HTMLElement === 'undefined' ? class {} : HTMLElement;
+
+export class CrucibleSceneElement extends ElementBase {
+  static observedAttributes = ['src', 'poster'];
+
+  #renderer = null;
+  #frame = null;
+  #resizeObserver = null;
+  #loadToken = 0;
+  // An element that upgrades after parsing gets its attributes before connectedCallback; only a change after the first load reloads.
+  #started = false;
+
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' }).innerHTML = TEMPLATE;
+  }
+
+  connectedCallback() {
+    this.#started = true;
+    this.#showPoster();
+    this.#load();
+  }
+
+  disconnectedCallback() {
+    this.#started = false;
+    this.#dispose();
+  }
+
+  attributeChangedCallback(name) {
+    if (!this.#started) return;
+    if (name === 'poster') this.#showPoster();
+    if (name === 'src') this.#load();
+  }
+
+  get state() {
+    return this.getAttribute('state');
+  }
+
+  #showPoster() {
+    const image = this.shadowRoot.querySelector('img');
+    const poster = this.getAttribute('poster');
+    image.hidden = !poster;
+    if (poster) image.src = poster;
+  }
+
+  #dispose() {
+    this.#loadToken += 1;
+    this.#resizeObserver?.disconnect();
+    this.#resizeObserver = null;
+    if (this.#frame !== null) cancelAnimationFrame(this.#frame);
+    this.#frame = null;
+    this.#renderer?.dispose?.();
+    this.#renderer = null;
+  }
+
+  async #load() {
+    this.#dispose();
+    const token = this.#loadToken;
+    const source = this.getAttribute('src');
+    this.setAttribute('state', 'loading');
+    try {
+      if (!source) throw new Error('<crucible-scene> needs a src attribute: the scene.pack that crucible pack wrote.');
+      const scene = await fetchPack(source);
+      const canvas = this.shadowRoot.querySelector('canvas');
+      const { renderer, environment } = await createLiveRenderer(canvas, scene);
+      if (token !== this.#loadToken) {
+        renderer.dispose?.();
+        return;
+      }
+      this.#renderer = renderer;
+      this.#startDrawing(scene, environment);
+      this.setAttribute('state', 'live');
+      this.dispatchEvent(new CustomEvent('crucible-scene-ready', { detail: { parts: scene.parts.length } }));
+    } catch (error) {
+      if (token !== this.#loadToken) return;
+      this.setAttribute('state', 'error');
+      this.dispatchEvent(new CustomEvent('crucible-scene-error', { detail: { message: error.message } }));
+    }
+  }
+
+  // A still scene draws again only when the element changes size.
+  #startDrawing(scene, environment) {
+    const draw = () => {
+      this.#frame = null;
+      this.#renderer.resize();
+      this.#renderer.render({ ...scene.camera, environment, effects: scene.effects, exposure: scene.effects.exposure, time: 0 });
+    };
+    const schedule = () => {
+      if (this.#frame === null) this.#frame = requestAnimationFrame(draw);
+    };
+    this.#resizeObserver = new ResizeObserver(schedule);
+    this.#resizeObserver.observe(this);
+    schedule();
+  }
+}
+
+if (typeof customElements !== 'undefined' && !customElements.get('crucible-scene')) {
+  customElements.define('crucible-scene', CrucibleSceneElement);
+}

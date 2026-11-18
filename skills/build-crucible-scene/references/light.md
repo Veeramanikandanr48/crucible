@@ -20,8 +20,8 @@ Calls follow the conventions in `look.md`. `tests/skill-examples.test.js` applie
 A list over its cap fails the whole batch with a message that names the cap. Each list replaces the previous one,
 so send every light you want to keep (`[]` removes all). Baked bounce light uses up to 6 of the 16 point slots when a
 sun lights a closed room (`environment.sunBounce`, `0` turns it off).
-The sun casts shadows. Point and spot lights cast them only with `castShadow: true` (default false) and area lights
-never do. Without it a light shines through walls, so a lamp outside a room still lights it: set `castShadow`, move
+The sun casts shadows. Point, spot and area lights cast them only with `castShadow: true` (default false; an area light uses 1 of the 24 shadow tiles).
+Without it a light shines through walls, so a lamp outside a room still lights it: set `castShadow`, move
 it inside, lower `intensity` or give it a `range`.
 
 ## Units

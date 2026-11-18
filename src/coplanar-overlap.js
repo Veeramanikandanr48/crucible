@@ -17,6 +17,8 @@ export const COPLANAR_TOLERANCE = 0.001;
 export const COPLANAR_MINIMUM_AREA = 1e-4;
 /** The distance suggested in the fix text, in metres. */
 export const SUGGESTED_OFFSET = 0.002;
+/** No pair is reported farther apart than this (metres): parts 100 mm or more apart are two planes, however large the scene. */
+export const MAXIMUM_REPORTED_GAP = 0.05;
 const DEFAULT_WORK_BUDGET = 1_000_000;
 // Triangles whose planes are read in the first pass; a scene past it is searched part by part, smallest first.
 const DEFAULT_TRIANGLE_BUDGET = 600_000;
@@ -262,7 +264,18 @@ function trianglesMeet(first, second, tolerance) {
   }
   return true;
 }
+// The reach of one pair: scaled to the two parts, never past the scene's reach or MAXIMUM_REPORTED_GAP, so a big sea does not
+// make a foam sheet 250 mm above it a fight.
+function pairReach(first, second, sceneReach) {
+  const spanned = diagonal([
+    Math.min(first.bounds[0], second.bounds[0]), Math.min(first.bounds[1], second.bounds[1]), Math.min(first.bounds[2], second.bounds[2]),
+    Math.max(first.bounds[3], second.bounds[3]), Math.max(first.bounds[4], second.bounds[4]), Math.max(first.bounds[5], second.bounds[5]),
+  ]);
+  return Math.min(sceneReach, nearTolerance(spanned));
+}
+
 function pairOverlap(first, second, region, tolerance, budget) {
+  const reach = pairReach(first, second, tolerance);
   const bothSides = first.part.material?.doubleSided === true || second.part.material?.doubleSided === true;
   first.planes ??= worldTrianglesByPlane(first.part, tolerance);
   second.planes ??= worldTrianglesByPlane(second.part, tolerance);
@@ -291,7 +304,7 @@ function pairOverlap(first, second, region, tolerance, budget) {
           if (!visibleTogether) continue;
           let largest = 0;
           for (let corner = 0; corner < 3; corner++) largest = Math.max(largest, Math.abs(planeDistance(firstTriangle, secondTriangle, corner)));
-          if (largest > tolerance) continue;
+          if (largest > reach) continue;
           const shared = sharedArea(firstTriangle, secondTriangle);
           if (shared <= 0) continue;
           area += shared;
@@ -403,7 +416,7 @@ export function findCoplanarOverlaps(parts, { tolerance: requestedTolerance = nu
     stack.set(pose, copies + 1);
     entries.push({ part, bounds });
   }
-  const tolerance = requestedTolerance ?? Math.max(COPLANAR_TOLERANCE, nearTolerance(diagonal(sceneBoundsOf(entries))));
+  const tolerance = requestedTolerance ?? Math.max(COPLANAR_TOLERANCE, Math.min(MAXIMUM_REPORTED_GAP, nearTolerance(diagonal(sceneBoundsOf(entries)))));
   const budget = { work: 0, limit: workBudget };
   const scanBudget = { triangles: triangleBudget, exhausted: false };
   const overlaps = [];

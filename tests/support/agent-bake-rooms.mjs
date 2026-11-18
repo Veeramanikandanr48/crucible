@@ -76,3 +76,36 @@ export function freezeBakeClockForFile() {
     performance.now = realNow;
   });
 }
+
+/**
+ * The large room with every size and distance 300 times as large, plus 30 large crates: it needs more than the million texels
+ * a bake takes even at 1 texel per unit, so no samples or bounces setting fits it.
+ */
+export function oversizedRoom(bake) {
+  const recipe = largeRoom(bake);
+  recipe.nodes = recipe.nodes.map(node => ({
+    ...node,
+    ...(node.scale ? { scale: node.scale.map(side => side * 300) } : {}),
+    ...(node.translation ? { translation: node.translation.map(value => value * 300) } : {}),
+  }));
+  for (let index = 0; index < 30; index++) {
+    recipe.nodes.push({ id: `hangar-${index}`, geometry: 'box', material: 'white', translation: [-400 + (index % 10) * 80, 60, -400 + Math.floor(index / 10) * 80], scale: [60, 120, 60] });
+  }
+  return recipe;
+}
+
+/** The scene_apply operations that turn a scene built from largeRoom into oversizedRoom: the same nodes, resized and moved, and the added crates. */
+export function growToOversizedOperations(bake) {
+  const small = new Set(largeRoom(bake).nodes.map(node => node.id));
+  return oversizedRoom(bake).nodes.map(node => (small.has(node.id)
+    ? { type: 'set-node', id: node.id, translation: node.translation, scale: node.scale }
+    : { type: 'add-node', node }));
+}
+
+/** The scene_apply operations that undo growToOversizedOperations. */
+export function shrinkFromOversizedOperations(bake) {
+  const small = new Map(largeRoom(bake).nodes.map(node => [node.id, node]));
+  return oversizedRoom(bake).nodes.map(node => (small.has(node.id)
+    ? { type: 'set-node', id: node.id, translation: small.get(node.id).translation, scale: small.get(node.id).scale }
+    : { type: 'remove-node', id: node.id }));
+}

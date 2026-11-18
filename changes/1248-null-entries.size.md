@@ -1,4 +1,0 @@
-- scene:gltf-box: named errors instead of TypeErrors on malformed glTF arrays, 92 bytes gzip.
-- scene:gltf-box+lazy: the same code as scene:gltf-box.
-- goal:gltf-box: 92 bytes for named errors instead of TypeErrors on malformed glTF arrays (#1248)
-- goal:agent-scene: 9 bytes gzip of drift against the size base that every recent pull request shows (#1248)

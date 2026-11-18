@@ -3,7 +3,7 @@ import { invalidField } from './field-error.js';
 import { editField, editBoolean } from './mesh-edit-field.js';
 import { countSelected, selectFaces } from './mesh-select.js';
 import {
-  extrudeFaceRegion, extrudeIndividual, insetRegion, insetIndividual, deleteFaces, flipFaces, translateFaces, mergeByDistance, tagFaces,
+  extrudeFaceRegion, extrudeIndividual, insetRegion, insetIndividual, deleteFaces, flipFaces, translateFaces, transformFaces, mergeByDistance, tagFaces,
   FALLOFF_CURVES,
 } from './mesh-ops.js';
 import { meshBoolean, BOOLEAN_OPERATIONS } from './mesh-boolean.js';
@@ -115,6 +115,56 @@ function normalizeStroke(stroke, index, strokeIndex) {
   return normalized;
 }
 
+function normalizeFalloff(falloff, index) {
+  if (!falloff || typeof falloff !== 'object') throw editField(index, 'falloff', falloff, 'an object such as { "radius": 1, "curve": "smooth", "connected": false }');
+  for (const key of Object.keys(falloff)) {
+    if (!['radius', 'curve', 'connected'].includes(key)) throw editField(index, `falloff.${key}`, falloff[key], `one of the falloff fields radius, curve, connected; remove "${key}"`);
+  }
+  const curve = falloff.curve ?? 'smooth';
+  if (!Object.hasOwn(FALLOFF_CURVES, curve)) throw editField(index, 'falloff.curve', curve, `one of ${Object.keys(FALLOFF_CURVES).join(', ')}`);
+  if (falloff.connected !== undefined && typeof falloff.connected !== 'boolean') throw editField(index, 'falloff.connected', falloff.connected, 'true or false');
+  return {
+    radius: finiteNumber(falloff.radius, index, 'falloff.radius', { minimum: 0, exclusiveMinimum: true }),
+    curve, connected: falloff.connected ?? false,
+  };
+}
+
+const MAX_TRANSFORM_SCALE = 1000;
+
+function normalizeTransformRotation(rotation, index) {
+  if (!rotation || typeof rotation !== 'object' || Array.isArray(rotation)) throw editField(index, 'rotation', rotation, 'an object such as { "axis": [0, 1, 0], "angle": 1.5708 } (angle in radians)');
+  for (const key of Object.keys(rotation)) {
+    if (!['axis', 'angle'].includes(key)) throw editField(index, `rotation.${key}`, rotation[key], `one of the rotation fields axis, angle; remove "${key}"`);
+  }
+  const axis = vector(rotation.axis, index, 'rotation.axis');
+  if (axis.every(component => component === 0)) throw editField(index, 'rotation.axis', axis, 'a direction that is not all zeros, such as [0, 1, 0]');
+  const angle = finiteNumber(rotation.angle, index, 'rotation.angle', { minimum: -2 * Math.PI, maximum: 2 * Math.PI });
+  return { axis, angle };
+}
+
+function normalizeTransformScale(scale, index) {
+  const bounds = { minimum: 0, maximum: MAX_TRANSFORM_SCALE, exclusiveMinimum: true };
+  if (!Array.isArray(scale)) return finiteNumber(scale, index, 'scale', bounds);
+  if (scale.length !== 3) throw editField(index, 'scale', scale, 'one number above 0, or an array of three, such as 0.5 or [1, 2, 1]');
+  return scale.map(component => finiteNumber(component, index, 'scale', bounds));
+}
+
+// rotation.angle is radians; a value in degrees is the usual slip, so the bound error says so.
+function normalizeTransformSelection(edit, normalized, index) {
+  if (edit.rotation === undefined && edit.scale === undefined) throw editField(index, 'rotation', undefined, 'a rotation such as { "axis": [0, 1, 0], "angle": 0.5 } (radians; 90 degrees is 1.5708), a scale such as 0.5, or both');
+  if (edit.pivot !== undefined) normalized.pivot = vector(edit.pivot, index, 'pivot');
+  if (edit.rotation !== undefined) {
+    try {
+      normalized.rotation = normalizeTransformRotation(edit.rotation, index);
+    } catch (error) {
+      if (error.fieldPath?.endsWith('rotation.angle')) error.message += ' The angle is in radians (90 degrees is 1.5708), not degrees.';
+      throw error;
+    }
+  }
+  if (edit.scale !== undefined) normalized.scale = normalizeTransformScale(edit.scale, index);
+  if (edit.falloff !== undefined) normalized.falloff = normalizeFalloff(edit.falloff, index);
+}
+
 /** Validate an edit list without running it. Returns normalized copies with default names filled in. */
 export function normalizeMeshEdits(edits) {
   if (!Array.isArray(edits)) throw invalidField('edits', edits, 'an array of edits, such as [{ "op": "subdivide", "levels": 1 }]', TypeError);
@@ -154,20 +204,10 @@ export function normalizeMeshEdits(edits) {
         break;
       case 'translate':
         normalized.offset = vector(edit.offset, index, 'offset');
-        if (edit.falloff !== undefined) {
-          const falloff = edit.falloff;
-          if (!falloff || typeof falloff !== 'object') throw editField(index, 'falloff', falloff, 'an object such as { "radius": 1, "curve": "smooth", "connected": false }');
-          for (const key of Object.keys(falloff)) {
-            if (!['radius', 'curve', 'connected'].includes(key)) throw editField(index, `falloff.${key}`, falloff[key], `one of the falloff fields radius, curve, connected; remove "${key}"`);
-          }
-          const curve = falloff.curve ?? 'smooth';
-          if (!Object.hasOwn(FALLOFF_CURVES, curve)) throw editField(index, 'falloff.curve', curve, `one of ${Object.keys(FALLOFF_CURVES).join(', ')}`);
-          if (falloff.connected !== undefined && typeof falloff.connected !== 'boolean') throw editField(index, 'falloff.connected', falloff.connected, 'true or false');
-          normalized.falloff = {
-            radius: finiteNumber(falloff.radius, index, 'falloff.radius', { minimum: 0, exclusiveMinimum: true }),
-            curve, connected: falloff.connected ?? false,
-          };
-        }
+        if (edit.falloff !== undefined) normalized.falloff = normalizeFalloff(edit.falloff, index);
+        break;
+      case 'transform_selection':
+        normalizeTransformSelection(edit, normalized, index);
         break;
       case 'boolean': {
         if (!BOOLEAN_OPERATIONS.includes(edit.operation)) throw editField(index, 'operation', edit.operation, `one of ${BOOLEAN_OPERATIONS.join(', ')}`);
@@ -630,6 +670,9 @@ function runEdit(current, edit, index, { resolveCutter, limits }) {
       break;
     case 'translate':
       result.movedVertices = translateFaces(editable, mask, edit).movedVertices;
+      break;
+    case 'transform_selection':
+      result.movedVertices = transformFaces(editable, mask, edit).movedVertices;
       break;
     case 'tag':
       tagFaces(editable, Array.from(mask.keys()).filter(face => mask[face]), edit.name);

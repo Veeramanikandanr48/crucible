@@ -11,6 +11,9 @@ Then render the GLB with a scene.json (glb, hdri, eye [2.5764, 1.0945, 4.4658], 
 
   node scripts/render-media.mjs --kind image --scene file --config <outputDirectory>/scene.json --width 1600 --height 900 --output hero.png
 
+The Lone Monk and Barbershop exports have flat Blender cameras; their eye and target are committed in bench/scene-frames/camera-overrides.json
+and written into scene.json by `npm run bench:scene-frames -- <outputDirectory>` (#2158).
+
 Old demo scenes shade with Cycles-only Diffuse, Glossy and Glass nodes, which the glTF exporter skips. This script puts a
 Principled BSDF in their place first (base colour or the first image texture upstream of the Diffuse colour, roughness, metal for
 a lone Glossy, a soft alpha for Glass), so colours and textures survive. It is an approximation, not a Cycles match.

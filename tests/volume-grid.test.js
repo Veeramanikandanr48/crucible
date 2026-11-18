@@ -25,6 +25,19 @@ test('half floats round trip the values a simulation stores', () => {
   assert.equal(floatToHalf(1e9), 0x7c00, 'past the range is infinity');
 });
 
+test('the decoded floats of a grid are the half float of every bit pattern, for each channel', () => {
+  const everyPattern = new Uint16Array(65536).map((_, bits) => bits);
+  const grid = { resolution: [256, 16, 16], size: [1, 1, 1], channels: { density: everyPattern, flame: everyPattern.slice().reverse() } };
+  const floats = volumeGridFloats(grid);
+  for (let bits = 0; bits < 65536; bits++) {
+    const expected = halfToFloat(bits);
+    const reversed = halfToFloat(65535 - bits);
+    assert.ok(Object.is(floats.density[bits], Math.fround(expected)) || Number.isNaN(expected) && Number.isNaN(floats.density[bits]), `density bits ${bits}`);
+    assert.ok(Object.is(floats.flame[bits], Math.fround(reversed)) || Number.isNaN(reversed) && Number.isNaN(floats.flame[bits]), `flame bits ${bits}`);
+  }
+  assert.equal(volumeGridFloats(grid), floats, 'decoded once per grid');
+});
+
 test('a grid file encodes and decodes with its channels, resolution and size', () => {
   const resolution = [4, 3, 2];
   const bytes = encodeVolumeGrid({ resolution, size: [2, 1.5, 1], channels: uniformGrid(resolution, { density: 0.75, flame: 2 }) });
@@ -210,6 +223,7 @@ test('the checked in 32 cube explosion frame decodes to a plausible fireball', (
 
 // Local volumes without a grid keep their bytes: these fingerprints were taken on main before the grid code and must not move.
 // The box and the sphere overlap along the ray, so the crossing fingerprint was retaken when overlapping volumes began to march together (#1722).
+// It was retaken again when each step began to weight its glow by the exact step integral (#1894).
 test('volumes without a grid pack, profile and trace to the same bytes as before', () => {
   const volumes = resolveLocalVolumes([
     { shape: 'box', center: [0, 1, 0], size: [2, 2, 2], density: 2, falloff: 0.4, noiseAmount: 0.5, noiseScale: 2, emission: [1, 0.4, 0.1], emissionStrength: 3, scatter: 0.5, steps: 12 },
@@ -231,7 +245,7 @@ test('volumes without a grid pack, profile and trace to the same bytes as before
   const fingerprint = values => createHash('sha256').update(Buffer.from(new Float64Array(values).buffer)).digest('hex').slice(0, 16);
   assert.equal(packed.digest('hex').slice(0, 16), '622e0fbca427f116');
   assert.equal(fingerprint(profiles), '0039eaf64dc4fe26');
-  assert.equal(fingerprint(results), 'a6e4ff7148ecc6e3');
+  assert.equal(fingerprint(results), '3ccaa9894a0a331a');
 });
 
 test('the MCP grid folder loads name.67vg files and nothing that looks like a path', async () => {

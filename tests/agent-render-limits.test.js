@@ -34,3 +34,21 @@ test('capabilities report the job limits from the validator constants, not liter
   assert.throws(() => normalizeJobSettings({ ...videoSettings, fps: MAXIMUM_JOB_FPS + 1 }, [], null), /fps/);
   assert.throws(() => normalizeJobSettings({ ...videoSettings, fps: MAXIMUM_JOB_FPS, duration: MAXIMUM_JOB_FRAMES / MAXIMUM_JOB_FPS + 1 }, [], null), new RegExp(`${MAXIMUM_JOB_FRAMES} frames`));
 });
+
+test('animation settings on a scene without clips say so and what to pass instead', () => {
+  const recipe = { format: 'crucible.scene' };
+  const settings = { kind: 'image', width: 640, height: 360, animation: { clip: 0 } };
+  for (const clips of [[], undefined]) {
+    assert.throws(() => normalizeJobSettings(settings, clips, recipe), error => {
+      assert.ok(error instanceof RangeError, `expected RangeError, got ${error.constructor.name}`);
+      assert.match(error.message, /scene has none/);
+      assert.match(error.message, /Drop animation/);
+      return true;
+    });
+  }
+});
+
+test('a missing clips list is treated as empty when no animation is requested', () => {
+  const settings = normalizeJobSettings({ kind: 'image', width: 640, height: 360 }, undefined, { format: 'crucible.scene' });
+  assert.equal(settings.animation, undefined);
+});

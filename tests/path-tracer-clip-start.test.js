@@ -43,9 +43,9 @@ test('clipStart must be a finite distance of 0 or more, and the error says what 
   for (const bad of [-1, Number.NaN, '1', 1e6]) assert.throws(() => createCamera({ ...CAMERA, clipStart: bad }, 8, 8), /clipStart must be a distance from 0 to 100000/);
 });
 
-test('the WebGL tracer and the native kernel are told that clipStart is ignored, the CPU and WebGPU tracers are not', () => {
+test('the WebGL tracer is told that clipStart is ignored, the CPU, WebGPU and native kernel are not', () => {
   assert.match(describeIgnoredFeatures([], {}, 'gpu', { clipStart: 1 }).join(' '), /camera\.clipStart is ignored/);
-  assert.match(describeIgnoredFeatures([], {}, 'cpu', { clipStart: 1, kernelMaterials: true }).join(' '), /camera\.clipStart is ignored/);
+  assert.doesNotMatch(describeIgnoredFeatures([], {}, 'cpu', { clipStart: 1, kernelMaterials: true }).join(' '), /clipStart/);
   for (const backend of ['cpu', 'webgpu']) assert.doesNotMatch(describeIgnoredFeatures([], {}, backend, { clipStart: 1 }).join(' '), /clipStart/);
   assert.doesNotMatch(describeIgnoredFeatures([], {}, 'gpu', {}).join(' '), /clipStart/);
 });

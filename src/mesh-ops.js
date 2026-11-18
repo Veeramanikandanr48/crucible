@@ -572,23 +572,71 @@ function spatialDistances(edit, seeds, radius, maxVisits) {
  * vertices follow with a weight from Blender's proportional-editing curves (distance along edges when connected).
  */
 export function translateFaces(edit, mask, { offset, falloff }, { maxFalloffVisits = 50_000_000 } = {}) {
-  const seeds = faceVertexSet(edit, maskedFaces(edit, mask));
-  if (!falloff) {
-    moveVertices(edit, seeds, offset);
-    return { movedVertices: seeds.size };
-  }
-  const curve = FALLOFF_CURVES[falloff.curve ?? 'smooth'];
-  const distances = falloff.connected
-    ? connectedDistances(edit, seeds, falloff.radius)
-    : spatialDistances(edit, seeds, falloff.radius, maxFalloffVisits);
+  const weights = selectionWeights(edit, mask, falloff, maxFalloffVisits);
   const position = edit.vertices.arrays.position;
-  for (const [vertex, distance] of distances) {
-    const weight = seeds.has(vertex) ? 1 : curve(distance / falloff.radius);
+  for (const [vertex, weight] of weights) {
     position[vertex * 3] += offset[0] * weight;
     position[vertex * 3 + 1] += offset[1] * weight;
     position[vertex * 3 + 2] += offset[2] * weight;
   }
-  return { movedVertices: distances.size };
+  return { movedVertices: weights.size };
+}
+
+/** Weight of every vertex a selection moves: 1 on the selected vertices, then the falloff curve out to its radius. */
+function selectionWeights(edit, mask, falloff, maxFalloffVisits) {
+  const seeds = faceVertexSet(edit, maskedFaces(edit, mask));
+  if (!falloff) return new Map([...seeds].map(vertex => [vertex, 1]));
+  const curve = FALLOFF_CURVES[falloff.curve ?? 'smooth'];
+  const distances = falloff.connected
+    ? connectedDistances(edit, seeds, falloff.radius)
+    : spatialDistances(edit, seeds, falloff.radius, maxFalloffVisits);
+  const weights = new Map();
+  for (const [vertex, distance] of distances) weights.set(vertex, seeds.has(vertex) ? 1 : curve(distance / falloff.radius));
+  return weights;
+}
+
+/** Mean position of the vertices of the selected faces: the default pivot of transformFaces. */
+function selectionCentre(edit, mask) {
+  const vertices = faceVertexSet(edit, maskedFaces(edit, mask));
+  const position = edit.vertices.arrays.position;
+  const centre = [0, 0, 0];
+  for (const vertex of vertices) {
+    for (let axis = 0; axis < 3; axis++) centre[axis] += position[vertex * 3 + axis] / vertices.size;
+  }
+  return centre;
+}
+
+/** Rotate `point` about the unit `axis` by `angle` radians (Rodrigues' formula). */
+function rotateAboutAxis(point, axis, angle) {
+  const cosine = Math.cos(angle);
+  const sine = Math.sin(angle);
+  const along = axis[0] * point[0] + axis[1] * point[1] + axis[2] * point[2];
+  const cross = [
+    axis[1] * point[2] - axis[2] * point[1],
+    axis[2] * point[0] - axis[0] * point[2],
+    axis[0] * point[1] - axis[1] * point[0],
+  ];
+  return point.map((component, index) => component * cosine + cross[index] * sine + axis[index] * along * (1 - cosine));
+}
+
+/**
+ * Rotate and scale the vertices of the selected faces about `pivot` (default: their mean position). The rotation
+ * `{ axis, angle }` turns by `angle` radians about `axis`; `scale` is one factor or one per axis, applied before the
+ * rotation. With `falloff`, nearby vertices follow by the curve weight: they turn by weight * angle and scale by
+ * 1 + weight * (scale - 1), so the edit fades to nothing at the radius.
+ */
+export function transformFaces(edit, mask, { pivot, rotation, scale, falloff }, { maxFalloffVisits = 50_000_000 } = {}) {
+  const weights = selectionWeights(edit, mask, falloff, maxFalloffVisits);
+  const centre = pivot ?? selectionCentre(edit, mask);
+  const axis = rotation ? normalize(rotation.axis) : null;
+  const factors = scale === undefined ? [1, 1, 1] : (Array.isArray(scale) ? scale : [scale, scale, scale]);
+  const position = edit.vertices.arrays.position;
+  for (const [vertex, weight] of weights) {
+    const offsetFromPivot = [0, 1, 2].map(component => (position[vertex * 3 + component] - centre[component]) * (1 + weight * (factors[component] - 1)));
+    const turned = axis ? rotateAboutAxis(offsetFromPivot, axis, rotation.angle * weight) : offsetFromPivot;
+    for (let component = 0; component < 3; component++) position[vertex * 3 + component] = centre[component] + turned[component];
+  }
+  return { movedVertices: weights.size };
 }
 
 /**

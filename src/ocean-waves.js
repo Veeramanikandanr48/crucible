@@ -61,7 +61,7 @@ export function oceanWaves({ windSpeed, direction, size, seed, resolution }) {
   return waves;
 }
 
-/** Height, horizontal move and foam of the sea at one rest point and time. */
+/** Height, horizontal move and foam of the sea at one rest point and time, and the velocity of the surface there (`riseSpeed` up, `driftX` and `driftZ` along the horizontal axes). */
 export function oceanSurfaceAt(waves, restX, restZ, time, choppiness) {
   let height = 0;
   let moveX = 0;
@@ -69,6 +69,9 @@ export function oceanSurfaceAt(waves, restX, restZ, time, choppiness) {
   let squeezeXX = 0;
   let squeezeZZ = 0;
   let squeezeXZ = 0;
+  let riseSpeed = 0;
+  let driftX = 0;
+  let driftZ = 0;
   for (const wave of waves) {
     const angle = wave.waveX * restX + wave.waveZ * restZ - wave.frequency * time + wave.phase;
     const sine = Math.sin(angle);
@@ -76,6 +79,10 @@ export function oceanSurfaceAt(waves, restX, restZ, time, choppiness) {
     const directionX = wave.waveX / wave.waveNumber;
     const directionZ = wave.waveZ / wave.waveNumber;
     height += wave.amplitude * cosine;
+    // Time derivatives of the height and of the choppy move: how fast the surface itself travels at this point.
+    riseSpeed += wave.amplitude * wave.frequency * sine;
+    driftX += choppiness * directionX * wave.amplitude * wave.frequency * cosine;
+    driftZ += choppiness * directionZ * wave.amplitude * wave.frequency * cosine;
     moveX -= choppiness * directionX * wave.amplitude * sine;
     moveZ -= choppiness * directionZ * wave.amplitude * sine;
     const slope = choppiness * wave.amplitude * wave.waveNumber * cosine;
@@ -85,5 +92,5 @@ export function oceanSurfaceAt(waves, restX, restZ, time, choppiness) {
   }
   const jacobian = (1 + squeezeXX) * (1 + squeezeZZ) - squeezeXZ * squeezeXZ;
   const foam = Math.min(1, Math.max(0, (FOAM_START - jacobian) / (FOAM_START - FOAM_FULL)));
-  return { height, moveX, moveZ, foam };
+  return { height, moveX, moveZ, foam, riseSpeed, driftX, driftZ };
 }

@@ -6,7 +6,8 @@
 //        [--simplify-above 40000 --simplify-ratio 0.5 --simplify-error 0.01]
 //
 // A primitive that is not a plain triangle list with POSITION, NORMAL and TEXCOORD_0 only is copied byte for byte.
-// Meshes shared by several primitives are encoded once. Nothing is read from the network and no input script is run.
+// A triangle primitive with no triangles is dropped, and a mesh left with no primitives is removed from its nodes, because a meshopt
+// view with count 0 is not valid glTF. Meshes shared by several primitives are encoded once. Nothing is read from the network and no input script is run.
 import { readFileSync, writeFileSync } from 'node:fs';
 import sharp from 'sharp';
 import { MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer';
@@ -15,6 +16,7 @@ const GLB_MAGIC = 0x46546c67;
 const JSON_CHUNK = 0x4e4f534a;
 const BINARY_CHUNK = 0x004e4942;
 const COMPONENT_BYTES = { 5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4 };
+const EMPTY_PRIMITIVE = Symbol('empty primitive');
 const TYPE_COMPONENTS = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
 
 function parseArguments(argv) {
@@ -172,6 +174,29 @@ function boundsOf(positions) {
   return { min, max };
 }
 
+/** Removes meshes without primitives and points the nodes that used them at nothing, so no node references a mesh that does not exist. */
+function removeEmptyMeshes(document) {
+  const newIndexOf = new Map();
+  const keptMeshes = [];
+  document.meshes.forEach((mesh, index) => {
+    if (mesh.primitives.length === 0) return;
+    newIndexOf.set(index, keptMeshes.length);
+    keptMeshes.push(mesh);
+  });
+  if (keptMeshes.length === document.meshes.length) return;
+  for (const node of document.nodes ?? []) {
+    if (node.mesh === undefined) continue;
+    if (newIndexOf.has(node.mesh)) {
+      node.mesh = newIndexOf.get(node.mesh);
+      continue;
+    }
+    delete node.mesh;
+    delete node.skin;
+    delete node.weights;
+  }
+  document.meshes = keptMeshes;
+}
+
 async function main() {
   const { input, output, options } = parseArguments(process.argv.slice(2));
   await Promise.all([MeshoptEncoder.ready, MeshoptSimplifier.ready]);
@@ -198,7 +223,7 @@ async function main() {
 
   const processedGeometry = new Map();
   const copiedAccessors = new Map();
-  const stats = { primitives: 0, copied: 0, verticesBefore: 0, verticesAfter: 0, trianglesAfter: 0 };
+  const stats = { primitives: 0, dropped: 0, copied: 0, verticesBefore: 0, verticesAfter: 0, trianglesAfter: 0 };
 
   function copyAccessor(index) {
     if (copiedAccessors.has(index)) return copiedAccessors.get(index);
@@ -230,6 +255,10 @@ async function main() {
     const sourceIndices = primitive.indices === undefined ? undefined : readIndices(document, binary, primitive.indices);
     stats.verticesBefore += sourceIndices ? sourceIndices.length : positions.length / 3;
     const mesh = reorderMesh(simplifyMesh(buildIndexedMesh(positions, normals, uvs, sourceIndices), options));
+    if (mesh.indices.length === 0) {
+      processedGeometry.set(cacheKey, EMPTY_PRIMITIVE);
+      return EMPTY_PRIMITIVE;
+    }
     stats.verticesAfter += mesh.count;
     stats.trianglesAfter += mesh.indices.length / 3;
 
@@ -269,9 +298,15 @@ async function main() {
   }
 
   for (const mesh of document.meshes) {
+    const keptPrimitives = [];
     for (const primitive of mesh.primitives) {
       stats.primitives++;
       const encoded = isEncodablePrimitive(document, primitive) ? encodePrimitive(primitive) : null;
+      if (encoded === EMPTY_PRIMITIVE) {
+        stats.dropped++;
+        continue;
+      }
+      keptPrimitives.push(primitive);
       if (encoded) {
         primitive.attributes = encoded.attributes;
         primitive.indices = encoded.indices;
@@ -282,7 +317,9 @@ async function main() {
       if (primitive.indices !== undefined) primitive.indices = copyAccessor(primitive.indices);
       for (const target of primitive.targets ?? []) for (const name of Object.keys(target)) target[name] = copyAccessor(target[name]);
     }
+    mesh.primitives = keptPrimitives;
   }
+  removeEmptyMeshes(document);
 
   for (const node of document.nodes ?? []) {
     const instancing = node.extensions?.EXT_mesh_gpu_instancing;

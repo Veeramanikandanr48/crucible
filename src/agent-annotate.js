@@ -1,6 +1,7 @@
 // Marks a person leaves on a rendered view for scene_ask_user (issue #922): pure helpers shared by the preview page and the
-// local annotate server. A mark is a pixel and a short note; the page turns each pixel into a ray and the scene query turns
-// the ray into a part, a world point and a surface normal.
+// local annotate server. A pin is a pixel and a short note; the page turns each pixel into a ray and the scene query turns
+// the ray into a part, a world point and a surface normal. A lasso is a closed outline and a note; the pick runs on a grid of
+// pixels inside it and the answer lists the parts those pixels land on.
 import { mat4, vec4 } from 'gl-matrix';
 import { applyProjection } from './camera.js';
 
@@ -11,6 +12,11 @@ export const ANNOTATE_LIMITS = Object.freeze({
   defaultTimeoutSeconds: 300,
   maxTimeoutSeconds: 900,
   maxImageBytes: 1024 * 1024,
+  minLassoPoints: 3,
+  maxLassoPoints: 64,
+  lassoSamplesPerAxis: 24,
+  edgeCoverage: 0.15,
+  maxSharedMaterialParts: 8,
 });
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47];
@@ -19,23 +25,79 @@ function invalidMarks(detail) {
   return new TypeError(`The annotate marks are invalid: ${detail}`);
 }
 
+function roundedPixel(value) {
+  return Math.round(value * 10) / 10;
+}
+
+function validNote(note, index) {
+  if (typeof note !== 'string' || note.length > ANNOTATE_LIMITS.maxNoteLength) {
+    throw invalidMarks(`mark ${index + 1} note must be text of at most ${ANNOTATE_LIMITS.maxNoteLength} characters.`);
+  }
+  return note.trim();
+}
+
+function validatePinMark(mark, index, { width, height }) {
+  const { x, y, note = '' } = mark;
+  if (!Number.isFinite(x) || x < 0 || x > width) throw invalidMarks(`mark ${index + 1} x must be a pixel from 0 to ${width}.`);
+  if (!Number.isFinite(y) || y < 0 || y > height) throw invalidMarks(`mark ${index + 1} y must be a pixel from 0 to ${height}.`);
+  return { x: roundedPixel(x), y: roundedPixel(y), note: validNote(note, index) };
+}
+
+function validateLassoMark(mark, index, { width, height }) {
+  const { points, note = '' } = mark;
+  const { minLassoPoints, maxLassoPoints } = ANNOTATE_LIMITS;
+  if (!Array.isArray(points) || points.length < minLassoPoints || points.length > maxLassoPoints) {
+    const got = Array.isArray(points) ? `${points.length} points` : typeof points;
+    throw invalidMarks(`mark ${index + 1} points must be an array of ${minLassoPoints} to ${maxLassoPoints} [x, y] pixels, got ${got}.`);
+  }
+  const clean = points.map((point, pointIndex) => {
+    const valid = Array.isArray(point) && point.length === 2
+      && Number.isFinite(point[0]) && point[0] >= 0 && point[0] <= width
+      && Number.isFinite(point[1]) && point[1] >= 0 && point[1] <= height;
+    if (!valid) throw invalidMarks(`mark ${index + 1} points[${pointIndex}] must be [x, y] with x from 0 to ${width} and y from 0 to ${height}.`);
+    return [roundedPixel(point[0]), roundedPixel(point[1])];
+  });
+  if (polygonArea(clean) < 1) throw invalidMarks(`mark ${index + 1} points must outline an area of at least 1 square pixel, not a line or a dot.`);
+  return { kind: 'lasso', points: clean, note: validNote(note, index) };
+}
+
 /**
- * Checks marks sent by the annotate page. Returns clean { x, y, note } records with pixel positions inside the view.
- * Throws a TypeError that says which mark failed, so a broken page cannot slip unbounded data to the agent.
+ * Checks marks sent by the annotate page. Returns clean records with pixel positions inside the view: { x, y, note } for a pin
+ * and { kind: 'lasso', points, note } for a lasso. Throws a TypeError that says which mark failed, so a broken page cannot slip
+ * unbounded data to the agent.
  */
 export function validateMarks(marks, { width, height, maxMarks = ANNOTATE_LIMITS.maxMarks }) {
   if (!Array.isArray(marks)) throw invalidMarks('marks must be an array.');
   if (marks.length > maxMarks) throw invalidMarks(`at most ${maxMarks} marks, got ${marks.length}.`);
   return marks.map((mark, index) => {
     if (!mark || typeof mark !== 'object' || Array.isArray(mark)) throw invalidMarks(`mark ${index + 1} must be an object.`);
-    const { x, y, note = '' } = mark;
-    if (!Number.isFinite(x) || x < 0 || x > width) throw invalidMarks(`mark ${index + 1} x must be a pixel from 0 to ${width}.`);
-    if (!Number.isFinite(y) || y < 0 || y > height) throw invalidMarks(`mark ${index + 1} y must be a pixel from 0 to ${height}.`);
-    if (typeof note !== 'string' || note.length > ANNOTATE_LIMITS.maxNoteLength) {
-      throw invalidMarks(`mark ${index + 1} note must be text of at most ${ANNOTATE_LIMITS.maxNoteLength} characters.`);
-    }
-    return { x: Math.round(x * 10) / 10, y: Math.round(y * 10) / 10, note: note.trim() };
+    if (mark.kind === 'lasso') return validateLassoMark(mark, index, { width, height });
+    if (mark.kind !== undefined && mark.kind !== 'pin') throw invalidMarks(`mark ${index + 1} kind must be "pin" or "lasso", got ${JSON.stringify(mark.kind)}.`);
+    return validatePinMark(mark, index, { width, height });
   });
+}
+
+/** Area of a polygon of [x, y] points, by the shoelace formula. */
+export function polygonArea(points) {
+  let twiceArea = 0;
+  points.forEach(([x, y], index) => {
+    const [nextX, nextY] = points[(index + 1) % points.length];
+    twiceArea += x * nextY - nextX * y;
+  });
+  return Math.abs(twiceArea) / 2;
+}
+
+/** True when the pixel lies inside the polygon (even-odd rule: a loop the outline crosses itself into counts as outside). */
+export function pointInPolygon(points, x, y) {
+  let inside = false;
+  for (let index = 0, previous = points.length - 1; index < points.length; previous = index++) {
+    const [currentX, currentY] = points[index];
+    const [previousX, previousY] = points[previous];
+    const crosses = (currentY > y) !== (previousY > y)
+      && x < (previousX - currentX) * (y - currentY) / (previousY - currentY) + currentX;
+    if (crosses) inside = !inside;
+  }
+  return inside;
 }
 
 /** True when the base64 text is a PNG within the image budget. */
@@ -68,19 +130,90 @@ function roundedVector(vector) {
   return Array.from(vector, value => Math.round(value * 1000) / 1000);
 }
 
-/** Numbers the marks and attaches what each one points at: part ID, world point, normal and distance, or null on empty sky. */
-export function describeMarks(marks, camera, { width, height, raycast }) {
+function hitFields(hit) {
+  return {
+    partId: hit ? hit.id : null,
+    point: hit ? roundedVector(hit.point) : null,
+    normal: hit ? roundedVector(hit.normal) : null,
+    distance: hit ? Math.round(hit.distance * 1000) / 1000 : null,
+    material: hit?.material ?? null,
+  };
+}
+
+function polygonCentre(points) {
+  const sum = points.reduce((total, [x, y]) => [total[0] + x, total[1] + y], [0, 0]);
+  return [roundedPixel(sum[0] / points.length), roundedPixel(sum[1] / points.length)];
+}
+
+/**
+ * The pixels a lasso is picked at: the centres of a grid over its bounding box that fall inside the outline, plus the outline's
+ * centre when that is inside too. The grid is fixed, so the same outline always picks the same pixels.
+ */
+export function lassoSamplePixels(points) {
+  const [left, right] = [Math.min(...points.map(point => point[0])), Math.max(...points.map(point => point[0]))];
+  const [top, bottom] = [Math.min(...points.map(point => point[1])), Math.max(...points.map(point => point[1]))];
+  const perAxis = ANNOTATE_LIMITS.lassoSamplesPerAxis;
+  const samples = [];
+  for (let row = 0; row < perAxis; row++) {
+    for (let column = 0; column < perAxis; column++) {
+      const pixel = [left + (column + 0.5) / perAxis * (right - left), top + (row + 0.5) / perAxis * (bottom - top)];
+      if (pointInPolygon(points, pixel[0], pixel[1])) samples.push(pixel);
+    }
+  }
+  const centre = polygonCentre(points);
+  if (pointInPolygon(points, centre[0], centre[1])) samples.push(centre);
+  return samples;
+}
+
+// The other parts, outside the mark, that use the same material: recolouring that material would change them too.
+function sharedMaterialFields(material, markedIds, partMaterials, ownId) {
+  if (material === null || !partMaterials) return {};
+  const others = Object.keys(partMaterials).filter(id => partMaterials[id] === material && id !== ownId && !markedIds.has(id)).sort();
+  if (others.length === 0) return {};
+  const cap = ANNOTATE_LIMITS.maxSharedMaterialParts;
+  return { materialSharedWith: others.slice(0, cap), ...(others.length > cap ? { materialSharedWithMore: others.length - cap } : {}) };
+}
+
+// The parts under a lasso, most covered first. Each carries its share of the picked pixels; the lasso's own hit fields are the
+// most covered part's hit nearest the outline's centre.
+function describeLasso(mark, index, camera, { width, height, raycast, partMaterials }) {
+  const centre = polygonCentre(mark.points);
+  const samples = lassoSamplePixels(mark.points);
+  const groups = new Map();
+  for (const [pixelX, pixelY] of samples) {
+    const hit = raycast(pixelRay(camera, pixelX, pixelY, width, height));
+    if (!hit) continue;
+    const offset = Math.hypot(pixelX - centre[0], pixelY - centre[1]);
+    const group = groups.get(hit.id) ?? { count: 0, hit, offset };
+    group.count += 1;
+    if (offset < group.offset) Object.assign(group, { hit, offset });
+    groups.set(hit.id, group);
+  }
+  const ranked = [...groups.entries()].sort(([firstId, first], [secondId, second]) => second.count - first.count || (firstId < secondId ? -1 : 1));
+  const measured = ranked.map(([partId, group]) => ({
+    partId, samples: group.count, coverage: Math.round(group.count / samples.length * 100) / 100, material: group.hit.material ?? null,
+  }));
+  // A grazed edge part is listed but not meant by the outline, so its material still counts as shared with it.
+  const markedIds = new Set(measured.filter(part => part.coverage >= ANNOTATE_LIMITS.edgeCoverage).map(part => part.partId));
+  const parts = measured.map(part => ({
+    ...part,
+    ...(markedIds.has(part.partId) ? {} : { edge: true }),
+    ...sharedMaterialFields(part.material, markedIds, partMaterials, part.partId),
+  }));
+  return { number: index + 1, kind: 'lasso', pixel: centre, points: mark.points, note: mark.note, ...hitFields(ranked[0]?.[1].hit), parts };
+}
+
+/**
+ * Numbers the marks and attaches what each one points at: part ID, world point, normal and distance, or null on empty sky.
+ * A lasso also returns kind, points and parts (the parts under its outline); its partId and point are the most covered part's.
+ * partMaterials ({ partId: material }, optional) lets each lasso part, and the part a pin lands on, list materialSharedWith: the unmarked parts on its material.
+ * A part covering under ANNOTATE_LIMITS.edgeCoverage of the picked pixels is marked edge: true and stays listed.
+ */
+export function describeMarks(marks, camera, { width, height, raycast, partMaterials }) {
   return marks.map((mark, index) => {
+    if (mark.kind === 'lasso') return describeLasso(mark, index, camera, { width, height, raycast, partMaterials });
     const hit = raycast(pixelRay(camera, mark.x, mark.y, width, height));
-    return {
-      number: index + 1,
-      pixel: [mark.x, mark.y],
-      note: mark.note,
-      partId: hit ? hit.id : null,
-      point: hit ? roundedVector(hit.point) : null,
-      normal: hit ? roundedVector(hit.normal) : null,
-      distance: hit ? Math.round(hit.distance * 1000) / 1000 : null,
-      material: hit?.material ?? null,
-    };
+    const shared = hit ? sharedMaterialFields(hit.material ?? null, new Set([hit.id]), partMaterials, hit.id) : {};
+    return { number: index + 1, pixel: [mark.x, mark.y], note: mark.note, ...hitFields(hit), ...shared };
   });
 }

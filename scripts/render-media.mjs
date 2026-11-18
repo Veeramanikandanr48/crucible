@@ -51,6 +51,8 @@ export function renderEncoderOptions({ ffmpeg, output, fps, captureFormat, width
 }
 
 const AUDIO_LENGTH_TOLERANCE_SECONDS = 0.05;
+// A large file scene such as the Barbershop benchmark takes about a minute to load when other jobs share the machine (#2158).
+const SCENE_READY_TIMEOUT_MILLISECONDS = 240000;
 
 /** Decodes the audio stream of a finished file and throws when there is none or, given the picture length, when its length is off. */
 export async function assertOutputHasAudio(ffmpeg, output, expectedSeconds) {
@@ -222,7 +224,7 @@ export async function renderMedia(values = process.argv.slice(2)) {
       });
     }
     await page.goto(`http://127.0.0.1:${serverPort}/${route}?${query}`);
-    await page.waitForFunction((mode) => window.__fileSceneError || window.__scene?.renderer || (mode === 'film' ? window.__filmReady : mode === 'nature' ? window.__nature?.renderer : mode === 'object' ? window.__studio?.renderer : false), scene, { timeout: 60000 });
+    await page.waitForFunction((mode) => window.__fileSceneError || window.__scene?.renderer || (mode === 'film' ? window.__filmReady : mode === 'nature' ? window.__nature?.renderer : mode === 'object' ? window.__studio?.renderer : false), scene, { timeout: SCENE_READY_TIMEOUT_MILLISECONDS });
     const fileSceneError = await page.evaluate(() => window.__fileSceneError);
     if (fileSceneError) throw new Error(`Scene file failed to load: ${fileSceneError}`);
     if (options.asset) {

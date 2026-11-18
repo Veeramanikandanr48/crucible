@@ -1,0 +1,18 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 2003,
+    "title": "A bug",
+    "body": "x",
+    "labels": [],
+    "assignees": [
+      {
+        "login": "anxuanng"
+      }
+    ],
+    "milestone": null
+  },
+  "repository": {
+    "full_name": "codepawl/crucible"
+  }
+}

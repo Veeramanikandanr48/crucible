@@ -4,6 +4,7 @@
 import { createRuntime } from '../src/runtime.js';
 import {
   createBroadcastChannelTransport,
+  createDataChannelTransport,
   createNetcode,
   createWebSocketTransport,
 } from '../src/netcode.js';
@@ -64,6 +65,80 @@ export function withInjectedLatency(transport, delayMilliseconds) {
   return delayed;
 }
 
+// WebRTC in one browser needs no server: the two pages trade the offer and the answer over a BroadcastChannel. A real game
+// sends the same two messages through its own signalling service. Candidates are gathered before the description is sent, so
+// there is no trickle. The client says hello until the host answers, so either page may load first.
+const SIGNALLING_CHANNEL_NAME = 'crucible-netcode-signalling';
+const SIGNALLING_RETRY_MILLISECONDS = 250;
+const ICE_GATHERING_TIMEOUT_MILLISECONDS = 2000;
+
+function describeWhenGathered(connection) {
+  return new Promise(resolve => {
+    const finish = () => resolve(connection.localDescription.toJSON());
+    if (connection.iceGatheringState === 'complete') {
+      finish();
+      return;
+    }
+    connection.addEventListener('icegatheringstatechange', () => { if (connection.iceGatheringState === 'complete') finish(); });
+    setTimeout(finish, ICE_GATHERING_TIMEOUT_MILLISECONDS);
+  });
+}
+
+function waitForOpen(channel) {
+  return new Promise((resolve, reject) => {
+    if (channel.readyState === 'open') {
+      resolve();
+      return;
+    }
+    channel.addEventListener('open', () => resolve(), { once: true });
+    channel.addEventListener('error', () => reject(new Error('The WebRTC data channel failed to open.')), { once: true });
+  });
+}
+
+async function createWebRtcTransport(playerId, remoteId, isHost) {
+  const transport = createDataChannelTransport({ id: playerId });
+  const signalling = new BroadcastChannel(SIGNALLING_CHANNEL_NAME);
+  const connection = new RTCPeerConnection({ iceServers: [] });
+  const channelOpen = new Promise(resolve => {
+    if (isHost) {
+      const channel = connection.createDataChannel('netcode', { ordered: false, maxRetransmits: 0 });
+      transport.addChannel(remoteId, channel);
+      resolve(waitForOpen(channel));
+    } else {
+      connection.addEventListener('datachannel', event => {
+        transport.addChannel(remoteId, event.channel);
+        resolve(waitForOpen(event.channel));
+      });
+    }
+  });
+  let offerSent = false;
+  signalling.onmessage = async event => {
+    const message = event.data;
+    if (message.to !== playerId) return;
+    if (isHost && message.type === 'hello' && !offerSent) {
+      offerSent = true;
+      await connection.setLocalDescription(await connection.createOffer());
+      signalling.postMessage({ to: remoteId, type: 'offer', description: await describeWhenGathered(connection) });
+    } else if (isHost && message.type === 'answer' && connection.signalingState === 'have-local-offer') {
+      await connection.setRemoteDescription(message.description);
+    } else if (!isHost && message.type === 'offer' && connection.signalingState === 'stable') {
+      await connection.setRemoteDescription(message.description);
+      await connection.setLocalDescription(await connection.createAnswer());
+      signalling.postMessage({ to: remoteId, type: 'answer', description: await describeWhenGathered(connection) });
+    }
+  };
+  const helloTimer = isHost ? null : setInterval(() => signalling.postMessage({ to: remoteId, type: 'hello' }), SIGNALLING_RETRY_MILLISECONDS);
+  await channelOpen;
+  clearInterval(helloTimer);
+  const closeChannels = transport.close;
+  transport.close = () => {
+    closeChannels();
+    connection.close();
+    signalling.close();
+  };
+  return transport;
+}
+
 async function createSampleTransport(options, playerId, remoteId) {
   if (options.transport === 'broadcast') {
     return createBroadcastChannelTransport(new BroadcastChannel('crucible-netcode-sample'), { id: playerId });
@@ -72,7 +147,8 @@ async function createSampleTransport(options, playerId, remoteId) {
     const socket = await openWebSocket(options.relayPort ?? DEFAULT_RELAY_PORT, playerId);
     return createWebSocketTransport(socket, { id: playerId, remoteId, multiplexed: true });
   }
-  throw new RangeError(`Sample transport must be "broadcast" or "websocket", got ${JSON.stringify(options.transport)}.`);
+  if (options.transport === 'webrtc') return createWebRtcTransport(playerId, remoteId, options.role === 'host');
+  throw new RangeError(`Sample transport must be "broadcast", "websocket" or "webrtc", got ${JSON.stringify(options.transport)}.`);
 }
 
 function readKeyboard(pressedKeys) {
@@ -104,7 +180,7 @@ function drawPlayers(canvas, netcode, localId) {
   }
 }
 
-// options: { role: 'host' | 'client', transport: 'broadcast' | 'websocket', relayPort, delayMilliseconds, canvas,
+// options: { role: 'host' | 'client', transport: 'broadcast' | 'websocket' | 'webrtc', relayPort, delayMilliseconds, canvas,
 //            snapshotEveryTicks, interpolationDelaySeconds }
 export async function startSample(options) {
   const isHost = options.role === 'host';

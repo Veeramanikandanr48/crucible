@@ -8,6 +8,7 @@ import { resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { carAsset } from '../tests/fixtures/car-glb.js';
+import { assertToolListMatchesServer } from './mcp-tool-list.mjs';
 
 setPriority(0, constants.priority.PRIORITY_BELOW_NORMAL);
 await mkdir('artifacts/drive-proof', { recursive: true });
@@ -46,7 +47,7 @@ const camera = { eye: [-6, 7, -9], target: [4, 0, 3], fov: 50 };
 
 try {
   await client.connect(transport, { timeout: 180000 });
-  assert.equal((await client.listTools()).tools.length, 22);
+  await assertToolListMatchesServer(client);
   const catalog = (await call('scene_asset_catalog')).structuredContent;
   const car = catalog.assets.find(asset => asset.name === 'car.glb').assetId;
 

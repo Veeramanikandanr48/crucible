@@ -1,0 +1,36 @@
+name: Sync PR metadata
+
+# Fills the assignee, the milestone and the linked issue's priority and goal labels on new pull requests and issues (#1944).
+# It runs on pull_request_target, so it NEVER checks out, builds or runs the pull request's code: the checkout is the
+# default branch, and the pull request is read from the event file. It only adds, never removes, and posts no comments.
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, ready_for_review]
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sync-pr-metadata-${{ github.event.pull_request.number || github.event.issue.number }}
+  # A newer run for the same pull request reads the same current state, so it replaces the older one.
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - run: node scripts/sync-pr-metadata.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

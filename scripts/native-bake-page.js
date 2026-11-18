@@ -124,7 +124,7 @@ function tablesForTransport(input, transport) {
 /**
  * Takes the byte tables out of an export made with `transport: 'chunks'`. `manifest` is the export with `chunks` in place of
  * `tables`: the byte length of every table and the chunk size, small enough for one message. `tables` are the bytes the
- * holder serves with `readExportChunk` until the reader has them all.
+ * holder serves as one Blob until the reader has them all.
  */
 export function splitExportForChunks(exported) {
   const { tables, ...rest } = exported;
@@ -136,18 +136,6 @@ export function splitExportForChunks(exported) {
     byteLengths[name] = bytes.byteLength;
   }
   return { manifest: { ...rest, chunks: { tables: byteLengths, chunkBytes: NATIVE_EXPORT_CHUNK_BYTES } }, tables };
-}
-
-/** One chunk of a byte table as base64: the NATIVE_EXPORT_CHUNK_BYTES from `offset`, or what is left of the table. */
-export function readExportChunk(tables, name, offset) {
-  const bytes = tables?.[name];
-  if (!(bytes instanceof Uint8Array)) {
-    throw new RangeError(`readExportChunk: there is no table "${name}" in the held export (tables: ${Object.keys(tables ?? {}).join(', ') || 'none'}).`);
-  }
-  if (!Number.isInteger(offset) || offset < 0 || offset >= bytes.byteLength || offset % NATIVE_EXPORT_CHUNK_BYTES !== 0) {
-    throw new RangeError(`readExportChunk: offset ${offset} of table "${name}" must be a multiple of ${NATIVE_EXPORT_CHUNK_BYTES} below its ${bytes.byteLength} bytes.`);
-  }
-  return bytesToBase64(bytes.subarray(offset, Math.min(bytes.byteLength, offset + NATIVE_EXPORT_CHUNK_BYTES)));
 }
 
 /**
@@ -174,7 +162,7 @@ export function exportNativeSceneTables({ parts, environment, camera, options, k
     throw new RangeError(`exportNativeSceneTables: maximumTriangles must be an integer from 1 to ${NATIVE_CHUNKED_MAXIMUM_TRIANGLES}, got ${JSON.stringify(chunkedMaximumTriangles)}. Pass chunkedTriangleBound(capacity.maxUniqueTriangles).`);
   }
   const nativeLimits = wholeMaterials ? { maximumTriangles, maximumInstances: NATIVE_JOB_MAXIMUM_INSTANCES, maximumLights: NATIVE_JOB_MAXIMUM_LIGHTS, maximumParts: NATIVE_JOB_MAXIMUM_PARTS } : {};
-  let traceScene = buildTraceScene(parts, environment, { instancing: wholeMaterials && instancing === true, ...nativeLimits });
+  let traceScene = buildTraceScene(parts, environment, { instancing: wholeMaterials && instancing === true, instanceNormalMappedParts: wholeMaterials, ...nativeLimits });
   // Cook draws grid local volumes. Its packers refuse `localVolumes`, so the grids go in after them; any other volume kind is refused here.
   const gridVolumes = nativeGridVolumes(traceScene.localVolumes);
   const withGrids = input => (gridVolumes ? appendNativeGridVolumes(input, gridVolumes, gridVolumeInput) : input);

@@ -2,7 +2,7 @@ import { buildMegakernelSource, PATH_STATE_VECTORS, WAVEFRONT_SOURCE, WAVEFRONT_
 import { resolveLightSelection } from './path-tracer-light-tree.js';
 import { gpuTriangleCapacity, packAtlas, packEnvironment, packLightTree, packLights, packMaterials, packNodes, packSubsurface, packTriangles, sceneUsesSubsurface } from './path-tracer-gpu-pack.js';
 import { MAX_GPU_TRACE_TRIANGLES, MAX_TRACE_TRIANGLES } from './path-tracer-scene.js';
-import { assertWebGpuLocalVolumes, packWebGpuLocalVolumes } from './path-tracer-webgpu-local-volumes.js';
+import { assertWebGpuLocalVolumes, packWebGpuLocalVolumes, webGpuVolumeFeatures } from './path-tracer-webgpu-local-volumes.js';
 
 // The WebGPU backend of the path tracer (issue #625): the same scene tables, camera, options and random numbers as the
 // WebGL2 backend (path-tracer-gpu.js) go in, the same buffers come out. The tracer is WGSL compute, so a page needs
@@ -83,10 +83,10 @@ async function getSession() {
 }
 
 /** The WGSL and entry points of a kernel variant; a variant is one of the two kernels, with the optional parts a scene needs. */
-function describeVariant({ kernel, hasVolume, hasLocalVolumes, hasSubsurface, texelBake, realtime }) {
+function describeVariant({ kernel, hasVolume, hasLocalVolumes, hasGridVolume, hasNoiseOctaves, hasEmissionRamp, hasMeshVolume, hasSubsurface, texelBake, realtime }) {
   if (kernel === 'wavefront') return { code: WAVEFRONT_SOURCE, entryPoints: WAVEFRONT_ENTRY_POINTS };
-  if (realtime) return { code: buildMegakernelSource({ hasVolume, hasLocalVolumes, hasSubsurface, realtime }), entryPoints: ['traceRealtime'] };
-  return { code: buildMegakernelSource({ hasVolume, hasLocalVolumes, hasSubsurface, texelBake }), entryPoints: [texelBake ? 'bakeTexels' : 'main'] };
+  if (realtime) return { code: buildMegakernelSource({ hasVolume, hasLocalVolumes, hasGridVolume, hasNoiseOctaves, hasEmissionRamp, hasMeshVolume, hasSubsurface, realtime }), entryPoints: ['traceRealtime'] };
+  return { code: buildMegakernelSource({ hasVolume, hasLocalVolumes, hasGridVolume, hasNoiseOctaves, hasEmissionRamp, hasMeshVolume, hasSubsurface, texelBake }), entryPoints: [texelBake ? 'bakeTexels' : 'main'] };
 }
 
 async function compileKernel(current, variant) {
@@ -103,14 +103,14 @@ async function compileKernel(current, variant) {
 }
 
 async function getKernel(current, variant) {
-  const key = [variant.kernel, variant.hasVolume, variant.hasLocalVolumes, variant.hasSubsurface, variant.texelBake, Boolean(variant.realtime)].join(':');
+  const key = [variant.kernel, variant.hasVolume, variant.hasLocalVolumes, variant.hasGridVolume, variant.hasNoiseOctaves, variant.hasEmissionRamp, variant.hasMeshVolume, variant.hasSubsurface, variant.texelBake, Boolean(variant.realtime)].join(':');
   if (!current.kernels.has(key)) current.kernels.set(key, compileKernel(current, variant));
   return current.kernels.get(key);
 }
 
 /** The optional parts the scene needs, as the kernel variant flags. */
 function sceneFeatures(scene) {
-  return { hasVolume: Boolean(scene.volume), hasLocalVolumes: Boolean(scene.localVolumes), hasSubsurface: sceneUsesSubsurface(scene.materials), texelBake: false };
+  return { hasVolume: Boolean(scene.volume), hasLocalVolumes: Boolean(scene.localVolumes), ...webGpuVolumeFeatures(scene.localVolumes), hasSubsurface: sceneUsesSubsurface(scene.materials), texelBake: false };
 }
 
 function createStorageBuffer(device, data, label) {

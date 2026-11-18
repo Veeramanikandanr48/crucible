@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { parseGltf } from '../src/gltf.js';
 import { createAgentAssetScene } from '../src/agent-asset.js';
 import { skinnedStripAsset } from './fixtures/skinned-strip.js';
+import { agentGroundPlacement } from '../src/agent-ground.js';
 
 const recipe = () => ({ format: 'crucible.asset', schemaVersion: 1, assetId: 'ab'.repeat(32) });
 
@@ -228,5 +229,17 @@ test('decoded instances share original geometry and material wrappers', async ()
   assert.equal(scene.inspect().counts.geometries, 1);
   scene.apply([{ type: 'set-material', id: 'material-0', roughness: 0.2 }], { expectedRevision: 0 });
   assert.equal(scene.parts[1].material.roughness, 0.2);
+  asset.dispose();
+});
+
+test('auto-framed camera and preview ground follow the skinned bounds, not the bind pose', async () => {
+  const asset = await fixture(document => {
+    document.nodes[2].translation = [0, 10, 0];
+  });
+  const scene = createAgentAssetScene(asset, recipe());
+  const [, targetHeight] = scene.camera.target;
+  assert.ok(targetHeight > 12 && targetHeight < 14, `camera target height ${targetHeight} should lie inside the drawn 12 to 14 metres`);
+  const placement = agentGroundPlacement(scene.parts, scene.environment);
+  assert.ok(Math.abs(placement.height - 12) < 1e-4, `ground height ${placement.height} should sit at the drawn minimum 12`);
   asset.dispose();
 });

@@ -28,6 +28,8 @@ const MODULE_LOADERS = {
   liquidShader: () => import('./liquid-shader.js'),
   subsurfaceShader: () => import('./subsurface-shader.js'),
   fogShader: () => import('./fog-shader.js'),
+  retroShader: () => import('./retro-shader.js'),
+  glitterShader: () => import('./glitter-shader.js'),
   worldMaterials: () => import('./world-material-shader.js'),
   terrain: () => import('./agent-terrain.js'),
   navigation: () => import('./agent-navigation.js'),
@@ -39,6 +41,7 @@ const MODULE_LOADERS = {
   lineArt: () => import('./line-art.js'),
   viewTransform: () => import('./view-transform-shader.js'),
   coplanar: () => import('./coplanar-overlap.js'),
+  unsupportedPart: () => import('./unsupported-part.js'),
   physicalSky: () => import('./physical-sky.js'),
   floorSky: () => import('./floor-sky-visibility.js'),
   userPass: () => import('./user-pass.js'),
@@ -58,7 +61,7 @@ let physicsLoader = null;
 // Each test errs on the side of loading: a false positive costs a chunk, a false negative a clear error.
 const MODULE_MARKERS = {
   mesh: ['"type":"mesh"', '"instances"'],
-  modeling: ['"type":"lathe"', '"type":"extrude"', '"type":"tube"', '"type":"curve"', '"type":"sdf"'],
+  modeling: ['"type":"lathe"', '"type":"extrude"', '"type":"tube"', '"type":"curve"', '"type":"sdf"', '"type":"cloud"'],
   text: ['"type":"text"'],
   motion: ['"motion":{', '"bake-motion"', '"add-explosion"'],
   motionBake: ['"bake-motion"'],
@@ -81,9 +84,11 @@ const MODULE_MARKERS = {
   emissionMask: ['"emissionMask"'],
   liquidShader: ['"transmission"', '"liquid"', '"foam"'],
   subsurfaceShader: ['"subsurface"'],
+  retroShader: ['"retro"'],
+  glitterShader: ['"waterGlint"'],
   // Any mention loads it, because an edit can set the density through a path or the environment of an operation.
   fogShader: ['volumeFog', 'localVolumes', '"add-explosion"'],
-  worldMaterials: ['"tag":"water"', '"waterPreset"', '"absorption"', '"turbidity"', '"vegetation":{', '"tag":"foliage"', '"tag":"grass"', '"tag":"terrain"', '"tag":"fire"', '"tag":"smoke"', '"moss"'],
+  worldMaterials: ['"tag":"water"', '"waterPreset"', '"absorption"', '"turbidity"', '"waterRamp"', '"vegetation":{', '"tag":"foliage"', '"tag":"grass"', '"tag":"terrain"', '"tag":"fire"', '"tag":"smoke"', '"moss"'],
   terrain: ['"type":"terrain"'],
   // No recipe text asks for it, only the path option of scene_inspect does, so a host loads it with loadAllAgentSceneModules.
   navigation: [],
@@ -94,14 +99,16 @@ const MODULE_MARKERS = {
   vegetation: ['"vegetation":{', '"wind":{'],
   crowd: ['"crowd":{'],
   lineArt: ['"lines":{', '"toon":'],
-  viewTransform: ['"viewTransform":"agx"', '"viewTransform":"neutral"', '"look":"'],
+  viewTransform: ['"viewTransform":"agx"', '"viewTransform":"neutral"', '"viewTransform":"standard"', '"look":"'],
   // Flush faces are ranked whenever this is loaded (issue #751): the MCP preview registers it, loadAllAgentSceneModules loads it,
   // and so does a recipe that names resolveCoplanar or places an asset, since glTF models nest facades a few millimetres apart.
   // A recipe of plain primitives in a host without it stays free of the 85 KB of flush code, so it needs no on-demand module.
   coplanar: ['"resolveCoplanar"', '"asset":{'],
+  // The support check needs no recipe text: the MCP preview and loadAllAgentSceneModules load it, and a plain host stays free of it.
+  unsupportedPart: [],
   // A closed room a sun lights gets the floor sky trace by default. The recipe text can not say whether a room is closed, so a recipe that names its sun loads it and the module skips an open scene.
   floorSky: ['"keyColor"', '"keyIntensity"'],
-  physicalSky: ['"type":"physical"'],
+  physicalSky: ['"type":"physical"', '"type":"gradient"'],
   userPass: ['"postPasses"'],
   game: ['"game":{', '"set-game"'],
   materialSnippet: ['"snippet":{'],

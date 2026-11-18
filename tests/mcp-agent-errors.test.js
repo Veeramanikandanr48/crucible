@@ -80,7 +80,7 @@ test('scene_render_status given a sessionId says jobs are addressed by jobId alo
 
 test('the other job tools give the same hint for sessionId', async context => {
   const client = await connect(context);
-  const accepted = { scene_render_cancel: 'jobId', scene_render_result: 'jobId (and response_format)', scene_render_release: 'jobId' };
+  const accepted = { scene_render_cancel: 'jobId', scene_render_result: 'jobId (and response_format, images)', scene_render_release: 'jobId' };
   for (const [name, keys] of Object.entries(accepted)) {
     const result = await client.callTool({ name, arguments: { jobId: randomUUID(), sessionId: randomUUID() } });
     assert.equal(result.isError, true, name);
@@ -152,4 +152,19 @@ test('an unknown topic suggests the nearest topic names', async context => {
 
 test('the material pattern limit is listed in the capabilities flags', () => {
   assert.equal(AGENT_SCENE_CAPABILITIES.maxMaterialPatterns, 16);
+});
+
+test('no scene_capabilities topic prints an internal __schema placeholder, and motion expands the driver expression', async context => {
+  const client = await connect(context);
+  const index = (await client.callTool({ name: 'scene_capabilities', arguments: {} })).structuredContent;
+  const topics = [...index.topics.scene, ...index.topics.runtime, ...index.topics.schemas];
+  for (const topic of topics) {
+    const answer = await client.callTool({ name: 'scene_capabilities', arguments: { topic } });
+    assert.doesNotMatch(JSON.stringify(answer.structuredContent ?? answer.content), /__schema/, `topic ${topic} leaks a __schema name`);
+  }
+  const motion = JSON.stringify((await client.callTool({ name: 'scene_capabilities', arguments: { topic: 'motion' } })).structuredContent);
+  assert.match(motion, /"expression":"Expression"/);
+  assert.match(motion, /"influence\??":"number\[0\.\.1\] \| Expression/);
+  assert.ok(motion.includes('"Expression":{"oneOf":["number[-1000000..1000000]","\\"time\\"",'), 'the Expression definition lists its branches');
+  assert.ok(motion.includes('an operator like {\\"mul\\":[2,\\"time\\"]}'), 'the Expression definition shows one worked operator');
 });

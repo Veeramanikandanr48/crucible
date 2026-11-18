@@ -9,14 +9,61 @@ export function readGlb(bytes, subject = 'A GLB') {
   if (bytes.length < 20 || bytes.readUInt32LE(0) !== GLB_MAGIC || bytes.readUInt32LE(16) !== JSON_CHUNK) {
     throw new Error(`${subject} must be a complete glTF 2.0 binary file.`);
   }
-  const jsonLength = bytes.readUInt32LE(12);
-  const document = JSON.parse(bytes.subarray(20, 20 + jsonLength).toString('utf8'));
-  const binaryStart = 20 + jsonLength;
-  if (bytes.length < binaryStart + 8 || bytes.readUInt32LE(binaryStart + 4) !== BINARY_CHUNK) {
-    throw new Error(`${subject} needs a binary chunk that holds its meshes and images.`);
+  const version = bytes.readUInt32LE(4);
+  if (version !== 2) {
+    throw new Error(`${subject} header version is ${version}; pass a glTF 2.0 binary (version 2).`);
   }
-  const binaryLength = bytes.readUInt32LE(binaryStart);
-  return { document, binary: bytes.subarray(binaryStart + 8, binaryStart + 8 + binaryLength) };
+  const declaredTotal = bytes.readUInt32LE(8);
+  if (declaredTotal !== bytes.length) {
+    throw new Error(`${subject} header declares a total length of ${declaredTotal} bytes but the file is ${bytes.length} bytes; pass an undamaged file.`);
+  }
+  const jsonLength = checkedChunkLength(bytes, 12, 20, 'JSON', subject);
+  const document = parseJsonChunk(bytes.subarray(20, 20 + jsonLength), subject);
+  const binary = readBinaryChunk(bytes, 20 + jsonLength, subject);
+  return { document, binary };
+}
+
+/** The declared length of the chunk whose header starts at `headerOffset`, which must be a multiple of 4 and fit before the end of the file. */
+function checkedChunkLength(bytes, headerOffset, dataOffset, chunkName, subject) {
+  const length = bytes.readUInt32LE(headerOffset);
+  if (length % 4 !== 0) {
+    throw new Error(`${subject} ${chunkName} chunk declares ${length} bytes, which is not a multiple of 4; pass an undamaged file.`);
+  }
+  if (dataOffset + length > bytes.length) {
+    throw new Error(`${subject} ${chunkName} chunk declares ${length} bytes but only ${bytes.length - dataOffset} remain in the ${bytes.length} byte file; pass an undamaged file.`);
+  }
+  return length;
+}
+
+function parseJsonChunk(chunkBytes, subject) {
+  try {
+    return JSON.parse(chunkBytes.toString('utf8'));
+  } catch (error) {
+    throw new Error(`${subject} JSON chunk is not valid JSON (${error.message}); pass an undamaged file.`);
+  }
+}
+
+/** The first binary chunk after the JSON chunk, with every chunk bounds checked and a second binary chunk refused. */
+function readBinaryChunk(bytes, firstChunkOffset, subject) {
+  let binary = null;
+  let offset = firstChunkOffset;
+  while (offset < bytes.length) {
+    if (offset + 8 > bytes.length) {
+      throw new Error(`${subject} has ${bytes.length - offset} stray bytes after its last chunk in the ${bytes.length} byte file; pass an undamaged file.`);
+    }
+    const isBinary = bytes.readUInt32LE(offset + 4) === BINARY_CHUNK;
+    const length = checkedChunkLength(bytes, offset, offset + 8, isBinary ? 'BIN' : 'unknown', subject);
+    if (isBinary && binary) {
+      throw new Error(`${subject} has a second BIN chunk at byte ${offset}; a GLB holds one, so pass a file with a single binary chunk.`);
+    }
+    if (isBinary && length === 0) {
+      throw new Error(`${subject} BIN chunk declares 0 bytes; pass a file whose binary chunk holds its meshes and images.`);
+    }
+    if (isBinary) binary = bytes.subarray(offset + 8, offset + 8 + length);
+    offset += 8 + length;
+  }
+  if (!binary) throw new Error(`${subject} needs a binary chunk that holds its meshes and images.`);
+  return binary;
 }
 
 /** The buffer padded with `fill` to a multiple of four bytes. */

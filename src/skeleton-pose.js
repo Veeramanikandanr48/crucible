@@ -11,7 +11,9 @@ import {
 // forward. Quaternions are XYZW; IK targets and poles are in the rig's world space.
 
 const NEAR_ZERO = 1e-9;
-const TO_RADIANS = Math.PI / 180;
+// A two-bone target closer to the root than this fraction of the limb's length warns that it sits on the root.
+const ROOT_TARGET_FRACTION = 1e-3;
+const TO_RADIANS =Math.PI / 180;
 const IDENTITY_ROTATION = Object.freeze([0, 0, 0, 1]);
 
 function jointResolver(rig, prepared) {
@@ -454,10 +456,12 @@ function solveTwoBone(solver, time, context) {
   const lowerLength = vec3.distance(middlePosition, startEnd);
   const toTarget = vec3.subtract(new Float64Array(3), target, rootPosition);
   const targetDistance = vec3.length(toTarget);
-  if (targetDistance < NEAR_ZERO || upperLength < NEAR_ZERO || lowerLength < NEAR_ZERO) {
+  if (upperLength < NEAR_ZERO || lowerLength < NEAR_ZERO) {
     return { reached: false, error: vec3.distance(startEnd, target), warnings: [], limited: [] };
   }
-  const direction = vec3.scale(new Float64Array(3), toTarget, 1 / targetDistance);
+  const direction = targetDistance < NEAR_ZERO
+    ? foldDirection(rootPosition, middlePosition, startEnd)
+    : vec3.scale(new Float64Array(3), toTarget, 1 / targetDistance);
   // Stop just short of the limits: a fully straight limb has no defined bend plane for the next frame.
   const margin = (upperLength + lowerLength) * 1e-4;
   const reachLimit = upperLength + lowerLength - margin;
@@ -502,7 +506,20 @@ function solveTwoBone(solver, time, context) {
     setWorldRotation(solver.end, quat.multiply(new Float64Array(4), turn, state.rotations[solver.end]), weight);
   }
   const error = vec3.distance(state.positions[solver.end], target);
-  return { reached: error <= margin * 2 + NEAR_ZERO, error, warnings: bendWarnings(solver, state, prepared), limited };
+  const warnings = bendWarnings(solver, state, prepared);
+  const rootTargetDistance = (upperLength + lowerLength) * ROOT_TARGET_FRACTION;
+  if (targetDistance < rootTargetDistance) {
+    warnings.unshift({ code: 'target-at-root', message: `The target is ${Number(targetDistance.toFixed(6))} m from ${prepared.joints[solver.root].name}, so the limb folds with no direction from the target. Move the target at least ${Number(rootTargetDistance.toFixed(4))} m off ${prepared.joints[solver.root].name}.` });
+  }
+  return { reached: error <= margin * 2 + NEAR_ZERO, error, warnings, limited };
+}
+
+/** Where a limb folds when the target sits on its root: along the way the end already points, else toward the middle joint. */
+function foldDirection(rootPosition, middlePosition, endPosition) {
+  const toEnd = vec3.subtract(new Float64Array(3), endPosition, rootPosition);
+  if (vec3.length(toEnd) >= NEAR_ZERO) return vec3.normalize(toEnd, toEnd);
+  const toMiddle = vec3.subtract(new Float64Array(3), middlePosition, rootPosition);
+  return vec3.normalize(toMiddle, toMiddle);
 }
 
 /** Turn a joint, or a chain sharing the turn evenly, so its forward axis points at the target. */

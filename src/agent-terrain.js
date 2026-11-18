@@ -3,13 +3,15 @@
 import './world-material-shader.js';
 import { createTerrain } from './terrain.js';
 import { invalidField } from './field-error.js';
+import { diagnostic } from './agent-diagnostics.js';
+import { TERRAIN_DEFAULT_SIZE, TERRAIN_DEFAULT_RESOLUTION, holesCoverWholeGround, holesRemovingNoCell } from './terrain-hole-cells.js';
 
 export const TERRAIN_LIMITS = Object.freeze({
   size: [1, 2000],
   resolution: [2, 256],
   amplitude: [0, 200],
-  defaultSize: 40,
-  defaultResolution: 64,
+  defaultSize: TERRAIN_DEFAULT_SIZE,
+  defaultResolution: TERRAIN_DEFAULT_RESOLUTION,
   defaultAmplitude: 1,
   maximumHoles: 16,
   seed: [0, 0x7fffffff],
@@ -42,14 +44,21 @@ function terrainSeed(value) {
 /** Vertex count of a terrain record, checked against the recipe limits before any ground is built. */
 export function terrainVertexEstimate(value) {
   const resolution = integerWithin(value.resolution, TERRAIN_LIMITS.defaultResolution, TERRAIN_LIMITS.resolution, 'resolution');
-  numberWithin(value.size, TERRAIN_LIMITS.defaultSize, TERRAIN_LIMITS.size, 'size');
+  const size = numberWithin(value.size, TERRAIN_LIMITS.defaultSize, TERRAIN_LIMITS.size, 'size');
   numberWithin(value.amplitude, TERRAIN_LIMITS.defaultAmplitude, TERRAIN_LIMITS.amplitude, 'amplitude');
   terrainSeed(value.seed);
   if (value.holes !== undefined && (!Array.isArray(value.holes) || value.holes.length > TERRAIN_LIMITS.maximumHoles)) {
     throw invalidField('terrain.holes', value.holes, `a list of at most ${TERRAIN_LIMITS.maximumHoles} circles, such as [{ "center": [0, 0], "radius": 2 }]`);
   }
   value.holes?.forEach(checkHole);
+  checkHolesLeaveGround(value.holes, size, resolution);
   return (resolution + 1) * (resolution + 1);
+}
+
+/** Refuses holes that remove every cell: the terrain would have no surface and could not be exported. */
+function checkHolesLeaveGround(holes, size, resolution) {
+  if (!holesCoverWholeGround(holes, size, resolution)) return;
+  throw invalidField('holes', holes, 'holes that leave some ground; these cover the whole terrain, so no surface would remain. Lower a radius or move a center');
 }
 
 function checkHole(hole, index) {
@@ -88,4 +97,12 @@ export function generateTerrainGeometry(value, maxVertices) {
   const vertices = terrainVertexEstimate(value);
   if (vertices > maxVertices) throw invalidField('terrain.resolution', value.resolution ?? TERRAIN_LIMITS.defaultResolution, `a resolution whose ${vertices} vertices fit maxVertices ${maxVertices}; lower it`);
   return createRecipeTerrain(value).parts[0].geometry;
+}
+
+/** Warnings for holes of a terrain record that remove no ground cell, so the terrain looks as if it had no hole. */
+export function terrainHoleDiagnostics(geometry) {
+  return holesRemovingNoCell(geometry).map(({ index, cellSize, smallestRadius }) => diagnostic('terrain-hole-removes-no-cell', 'warning',
+    `${geometry.id}.holes[${index}]`,
+    `Hole ${index} of terrain ${geometry.id} removes no ground cell, so it changes nothing: cells are ${cellSize} m wide and a hole removes a cell only when it reaches the cell's centre.`,
+    `Raise radius above ${smallestRadius} (the smallest that removes a cell here), move center onto a cell centre, or raise the terrain resolution.`));
 }

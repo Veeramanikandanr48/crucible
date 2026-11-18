@@ -25,11 +25,26 @@ createRuntime(renderer, { fixedRate: 50, systems: [client] }).start();
 
 ## Authority
 
-`authority: 'server'` is a dedicated authority with no player. `authority: 'host'` is a player who also runs the world: give it `readInput` and an entity it owns (`owner` is its own transport id) and it plays with no prediction. `'peer'` (peer to peer) is reserved and throws until it exists.
+`authority: 'server'` is a dedicated authority with no player. `authority: 'host'` is a player who also runs the world: give it `readInput` and an entity it owns (`owner` is its own transport id) and it plays with no prediction. `'peer'` has no single authority: see Peer to peer below.
 
 The authority methods are `addEntity(id, { owner, tag, state })`, `removeEntity(id)` and `setEntityState(id, partialState)`. `owner` is the transport peer id whose input drives the entity (one entity per peer). An entity without an owner is driven by game code: a physics prop, a door, a score. Write its state with `setEntityState` each step. Parts left out keep their value.
 
 An entity state is `{ position: [x, y, z], rotation: [x, y, z, w], velocity: [x, y, z], variables: { name: number } }`. Parts you leave out start at zero, identity rotation and no variables.
+
+## Peer to peer
+
+`authority: 'peer'` (leave `role` out) has no server and no host. Every peer owns the entities it adds, runs them itself with no prediction or reconciliation, and sends their full state to every peer in the transport every `snapshotEveryTicks` steps. The other peers draw those entities `interpolationDelaySeconds` in the past, as a client does. Give a peer `localEntityId` and `readInput` to drive its own player with `simulate`; write any other entity it owns with `setEntityState`.
+
+```js
+const peer = createNetcode({ authority: 'peer', transport, localEntityId: 'alice', readInput });
+peer.addEntity('alice', { tag: 'player' });   // owned by this peer, its transport id
+peer.getEntityState('bob');                    // arrives from bob once he is connected
+peer.claimEntity('ball');                      // take over an entity another peer owns
+```
+
+An entity has one owner and a term that starts at 0. When two peers claim the same entity, the higher term wins, and on equal terms the lower peer id, so every peer settles on the same owner whatever the arrival order. `claimEntity(id)` raises the term by one and starts from the state this peer sees, so a later claim beats the earlier owner. A peer that loses stops sending the entity, and `setEntityState` on an entity you do not own throws and names its owner (`getEntityOwner(id)`). An entity whose owner leaves the transport's `peers()` is dropped; `stats.ownershipChanges` counts owner changes. Each peer numbers its messages and tags them with a run id, so a late or reordered message is dropped as stale and a restart on the same id is followed.
+
+Peers trust each other: nothing stops a peer from writing a state the game rules forbid, so use a server or host authority where cheating matters. There is no join handshake, since each message carries full state. Every peer must be on the transport's `peers()` list, a full mesh, so give each pair its own channel. Use the same `fixedRate` on every peer.
 
 ## Simulation and input
 
@@ -66,7 +81,7 @@ A transport is a plain object `{ id, peers(), send(peerId, message), receive(cal
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `role` | `'client'` | `'authority'` or `'client'` |
-| `authority` | `'server'` | `'server'` or `'host'` |
+| `authority` | `'server'` | `'server'`, `'host'` or `'peer'` |
 | `transport` | required | The transport above |
 | `serverId` | required for a client | Peer id of the authority |
 | `localEntityId` | none | The entity a client predicts |
@@ -78,16 +93,16 @@ A transport is a plain object `{ id, peers(), send(peerId, message), receive(cal
 
 `NETCODE_LIMITS` holds the hard bounds: 256 entities, 32 peers, 16 variables per entity, names up to 64 characters, 8 inputs per message, 64 queued inputs per peer, 64 snapshots of history. Network input is untrusted: a bad message is counted in `stats.rejectedMessages` and ignored, never thrown. Option and call errors say what to pass.
 
-`stats` reports `snapshotsSent`, `fullSnapshotsSent`, `bytesSent`, `inputsProcessed`, `snapshotsReceived`, `staleSnapshots`, `missingBaseSnapshots`, `authorityRestarts`, `reconciliations`, `lastCorrection`, `maximumCorrection` and `rejectedMessages`.
+`stats` reports `snapshotsSent`, `fullSnapshotsSent`, `bytesSent`, `inputsProcessed`, `snapshotsReceived`, `staleSnapshots`, `missingBaseSnapshots`, `authorityRestarts`, `reconciliations`, `lastCorrection`, `maximumCorrection`, `rejectedMessages` and `ownershipChanges`.
 
 ## Sample game and relay
 
-`scripts/netcode-sample.html` is a two-player sample: one page is the host (`?role=host`, plays `alice`, owns the truth) and the other is a client (`?role=client`, plays `bob` with prediction and reconciliation). Move with the arrow keys or WASD. `?transport=broadcast` (default) uses two tabs of one browser; `?transport=websocket` uses the relay on the machine that serves the page: the socket goes to the page's own host, `ws` or `wss` to match the page, and `?relayPort=` (default 8787) picks the port. To play across a LAN, run the relay with `--host 0.0.0.0` on the machine that serves the sample and open the page from the other machine by that machine's address. `?delay=50` adds that many milliseconds to everything a page sends. The sample sends a snapshot every tick and draws remote players 40 ms behind (`?snap=` and `?interp=` change them), which shows a move on the other page about 95 ms after the key with 50 ms of injected latency each way. Serve the repository root (for example with `npx vite`) and open both URLs.
+`scripts/netcode-sample.html` is a two-player sample: one page is the host (`?role=host`, plays `alice`, owns the truth) and the other is a client (`?role=client`, plays `bob` with prediction and reconciliation). Move with the arrow keys or WASD. `?transport=broadcast` (default) uses two tabs of one browser; `?transport=webrtc` connects the two pages with a WebRTC data channel, trading the offer and answer over a BroadcastChannel, so the two pages must be tabs of one browser (a real game sends those two messages through its own signalling service); `?transport=websocket` uses the relay on the machine that serves the page: the socket goes to the page's own host, `ws` or `wss` to match the page, and `?relayPort=` (default 8787) picks the port. To play across a LAN, run the relay with `--host 0.0.0.0` on the machine that serves the sample and open the page from the other machine by that machine's address. `?delay=50` adds that many milliseconds to everything a page sends. The sample sends a snapshot every tick and draws remote players 40 ms behind (`?snap=` and `?interp=` change them), which shows a move on the other page about 95 ms after the key with 50 ms of injected latency each way. Serve the repository root (for example with `npx vite`) and open both URLs.
 
 `node scripts/netcode-relay.mjs --port 8787 [--host 0.0.0.0] [--latency 50]` is a reference relay of about 80 lines. Players connect to `/?id=<name>`; it forwards `{ to, data }` as `{ from, data }`, announces `{ from, left: true }`, refuses a repeated name and keeps no game state, so it runs on any free Node host. It needs the `ws` package, a dev dependency of this repository only; the library itself gains no dependency.
 
-`tests/netcode-two-browsers.test.js` opens the host and client in two headless Chrome pages over each transport with 50 ms injected per direction. It asserts that both pages end within 0.05 units of each other and that a move shows on the other page in under 450 ms. Measured on a loaded machine: a host move shows on the client after about 200 to 230 ms and a client move shows on the host after about 130 to 150 ms, the same over both transports. The client's own player never waits, since it is predicted, and the largest correction was 0. The host-to-client figure holds the 50 ms line, up to one snapshot interval (40 ms) and the 100 ms interpolation delay.
+`tests/netcode-two-browsers.test.js` opens the host and client in two headless Chrome pages over each of the three transports with 50 ms injected per direction. It asserts that both pages end within 0.05 units of each other and that a move shows on the other page in under 450 ms. Measured on a loaded machine: a host move shows on the client after about 200 to 230 ms and a client move shows on the host after about 130 to 150 ms, the same over every transport. The 2026-11-18 run of this test, with the sample's 20 ms snapshots and 40 ms interpolation delay, measured a host move showing on the client after 80 to 88 ms and a client move showing on the host after 127 to 134 ms from the key press, over BroadcastChannel, WebSocket and WebRTC alike. The client's own player never waits, since it is predicted, and the largest correction was 0. The host-to-client figure holds the 50 ms line, up to one snapshot interval (40 ms) and the 100 ms interpolation delay.
 
 ## Not yet
 
-A WebTransport transport, peer-to-peer authority, a browser sample over WebRTC and a relay on a real free host come in later work on #778. The data channel test covers a host with two clients and an ownerless prop driven by game code. Use the same `fixedRate` on the authority and every client.
+A WebTransport transport and a relay on a real free host come in later work on #778. The data channel test covers a host with two clients and an ownerless prop driven by game code. Use the same `fixedRate` on the authority and every client.

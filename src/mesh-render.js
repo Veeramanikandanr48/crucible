@@ -1,4 +1,4 @@
-import { vertexGroupNames, vertexGroupWeights } from './mesh-data.js';
+import { VECTOR_PREFIX, vertexGroupNames, vertexGroupWeights } from './mesh-data.js';
 import { cornerNormals } from './mesh-normals.js';
 import { cornerCycles, edgeCornerTable, UnionFind } from './mesh-topology.js';
 
@@ -165,6 +165,20 @@ function renderVertexGroups(mesh, renderVertexSource) {
   return groups;
 }
 
+// The "vector:<name>" point attributes, gathered per render vertex like the vertex groups.
+function renderVertexVectors(mesh, renderVertexSource) {
+  const vectors = {};
+  for (const [name, attribute] of Object.entries(mesh.attributes.point)) {
+    if (!name.startsWith(VECTOR_PREFIX) || attribute.size !== 3) continue;
+    const gathered = new Float32Array(renderVertexSource.length * 3);
+    renderVertexSource.forEach((vertex, renderVertex) => {
+      gathered.set(attribute.data.subarray(vertex * 3, vertex * 3 + 3), renderVertex * 3);
+    });
+    vectors[name.slice(VECTOR_PREFIX.length)] = gathered;
+  }
+  return Object.keys(vectors).length ? vectors : undefined;
+}
+
 /**
  * Convert MeshData into renderer geometry: Float32 positions, normals, optional uvs and colors, Uint32 triangles.
  * Render vertices are shared between corners of one vertex unless a hard edge or a UV/colour seam separates them.
@@ -242,6 +256,8 @@ export function extractRender(mesh, { sharpAngle = Infinity } = {}) {
   if (colors) geometry.colors = colors;
   const vertexGroups = renderVertexGroups(mesh, renderVertexSource);
   if (vertexGroups) geometry.vertexGroups = vertexGroups;
+  const vertexVectors = renderVertexVectors(mesh, renderVertexSource);
+  if (vertexVectors) geometry.vertexVectors = vertexVectors;
   return { geometry, renderVertexSource, cornerRenderVertex, triangleFaces };
 }
 

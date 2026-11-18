@@ -19,11 +19,15 @@ export const EXPLOSION_LIMITS = Object.freeze({
   debrisSpeedLimit: 40,
 });
 
-const EXPLOSION_FIELDS = ['type', 'id', 'center', 'size', 'start', 'seed', 'fuel', 'debris', 'shake', 'ground', 'sparks', 'motionBlur'];
+const EXPLOSION_FIELDS = ['type', 'id', 'center', 'size', 'start', 'seed', 'fuel', 'debris', 'shake', 'ground', 'sparks', 'motionBlur', 'detail'];
 const DEBRIS_FIELDS = ['node'];
 const SPARK_FIELDS = ['count', 'speed', 'lifetime'];
 // Bounds of the `sparks` overrides: the count stays well inside the 4096 sparks of one scene and the 4000 particles of a blast.
 export const SPARK_OVERRIDE_LIMITS = Object.freeze({ count: [1, 2000], speed: [0, 100], lifetime: [0.05, 5] });
+const DETAIL_FIELDS = ['strength', 'scale', 'octaves'];
+/** The detail noise of the blast's grid volume when `detail` is a bare strength (#1832): lumps one grid cell wide, three octaves. */
+const DETAIL_DEFAULTS = Object.freeze({ scale: 1, octaves: 3 });
+const DETAIL_LIMITS = Object.freeze({ strength: [0, 1], scale: [0.25, 64], octaves: [1, 5] });
 const SPARK_MODES = Object.freeze(['streaks', 'specks', 'none']);
 /** Sparks are the spark streaks of #1761 unless the operation says "specks" (the plain glowing specks of the first release) or "none". */
 export const EXPLOSION_SPARKS_DEFAULT = 'streaks';
@@ -94,6 +98,23 @@ function validatedMotionBlur(value) {
   return value;
 }
 
+/**
+ * The `detail` option (#1832): a strength 0 to 1, or { strength, scale, octaves }, for the erosion that breaks up the edge of the blast while its grid is sampled.
+ * Left out or 0 writes no detailNoise, so the blast is the one of the release before. Returns the volume's detailNoise or undefined.
+ */
+function validatedDetail(value) {
+  if (value === undefined || value === null) return undefined;
+  const expected = 'a strength from 0 to 1 such as 0.2, or { strength, scale, octaves } such as { strength: 0.35, scale: 1, octaves: 3 }';
+  if (typeof value !== 'number' && (typeof value !== 'object' || Array.isArray(value))) throw invalidField('detail', value, expected, TypeError);
+  const fields = typeof value === 'number' ? { strength: value } : value;
+  knownKeys(fields, DETAIL_FIELDS, 'detail');
+  const strength = finiteNumber(fields.strength, 'detail.strength', ...DETAIL_LIMITS.strength);
+  const scale = fields.scale === undefined ? DETAIL_DEFAULTS.scale : finiteNumber(fields.scale, 'detail.scale', ...DETAIL_LIMITS.scale);
+  const octaves = fields.octaves === undefined ? DETAIL_DEFAULTS.octaves : finiteNumber(fields.octaves, 'detail.octaves', ...DETAIL_LIMITS.octaves);
+  if (!Number.isInteger(octaves)) throw invalidField('detail.octaves', octaves, 'a whole number from 1 to 5, such as 3');
+  return strength === 0 ? undefined : { strength, scale, octaves };
+}
+
 /** Checks the operation and returns it with every default filled in. */
 export function validatedExplosion(operation) {
   knownKeys(operation, EXPLOSION_FIELDS, 'operation');
@@ -119,7 +140,7 @@ export function validatedExplosion(operation) {
     debris = { node: operation.debris.node };
   }
   const shake = operation.shake === undefined ? undefined : finiteNumber(operation.shake, 'shake', ...EXPLOSION_LIMITS.shake);
-  return { id, center, size, start, seed, fuel, ground, debris, shake, sparks: validatedSparks(operation.sparks), motionBlur: validatedMotionBlur(operation.motionBlur) };
+  return { id, center, size, start, seed, fuel, ground, debris, shake, sparks: validatedSparks(operation.sparks), motionBlur: validatedMotionBlur(operation.motionBlur), detail: validatedDetail(operation.detail) };
 }
 
 function claimIds(candidate, id) {
@@ -176,12 +197,15 @@ function addAirSteps(candidate, plan) {
 // per-voxel temperature, with its shadow on the floor. The bake is fixed (one grid per fuel and seed, explosion-grids.js) and the volume's
 // box scales it: the box is EXPLOSION_GRID_BOX metres at the reference size, the density and emission shrink with the box so the blast keeps
 // its optical depth, and the playback speed follows the square root of the scale, the way a bigger fire rises slower.
+// emissionStrength 9.5 (#1736): at 14 the core clipped to white and the edge fell off about 29% faster than the Cycles frame of the same grid on a flat
+// background; at 9.5 (on top of the exact step integral, #1894) the edge falloff is 0.79 of the Cycles one and the RMSE drops from 0.030 to 0.020.
 // steps 32 is one step per voxel of the 32 cubed grid: against 96 steps the picture differs by an RMSE of 0.003 (linear, 0 to 1), and a CPU preview
 // look costs a third (SwiftShader, 768 x 432: first look 11.7 s to 4.9 s, later looks 4.2 s to 1.7 s), which keeps scene_look well under its 30 s limit.
+// flameTemperature is Blender's fire remap (#1735): every voxel with flame emits at 1500 K up to 3000 K by its flame value, whatever its smoke density, which
+// is the orange rim Cycles draws along the smoke edge (the temperature channel alone cools to nothing there).
 const BLAST_VOLUME = Object.freeze({
-  density: 3, emission: [1, 0.45, 0.12], emissionStrength: 14, blackbodyIntensity: 0.3, absorption: [1, 1, 1], steps: 32,
-  // Edge erosion while the grid is sampled (#1832): the 32 cubed bake is too coarse for a ragged rim and a finer one does not fit the 64 MiB a call may carry.
-  detailNoise: Object.freeze({ strength: 0.2, scale: 1, octaves: 3 }),
+  flameTemperature: Object.freeze({ ignition: 1.5, maximum: 3 }),
+  density: 3, emission: [1, 0.45, 0.12], emissionStrength: 9.5, blackbodyIntensity: 0.3, absorption: [1, 1, 1], steps: 32,
 });
 const OILY_DENSITY_GAIN = 1.5;
 const HOLD_SECONDS = 1;
@@ -236,16 +260,16 @@ function addBlastVolume(candidate, plan) {
     emission: [...BLAST_VOLUME.emission],
     emissionStrength: round(BLAST_VOLUME.emissionStrength / scale),
     temperatureScale: GAS_SIM_TEMPERATURE_UNIT,
+    flameTemperature: { ...BLAST_VOLUME.flameTemperature },
     blackbodyIntensity: BLAST_VOLUME.blackbodyIntensity,
     steps: BLAST_VOLUME.steps,
-    detailNoise: { ...BLAST_VOLUME.detailNoise },
     castShadow: true,
     lightsScene: true,
+    ...(plan.detail ? { detailNoise: { ...plan.detail } } : {}),
   });
   environment.localVolumes = existing;
-  // The volume's own light (lightsScene) follows the fire, so the old point light and its track are gone. A stronger bloom lets the glow spill.
-  const bloom = candidate.effects.bloom ?? {};
-  candidate.effects.bloom = { ...bloom, strength: Math.max(bloom.strength ?? 0, 0.5) };
+  // The volume's own light (lightsScene) follows the fire, so the old point light and its track are gone. The bloom stays as the scene has it: raising it to 0.5
+  // made the fireball glow where Cycles has no glare, and without the raise the blast is closer to Cycles at 0.1 and 0.45 s and equal at 1.2 s (#1735).
   if (plan.motionBlur) openShutter(candidate);
 }
 

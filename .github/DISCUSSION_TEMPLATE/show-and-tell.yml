@@ -4,13 +4,35 @@ body:
   - type: markdown
     attributes:
       value: |
-        Show what you made with Crucible.
+        Show what you made with Crucible. We pick posts from here for the Community section of the [showcase](https://crucible.codepawl.com/showcase.html), with credit to you.
         Leave out local paths, tokens and personal data: discussions are public. Check the picture and the calls you paste before you post.
   - type: textarea
     id: picture
     attributes:
       label: Picture or render
-      description: Drag in a still, a short video or a link to a live page.
+      description: Drag in a still or a short video. If we feature it, we show a 16:9 still at least 1280 px wide.
+    validations:
+      required: true
+  - type: input
+    id: credit
+    attributes:
+      label: Credit
+      description: The name or handle to show under the picture, and the link it points to.
+      placeholder: Ada Lovelace, https://x.com/ada
+    validations:
+      required: true
+  - type: input
+    id: link
+    attributes:
+      label: Live page, repo or post
+      description: Where people can see or try it. Leave it empty if there is none.
+      placeholder: https://example.com/my-scene
+  - type: input
+    id: licence
+    attributes:
+      label: Models and assets
+      description: Who made the models, textures and sounds in it, and their licence.
+      placeholder: My own models; HDRI from Poly Haven (CC0)
     validations:
       required: true
   - type: textarea
@@ -24,6 +46,13 @@ body:
     attributes:
       label: Crucible version
       description: Run `npm ls @codepawlhq/crucible`.
-      placeholder: 0.16.0
+      placeholder: 0.21.0
     validations:
       required: true
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Permission to feature
+      options:
+        - label: CodePawl may show this picture on crucible.codepawl.com and its social accounts, with the credit above. I made it or have the right to share it.
+          required: true

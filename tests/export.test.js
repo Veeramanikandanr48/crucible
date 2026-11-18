@@ -305,3 +305,19 @@ test('GLB export writes an additive material as BLEND because glTF has no additi
   assert.equal(loaded.transparent, true);
   assert.ok(Math.abs(loaded.opacity - 0.5) < 1e-6);
 });
+
+test('GLB errors name the part and the material and say what to pass', () => {
+  const part = { name: 'lamp', geometry: box(), matrix: mat4.create(), material: { id: 'hot', color: [1, 1, 1], metallic: 0, roughness: 1, emission: 1, emissiveColor: [-1, 0, 0] } };
+  assert.throws(() => exportGlb([part]), /material "hot" of lamp needs emissiveColor as three finite numbers of 0 or more/);
+  const stretched = { ...part, name: 'kid', material: { ...part.material, emissiveColor: [1, 1, 1] }, matrix: mat4.fromValues(3, 0, 0, 0, 1.5, 1.5, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1) };
+  assert.throws(() => exportGlb([stretched], { nodePaths: { kid: 'p > kid' } }), /part "kid" \(p > kid\) cannot preserve shear.*uniform scale/);
+  assert.throws(() => exportGlb([stretched]), /part "kid" cannot preserve shear/);
+});
+
+test('GLB moves an emissive color above 1 into the emissive strength', () => {
+  const part = { name: 'lamp', geometry: box(), matrix: mat4.create(), material: { color: [1, 1, 1], metallic: 0, roughness: 1, emission: 0.5, emissiveColor: [4, 2, 1] } };
+  const binary = exportGlb([part]);
+  const [material] = JSON.parse(new TextDecoder().decode(new Uint8Array(binary, 20, new DataView(binary).getUint32(12, true)))).materials;
+  assert.deepEqual(material.emissiveFactor, [1, 0.5, 0.25]);
+  assert.equal(material.extensions.KHR_materials_emissive_strength.emissiveStrength, 2);
+});

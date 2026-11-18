@@ -16,6 +16,21 @@ function resolveFrameNames(frames, label) {
   });
 }
 
+// Blender's flame remap (#1735): `flameTemperature: { ignition, maximum }` (temperature units, so 1.5 and 3 are 1500 K and 3000 K at temperatureScale 1000)
+// makes the volume emit from the flame channel as `flame > 0.01 ? ignition + flame * (maximum - ignition) : 0` instead of from the temperature channel.
+function resolveFlameTemperature(input, label) {
+  if (input === undefined) return {};
+  const fieldLabel = `${label}.flameTemperature`;
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) throw new TypeError(`${fieldLabel} must be { ignition, maximum }, such as { ignition: 1.5, maximum: 3 } (Blender's fire defaults); leave it out to emit from the temperature channel`);
+  for (const key of Object.keys(input)) {
+    if (key !== 'ignition' && key !== 'maximum') throw new TypeError(`${fieldLabel}.${key} is not a field; it takes ignition and maximum`);
+  }
+  const ignition = finiteRange(input.ignition, 0, 1e3, `${fieldLabel}.ignition`);
+  const maximum = finiteRange(input.maximum, 0, 1e3, `${fieldLabel}.maximum`);
+  if (maximum < ignition) throw new RangeError(`${fieldLabel}.maximum (${maximum}) must be at least ignition (${ignition}): the flame grows from the ignition temperature up to the maximum`);
+  return { flameTemperature: { ignition, maximum } };
+}
+
 // A grid volume is a box (center, size) whose density, temperature and flame come from a registered grid (volume-grid.js). Its size defaults to the
 // grid file's own size once the grid is bound. The faded edge and the noise belong to the other shapes: a grid has its own detail.
 export function resolveGridVolume(input, resolved, label) {
@@ -46,6 +61,7 @@ export function resolveGridVolume(input, resolved, label) {
     ...(animated ? { frames: input.frames.slice(), fps: finiteRange(input.fps ?? 24, 0.01, 240, `${label}.fps`), loop: input.loop ?? true } : { grid: input.grid }),
     ...(input.size === undefined ? {} : { size: vectorField(input.size, 0.001, 1e4, `${label}.size`) }),
     temperatureScale: finiteRange(input.temperatureScale ?? 1, 0, 1e5, `${label}.temperatureScale`),
+    ...resolveFlameTemperature(input.flameTemperature, label),
     blackbodyIntensity: finiteRange(input.blackbodyIntensity ?? 0, 0, 1, `${label}.blackbodyIntensity`),
     anisotropy: finiteRange(input.anisotropy ?? 0, -0.9, 0.9, `${label}.anisotropy`),
     // Kept off a volume without it, so a grid volume without the field resolves to the same object as before (#1832).

@@ -24,8 +24,10 @@ permissions:
 
 concurrency:
   # One queue per pull request, so a run for one pull request never replaces the pending run of another.
-  group: pr-metadata-${{ github.event.pull_request.number || 'sweep' }}
-  cancel-in-progress: false
+  # A reopen run resets the close timer, so it gets its own group and a later run never cancels it.
+  group: pr-metadata-${{ github.event.pull_request.number || 'sweep' }}${{ github.event.action == 'reopened' && '-reopen' || '' }}
+  # A newer run for the same pull request reads the same current state, so it replaces the older one. The sweep is never cut off.
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
 
 jobs:
   check:

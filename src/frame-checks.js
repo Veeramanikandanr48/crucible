@@ -335,7 +335,24 @@ export function pathTracerFindingsLimit() {
     severity: 'info',
     target: 'renderer',
     message: 'This job is path traced. The tracer writes the lit image only, so exposure findings and the object ID, depth and normal passes are unavailable; the page draws no raster frame to read them from.',
-    fix: 'Check exposure with scene_look or a raster job (leave renderer out), then trace. Part findings (framing, floating, intersecting, textures, z-fighting) are reported as usual.',
+    fix: 'Check exposure with scene_look or a raster job (leave renderer out), then trace. On a daylit interior the traced frame comes out about 1 to 2 stops brighter than the raster one at the same effects.exposure, because the tracer adds the light the room bounces around and the raster fill is lower (docs/path-tracer.md, Exposure): lower effects.exposure for the trace instead of raising it. Part findings (framing, floating, intersecting, textures, z-fighting) are reported as usual.',
+  };
+}
+
+/**
+ * The warning a path traced job carries when its scene has `postPasses`. The tracer writes the lit frame only and has no
+ * first-hit depth, normal or object ID buffer for a pass to read, so the job returns the frame without the passes.
+ * Returns undefined when the scene has none, so a job without `postPasses` is unchanged.
+ */
+export function pathTracerSkippedPassesWarning(postPasses) {
+  if (!postPasses?.length) return undefined;
+  const names = postPasses.map(pass => pass.name).join(', ');
+  return {
+    kind: 'post-passes-skipped',
+    severity: 'warning',
+    target: 'renderer',
+    message: `This job is path traced, and the path tracer does not run postPasses: ${postPasses.length === 1 ? 'the pass' : 'the passes'} ${names} did not touch the image. The PNG is the plain traced frame.`,
+    fix: 'Render the look with a raster job (leave renderer out), or trace for the lit frame and accept it without the passes (docs/user-passes.md, "Where a pass runs").',
   };
 }
 

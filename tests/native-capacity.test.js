@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { collectExportChunks } from '../scripts/agent-native-trace.mjs';
+import { collectExportBlob } from '../scripts/agent-native-trace.mjs';
 import {
   countNativeExport, describeCapacityUse, nativeCapacityProblem, readNativeCapacity, requireExportFitsCapacity,
 } from '../scripts/native-capacity.mjs';
@@ -57,21 +57,21 @@ test('counts come from the manifest of a chunked export', () => {
   assert.deepEqual(countNativeExport({ triangles: 5, tables: {} }), { uniqueTriangles: 5, instances: 0, textureTexels: 0 });
 });
 
-test('collectExportChunks refuses an over-capacity scene before reading any chunk', async () => {
+test('collectExportBlob refuses an over-capacity scene before reading the blob', async () => {
   const manifest = { counts: { triangleCount: 5000, instanceCount: 1 }, chunks: { tables: { triangles: 8 }, chunkBytes: 48 } };
   let chunksRead = 0;
   await assert.rejects(
-    collectExportChunks(manifest, async () => { chunksRead++; return ''; }, { capacity: CAPACITY }),
+    collectExportBlob(manifest, async () => { chunksRead++; return new Uint8Array(8); }, { capacity: CAPACITY }),
     error => error.nativeCapacity === true && /5,000 unique triangles/.test(error.message),
   );
   assert.equal(chunksRead, 0);
 });
 
-test('collectExportChunks returns the capacity use of a scene that fits', async () => {
+test('collectExportBlob returns the capacity use of a scene that fits', async () => {
   const manifest = { counts: { triangleCount: 1, instanceCount: 1 }, chunks: { tables: { triangles: 4 }, chunkBytes: 48 } };
-  const exported = await collectExportChunks(manifest, async () => Buffer.from([1, 2, 3, 4]).toString('base64'), { capacity: CAPACITY });
+  const exported = await collectExportBlob(manifest, async () => Uint8Array.from([1, 2, 3, 4]), { capacity: CAPACITY });
   assert.equal(exported.capacityUse.uniqueTriangles.used, 1);
-  const unchecked = await collectExportChunks(manifest, async () => Buffer.from([1, 2, 3, 4]).toString('base64'));
+  const unchecked = await collectExportBlob(manifest, async () => Uint8Array.from([1, 2, 3, 4]));
   assert.equal(unchecked.capacityUse, undefined);
 });
 

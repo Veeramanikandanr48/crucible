@@ -27,6 +27,8 @@ The width is in pixels of the output, so a 480 pixel preview and a 1920 pixel re
 
 `toon` on a material (also a layer field, 0 to 8, 0 off) steps the cosine of each light that reaches it. The sun, a point light and a spot light each make their own bands, and the edge between two bands is 0.02 of the light range wide. Shadows keep their own softness, and the sky light that fills the dark side is not banded. A material with `toon` set wins over `lines.toon`.
 
+`toonColors` on a material gives each step its own colour: one linear `[red, green, blue]` (0 to 4) per step, darkest first, and as many as `toon`, such as `"toon": 3, "toonColors": [[0.2, 0.5, 0.55], [0.6, 0.8, 0.75], [1, 0.92, 0.95]]`. Each colour replaces the grey level of its step, so the darkest step can be a tint instead of black. The side facing away from a light gets no direct light and shows the ambient light, so raise the ambient intensity to light it. A colour is a weight on the sun light (diffuse, albedo and the display curve still apply), so with a white albedo, `keyIntensity` near 3.6 and `environment.viewTransform` `neutral`, a step shows within a few levels of its sRGB colour; the default `aces` curve adds contrast and shifts the tones, and a weight above 1 is compressed toward white by the curve. Without `toonColors` the render is unchanged.
+
 ## Lines on some nodes
 
 `nodes` keys are node IDs (a placed asset is one node, however many parts it has). A node it does not name draws as usual.

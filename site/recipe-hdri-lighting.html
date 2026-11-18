@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en" data-theme="crucible">
+  <head>
+    <meta charset="UTF-8" /><script>try{var saved=localStorage.getItem("crucible-color");if(saved==="light"||saved==="dark")document.documentElement.dataset.color=saved}catch(error){}</script>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="A metal kettle lit by one key light and flat ambient, then by a studio HDRI." />
+    <link rel="canonical" href="https://crucible.codepawl.com/recipe-hdri-lighting.html" />
+    <title>HDRI lighting against a flat key light · Crucible</title>
+    <link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml" /><link rel="icon" href="/favicon.ico?v=2" sizes="48x48" /><link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  </head>
+  <body class="site recipes">
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header class="navigation">
+      <a class="brand" href="/" aria-label="Crucible home">Crucible</a>
+      <nav aria-label="Library"><a href="/docs.html">Docs</a><a href="/recipes.html" aria-current="page">Recipes</a><a href="/marketplace.html">Marketplace</a><a href="/changelog.html">Changelog</a></nav>
+      <a class="site-nav-cta" href="https://github.com/codepawl/crucible" aria-label="GitHub"><span class="package-logo package-logo-github" aria-hidden="true"></span><span class="site-nav-cta-label">GitHub</span></a>
+    </header>
+    <main id="content">
+      <p class="recipe-back"><a href="/recipes.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg>Recipes</a></p>
+      <h1>HDRI lighting against a flat key light</h1>
+      <div class="recipe-pair"><figure><img src="/recipes/hdri-lighting-before.webp" width="960" height="540" alt="HDRI lighting against a flat key light: Flat key and ambient" /><figcaption>Flat key and ambient</figcaption></figure><figure><img src="/recipes/hdri-lighting-after.webp" width="960" height="540" alt="HDRI lighting against a flat key light: studio-softbox HDRI" /><figcaption>studio-softbox HDRI</figcaption></figure></div>
+      <div class="recipe-why"><p>Metal shows what is around it. With one light and flat ambient there is nothing to reflect, so steel reads as grey plastic.</p><p>An HDRI gives the metal a room to reflect: soft boxes, a bright window, a dark floor. Set the key light to 0, because the HDRI already carries the light.</p></div>
+      <section class="recipe-code" aria-labelledby="scene-code-title">
+        <div class="recipe-code-heading"><h2 id="scene-code-title">Scene code</h2><button type="button" data-copy-code="scene-code">Copy</button></div>
+        <pre><code id="scene-code">{
+  &quot;format&quot;: &quot;crucible.scene&quot;,
+  &quot;schemaVersion&quot;: 1,
+  &quot;geometries&quot;: [
+    { &quot;id&quot;: &quot;body&quot;, &quot;type&quot;: &quot;lathe&quot;, &quot;segments&quot;: 96, &quot;profile&quot;: [[0,0],[0.38,0],[0.387,0.003],[0.397,0.005],[0.409,0.01],[0.42,0.02],[0.43,0.04],[0.438,0.07],[0.446,0.109],[0.453,0.154],[0.458,0.201],[0.46,0.25],[0.459,0.302],[0.456,0.358],[0.451,0.416],[0.442,0.471],[0.43,0.52],[0.414,0.564],[0.393,0.604],[0.37,0.64],[0.345,0.672],[0.32,0.7],[0.292,0.722],[0.259,0.739],[0.227,0.752],[0.2,0.762],[0.18,0.77],[0,0.77]] },
+    { &quot;id&quot;: &quot;lid&quot;, &quot;type&quot;: &quot;lathe&quot;, &quot;segments&quot;: 64, &quot;profile&quot;: [[0, 0], [0.19, 0], [0.17, 0.03], [0.06, 0.05], [0.05, 0.09], [0.025, 0.12], [0, 0.12]] },
+    { &quot;id&quot;: &quot;spout&quot;, &quot;type&quot;: &quot;cylinder&quot;, &quot;segments&quot;: 32 },
+    { &quot;id&quot;: &quot;handle&quot;, &quot;type&quot;: &quot;torus&quot;, &quot;tubeRadius&quot;: 0.09, &quot;segments&quot;: 64, &quot;sides&quot;: 16 },
+    { &quot;id&quot;: &quot;floor&quot;, &quot;type&quot;: &quot;box&quot;, &quot;bevel&quot;: 0 }
+  ],
+  &quot;materials&quot;: [
+    { &quot;id&quot;: &quot;steel&quot;, &quot;color&quot;: [0.82, 0.83, 0.86], &quot;metallic&quot;: 1, &quot;roughness&quot;: 0.16 },
+    { &quot;id&quot;: &quot;grip&quot;, &quot;color&quot;: [0.03, 0.03, 0.035], &quot;metallic&quot;: 0, &quot;roughness&quot;: 0.6 },
+    { &quot;id&quot;: &quot;table&quot;, &quot;color&quot;: [0.3, 0.26, 0.22], &quot;metallic&quot;: 0, &quot;roughness&quot;: 0.85 }
+  ],
+  &quot;nodes&quot;: [
+    { &quot;id&quot;: &quot;table&quot;, &quot;geometry&quot;: &quot;floor&quot;, &quot;material&quot;: &quot;table&quot;, &quot;translation&quot;: [0, -0.05, 0], &quot;scale&quot;: [6, 0.1, 4] },
+    { &quot;id&quot;: &quot;kettle&quot;, &quot;translation&quot;: [0, 0, 0] },
+    { &quot;id&quot;: &quot;body&quot;, &quot;parent&quot;: &quot;kettle&quot;, &quot;geometry&quot;: &quot;body&quot;, &quot;material&quot;: &quot;steel&quot; },
+    { &quot;id&quot;: &quot;lid&quot;, &quot;parent&quot;: &quot;kettle&quot;, &quot;geometry&quot;: &quot;lid&quot;, &quot;material&quot;: &quot;steel&quot;, &quot;translation&quot;: [0, 0.76, 0] },
+    { &quot;id&quot;: &quot;spout&quot;, &quot;parent&quot;: &quot;kettle&quot;, &quot;geometry&quot;: &quot;spout&quot;, &quot;material&quot;: &quot;steel&quot;, &quot;translation&quot;: [0.73, 0.46, 0], &quot;rotation&quot;: [0, 0, -0.342, 0.94], &quot;scale&quot;: [0.07, 0.55, 0.07] },
+    { &quot;id&quot;: &quot;handle&quot;, &quot;parent&quot;: &quot;kettle&quot;, &quot;geometry&quot;: &quot;handle&quot;, &quot;material&quot;: &quot;grip&quot;, &quot;translation&quot;: [-0.66, 0.42, 0], &quot;rotation&quot;: [0.7071, 0, 0, 0.7071], &quot;scale&quot;: [0.28, 0.28, 0.28] }
+  ],
+  &quot;camera&quot;: { &quot;eye&quot;: [1.9, 1.1, 2.6], &quot;target&quot;: [0.1, 0.38, 0], &quot;fov&quot;: 30 },
+  &quot;environment&quot;: { &quot;world&quot;: true, &quot;hdri&quot;: &quot;studio-softbox&quot;, &quot;environmentIntensity&quot;: 0.35, &quot;keyIntensity&quot;: 0, &quot;fillIntensity&quot;: 0 }
+}</code></pre>
+      </section>
+      <section class="recipe-code" aria-labelledby="before-code-title">
+        <div class="recipe-code-heading"><h2 id="before-code-title">Merge into the environment for “Flat key and ambient”</h2><button type="button" data-copy-code="before-code">Copy</button></div>
+        <pre><code id="before-code">{ &quot;hdri&quot;: null, &quot;world&quot;: false, &quot;lightDirection&quot;: [-0.4, 0.8, 0.5], &quot;keyColor&quot;: [1, 0.97, 0.92], &quot;keyIntensity&quot;: 2.4, &quot;ambientIntensity&quot;: 0.6 }</code></pre>
+      </section>
+      <p class="recipe-file"><a href="/recipes/hdri-lighting.json" download>Download hdri-lighting.json</a><span>Paste it into <code>scene_create</code> as <code>recipe</code>.</span></p>
+    </main>
+    <footer class="site-footer" aria-label="Site footer">
+      <p><a class="brand" href="/" aria-label="Crucible home">Crucible</a> by <a href="https://codepawl.com">CodePawl</a></p>
+      <nav class="footer-links" aria-label="Project links"><a href="https://github.com/codepawl/crucible"><span class="package-logo package-logo-github" aria-hidden="true"></span>GitHub</a><a href="https://www.npmjs.com/package/@codepawlhq/crucible"><span class="package-logo package-logo-npm" aria-hidden="true"></span>npm</a><a href="/changelog.md">Changelog</a><a href="/license.txt">MIT license</a></nav>
+    </footer>
+    <script type="module" src="/src/recipes.js"></script>
+  </body>
+</html>

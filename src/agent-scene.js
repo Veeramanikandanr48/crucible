@@ -1,11 +1,11 @@
 import { mat4, mat3 } from 'gl-matrix';
-import { box, circle, cone, cylinder, grid, icoSphere, sphere, torus } from './geometry.js';
+import { box, checkTorusShape, circle, cone, cylinder, grid, icoSphere, sphere, torus } from './geometry.js';
 import { createSceneGraph } from './scene-graph.js';
 import { currentFormatName } from './legacy-names.js';
 import { invalidField, withFieldPrefix } from './field-error.js';
 import { applyProjection, validateCameraShift, CAMERA_LENS_FIELDS } from './camera.js';
 import { checkLocalVolumePartNames } from './local-volume-resolve.js';
-import { normalizeAgentLook, environmentPatchWithSetup, environmentLinksLights, agentEnvironmentMap, VOLUME_FOG_FIELDS } from './agent-look.js';
+import { normalizeAgentLook, environmentPatchWithSetup, environmentLinksLights, agentEnvironmentMap, SKY_OVERRIDABLE_FIELDS, VOLUME_FOG_FIELDS } from './agent-look.js';
 import { postStepSupport } from './shader-registry.js';
 import { agentSceneModule, agentSceneModuleLoaded } from './agent-scene-modules.js';
 import { CURVE_TEXT_LIMITS, AGENT_SCENE_CAPABILITIES, AGENT_SCENE_DEFAULT_LIMITS, MAX_MATERIAL_PATTERNS, RECIPE_ALPHA_MODES } from './agent-scene-capabilities.js';
@@ -61,9 +61,11 @@ const CAMERA_DEFAULTS = Object.freeze({ eye: [4, 3, 5], target: [0, 0, 0], up: [
 const RENDER_FLAG_FIELDS = ['visible', 'castShadow', 'receiveShadow', 'holdout', 'shadowCatcher', 'shadowOnly'];
 const PART_FLAG_FIELDS = RENDER_FLAG_FIELDS.slice(1);
 const NODE_FIELDS = ['translation', 'rotation', 'scale', 'parent', 'label', 'geometry', 'material', 'skin', 'relations', 'asset', 'vegetation', 'decal', 'depthLayer', 'blend', 'rayVisibility', ...RENDER_FLAG_FIELDS];
-const MATERIAL_FIELDS = ['color', 'metallic', 'roughness', 'emission', 'emissiveColor', 'opacity', 'alphaMode', 'doubleSided', 'pattern', 'map', 'subsurface', 'snippet', 'waterPreset', 'absorption', 'turbidity', 'aov', 'wear', 'emissionMask', ...MATERIAL_LAYER_FIELDS];
+const MATERIAL_FIELDS = ['color', 'metallic', 'roughness', 'emission', 'emissiveColor', 'opacity', 'alphaMode', 'doubleSided', 'pattern', 'map', 'subsurface', 'snippet', 'waterPreset', 'absorption', 'turbidity', 'waterRamp', 'aov', 'wear', 'retro', 'emissionMask', 'toonColors', ...MATERIAL_LAYER_FIELDS];
 const PATTERN_TEXTURE_FIELDS = ['map', 'normalMap', 'metallicRoughnessMap', 'emissiveMap', 'layerMaps', 'transmissionMap', 'aovMap', 'emissionFresnel', 'boxMapScale', 'boxMapAxis'];
 const CAMERA_FIELDS = [...Object.keys(CAMERA_DEFAULTS), ...CAMERA_LENS_FIELDS];
+// Fields of an optional shader module join the list here, so the long list above stays a line each material feature does not rewrite.
+MATERIAL_FIELDS.push('waterGlint');
 const LOOK_OPERATION_FIELDS = Object.freeze({
   'set-environment': 'environment',
   'set-effects': 'effects',
@@ -78,6 +80,17 @@ const REMOVAL_FIELDS = Object.freeze({
   'remove-geometry': 'geometries',
   'remove-material': 'materials',
 });
+// Rejects a batch that removes a geometry or material and leaves nodes pointing at it, naming them and the fix.
+function assertRemovedResourcesUnused(candidate, removals) {
+  for (const { type, id } of removals) {
+    const kind = type.slice(7);
+    const users = candidate.nodes.filter(node => node[kind] === id).map(node => node.id);
+    if (users.length > 0 && !candidate[REMOVAL_FIELDS[type]].some(record => record.id === id)) {
+      const more = users.length > 8 ? ` and ${users.length - 8} more` : '';
+      throw invalidField('id', id, `${kind} ${id} is used by nodes ${users.slice(0, 8).join(', ')}${more}; set-node them to another ${kind} or remove-node them first`);
+    }
+  }
+}
 
 
 function knownKeys(value, allowed, label) {
@@ -265,6 +278,11 @@ function copyMaterialLayers(value, result) {
     if (value[field] === undefined) continue;
     result[field] = Array.isArray(value[field]) ? vector(value[field], 3, field) : value[field];
   }
+  if (value.toonColors !== undefined) {
+    result.toonColors = Array.isArray(value.toonColors)
+      ? Object.freeze(value.toonColors.map((color, index) => Object.freeze(vector(color, 3, `toonColors[${index}]`))))
+      : value.toonColors;
+  }
   validateMaterialLayers(result);
   if (value.emissionMask !== undefined) {
     result.emissionMask = Object.freeze(agentSceneModule('emissionMask').normalizeEmissionMask(value.emissionMask));
@@ -337,8 +355,14 @@ function materialFrom(value) {
   }
   copyMaterialLayers(value, result);
   if (value.wear) result.wear = normalizeMaterialWear(value.wear);
+  if (value.waterGlint !== undefined && value.waterGlint !== null) {
+    if (result.tag !== 'water') throw invalidField('waterGlint', value.waterGlint, 'a water material: set tag "water" on the material, or remove waterGlint');
+    result.waterGlint = agentSceneModule('glitterShader').normalizeWaterGlint(value.waterGlint);
+  }
+  if (value.retro !== undefined && value.retro !== null) result.retro = agentSceneModule('retroShader').normalizeMaterialRetro(value.retro);
   if (agentSceneModuleLoaded('worldMaterials')) {
     agentSceneModule('worldMaterials').copyWaterFields(value, result, vector);
+    agentSceneModule('worldMaterials').copyWaterRamp(value, result, vector);
   }
   const emissiveColor = result.emissiveColor ?? result.color;
   for (const component of emissiveColor) {
@@ -534,6 +558,7 @@ const GEOMETRY_FIELDS = {
   text: ['text', 'size', 'depth', 'font', 'align', 'curveSegments'],
   mesh: ['base', 'edits', 'stack', 'smoothAngle', 'shapeKeys'],
   terrain: ['size', 'resolution', 'seed', 'amplitude', 'holes'],
+  cloud: ['seed', 'puffs', 'width', 'height', 'flatBase', 'resolution', 'levels', 'upBias', 'unionSoftness'],
   fragment: ['source', 'seed', 'cells', 'index', 'impact', 'impactRadius'],
   dented: ['source', 'impacts', 'stiffness', 'maxDepth', 'radius'],
 };
@@ -568,6 +593,7 @@ function geometryEstimate(value, scope = PENDING_CUTTER_SCOPE) {
   for (const field of GEOMETRY_FIELDS[value.type]) {
     // Terrain checks its own numbers (a whole resolution from 2 to 256), so its message names the real range; null is not absent there, so it still fails below.
     if (value.type === 'terrain' && ['size', 'resolution', 'amplitude'].includes(field) && value[field] !== null) continue;
+    if (value.type === 'cloud' && value[field] !== null) continue;
     if (value[field] !== undefined && !['profile', 'contour', 'holes', 'path', 'closed', 'base', 'edits', 'stack', 'shapeKeys', 'points', 'taper', 'text', 'font', 'align', 'from', 'to', 'shape', 'splines', 'kind', 'weights', 'order', 'knots', 'knotMode', 'trim', 'grow', 'root', 'source', 'impact', 'impacts'].includes(field)) {
       finite(value[field], field);
     }
@@ -594,14 +620,19 @@ function geometryEstimate(value, scope = PENDING_CUTTER_SCOPE) {
       return 2 * sides * 2 + 2 * (sides + 1);
     }
     case 'torus':
+      checkTorusShape(value.tubeRadius, value.arc);
       return (detail('segments', 96, 3, 2048) + 1) * (detail('sides', 24, 3, 128) + 1) + 2 * ((value.sides ?? 24) + 2);
-    case 'lathe':
-      return (detail('segments', 64, 3, 2048) + 1) * points(value.profile, 2, 2, 'profile');
+    case 'lathe': {
+      const profileCount = points(value.profile, 2, 2, 'profile');
+      agentSceneModule('modeling').checkLatheProfile(value.profile);
+      return (detail('segments', 64, 3, 2048) + 1) * profileCount;
+    }
     case 'tube':
       points(value.path, 3, value.closed ? 3 : 2, 'path');
       if (value.closed !== undefined && typeof value.closed !== 'boolean') {
         throw invalidField('closed', value.closed, 'true or false', TypeError);
       }
+      agentSceneModule('modeling').checkTubeInputs(value.path, value.radius ?? 0.1, value.closed ?? false);
       return (detail('segments', 64, 3, 2048) + 1) * (detail('radialSegments', 12, 3, 128) + 1);
     case 'curve': {
       if (['shape', 'splines', 'kind', 'weights', 'order', 'knots', 'knotMode', 'trim', 'grow'].some(field => value[field] !== undefined)) {
@@ -611,6 +642,9 @@ function geometryEstimate(value, scope = PENDING_CUTTER_SCOPE) {
       if (!Array.isArray(knots) || knots.length < 2 || knots.length > CURVE_TEXT_LIMITS.maxCurvePoints) {
         throw invalidField('points', Array.isArray(knots) ? `${knots.length} points` : knots, `a list of 2 to ${CURVE_TEXT_LIMITS.maxCurvePoints} points, such as [[0, 0, 0], [0, 1, 0]]`);
       }
+      const curveChecks = agentSceneModule('modeling');
+      curveChecks.checkCurveRadius(value.radius ?? 0.05);
+      curveChecks.checkClosedFlag(value.closed ?? false);
       const sides = value.profile === undefined ? detail('radialSegments', 8, 3, 128) : points(value.profile, 2, 3, 'profile');
       const rings = (value.closed ? knots.length : knots.length - 1) * detail('resolution', 12, 1, 64) + 1;
       return rings * sides * 2 + 2 * (sides + 1);
@@ -626,6 +660,8 @@ function geometryEstimate(value, scope = PENDING_CUTTER_SCOPE) {
     }
     case 'terrain':
       return agentSceneModule('terrain').terrainVertexEstimate(value);
+    case 'cloud':
+      return agentSceneModule('modeling').cloudVertexEstimate(value);
     case 'extrude': {
       const holes = value.holes ?? [];
       if (!Array.isArray(holes) || holes.length > 128) {
@@ -635,6 +671,7 @@ function geometryEstimate(value, scope = PENDING_CUTTER_SCOPE) {
       if (count > 4096) {
         throw invalidField('contour', `${count} points`, 'a contour and holes with at most 4096 points in total; simplify them');
       }
+      agentSceneModule('modeling').checkExtrudeRings(value.contour, holes);
       const beveled = (value.bevel ?? 0) > 0 || (value.bevelThickness ?? value.bevel ?? 0) > 0;
       return 6 * (count + holes.length * 2 - 2) + 6 * count * (detail('steps', 1, 1, 256) + (beveled ? detail('bevelSegments', 3, 1, 32) * 2 : 0));
     }
@@ -821,6 +858,8 @@ function generateGeometry(value, maxVertices, scope) {
       return agentSceneModule('text').text(value.text, { ...value, maxVertices });
     case 'terrain':
       return agentSceneModule('terrain').generateTerrainGeometry(value, maxVertices);
+    case 'cloud':
+      return agentSceneModule('modeling').cloudGeometry(value, maxVertices);
     case 'fragment': {
       if (!scope) throw invalidField('type', 'fragment', 'a geometry inside a recipe, where its source geometry is found by ID');
       const source = scope.definitions.get(value.source);
@@ -1325,6 +1364,13 @@ function stagePose(stagedState, time) {
   return { graph, materialUpdates, camera, time, clothGeometries, assetClips, hiddenNodes, movedLook, morphs: sampled?.morphs ?? null };
 }
 
+/** A mesh stack built with every ocean node's `time` set to `oceanTime`: the sea the renderer draws at that moment of an oceanTime track. */
+function oceanTimeGeometry(recipe, maxGeometryVertices, geometryId, oceanTime, wakeField) {
+  const definition = recipe.geometries.find(candidate => candidate.id === geometryId);
+  const stack = definition.stack.map(node => (node.op === 'ocean' ? { ...node, ...wakeField, time: oceanTime } : node));
+  return Object.freeze(generateGeometry({ ...definition, stack }, maxGeometryVertices, cutterScopeOf(recipe.geometries)));
+}
+
 /**
  * Geometries of mesh stacks whose ocean time a geometry track drives, keyed by node ID. Each one is built from the cached edits with
  * every ocean node's `time` set to the sampled value, so it equals the still of a recipe that writes that time into the node. The last
@@ -1342,10 +1388,7 @@ function oceanTimeGeometries(stagedState, sampled, time) {
     const wakeField = stagedState.physicsSampler?.wakeField?.(geometryId, time);
     const key = wakeField ? `${patch.oceanTime}|${time}` : patch.oceanTime;
     if (frame?.key !== key) {
-      const definition = stagedState.recipe.geometries.find(candidate => candidate.id === geometryId);
-      const stack = definition.stack.map(node => (node.op === 'ocean' ? { ...node, ...wakeField, time: patch.oceanTime } : node));
-      const scope = cutterScopeOf(stagedState.recipe.geometries);
-      frame = { key, geometry: Object.freeze(generateGeometry({ ...definition, stack }, stagedState.maxGeometryVertices, scope)) };
+      frame = { key, geometry: oceanTimeGeometry(stagedState.recipe, stagedState.maxGeometryVertices, geometryId, patch.oceanTime, wakeField) };
       frames.set(geometryId, frame);
     }
     for (const node of stagedState.recipe.nodes) {
@@ -1460,9 +1503,9 @@ function publishPose(stagedState, pose) {
   stagedState.renderCamera = pose.camera;
   stagedState.movedLook = pose.movedLook;
   stagedState.motionTime = pose.time;
-  const nextParts = partsWithCloth(stagedState.restParts, pose.clothGeometries, stagedState.parts);
-  const partsChanged = nextParts !== stagedState.parts;
-  stagedState.parts = nextParts;
+  const sampledParts = partsWithCloth(stagedState.restParts, pose.clothGeometries, stagedState.parts);
+  const partsChanged = sampledParts !== stagedState.parts;
+  stagedState.parts = partsChanged && stagedState.rankFlushParts ? stagedState.rankFlushParts(sampledParts) : sampledParts;
   return partsChanged;
 }
 
@@ -1764,10 +1807,12 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
     const usesVisibility = recipeUsesVisibility(recipe);
     const nextParts = recipe.nodes.filter(node => node.geometry !== undefined).map(node => {
       const binding = skinBindings.get(node.id);
-      const material = materialHandles.get(node.material).output;
+      const recipeMaterial = materialHandles.get(node.material);
       const sourceGeometry = binding?.geometry ?? geometries.get(node.geometry);
-      const foamGeometry = sourceGeometry.vertexGroups?.foam ? agentSceneModule('mesh').waterFoamGeometry(sourceGeometry, material) : sourceGeometry;
-      const geometry = material.wear ? geometryWithSurfaceMasks(foamGeometry, material.wear, node.id) : foamGeometry;
+      const foamGeometry = sourceGeometry.vertexGroups?.foam ? agentSceneModule('mesh').waterFoamGeometry(sourceGeometry, recipeMaterial.output) : sourceGeometry;
+      const geometry = recipeMaterial.output.wear ? geometryWithSurfaceMasks(foamGeometry, recipeMaterial.output.wear, node.id) : foamGeometry;
+      // A graph with a vertexGroup node bakes with this mesh's weights, so its textures belong to the mesh.
+      const material = recipeMaterial.output.pattern?.graph ? agentSceneModule('patterns').materialViewForGeometry(recipeMaterial.output, geometry, node.id, recipeMaterial.holder.images) : recipeMaterial.output;
       const assetExtras = assetRuntime.partExtras.get(node.id);
       // Shape keys of a recipe mesh are morph targets with their own weights per part; an imported asset brings its own pose.
       const shapeKeyMorph = geometry.morphTargetValues && !assetExtras?.morph ? { weights: Float32Array.from(geometry.morphTargetValues) } : undefined;
@@ -1797,6 +1842,8 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
       // Part identity decides what the next stage reuses, so it compares the parts as built, before any bake.
       sourceRestParts,
       parts: restParts, restParts,
+      // Parts a pose replaces (cloth, particles, ocean) are new objects with no flush rank, so the pose ranks them again.
+      rankFlushParts: parts => stageCoplanarOffsets(recipe, parts),
       bakeSkipped: skippedBake,
       bakeReport: lightBakeResult ? agentSceneModule('bake').withLocalVolumeReport({ ...lightBakeResult.report, reused: lightBakeResult.reused }, recipe.environment.localVolumes) : null,
       reflectionReport: reflected ? reflected.report : null,
@@ -1813,7 +1860,7 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
     stagedState.motionSampler = recipe.motion ? agentSceneModule('motion').compileAgentMotion(recipe.motion, recipe) : null;
     stagedState.physicsSampler = stagePhysics(recipe, geometryRecords);
     stagedState.clothSampler = stageCloth(recipe, geometryRecords, stagedState.motionSampler);
-    stagedState.particleSampler = stageParticles(recipe, geometryRecords);
+    stagedState.particleSampler = stageParticles(recipe, geometryRecords, stagedState);
     const animated = Boolean(stagedState.motionSampler || stagedState.physicsSampler || stagedState.clothSampler || stagedState.particleSampler || assetRuntime.animators.length);
     stagedState.poseGraph = animated ? compile(recipe, geometries, localBounds, limits) : null;
     stagedState.initialPose = stagePose(stagedState, animated ? 0 : null);
@@ -1995,22 +2042,31 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
   }
 
   // Particle launches are cheap to recompute, but an unchanged section on unchanged nodes still reuses them.
-  function stageParticles(recipe, geometryRecords) {
+  function stageParticles(recipe, geometryRecords, stagedState) {
     if (!recipe.particles) {
       return null;
     }
-    const involvedNodes = recipe.nodes.filter(node => recipe.particles.systems.some(system => system.node === node.id));
-    const key = JSON.stringify([recipe.particles, involvedNodes, involvedNodes.map(node => geometryRecords.get(node.geometry).signature)]);
+    const emitterMeshes = new Set(recipe.particles.systems.map(system => system.emitter?.mesh));
+    const involvedNodes = recipe.nodes.filter(node => emitterMeshes.has(node.id) || recipe.particles.systems.some(system => system.node === node.id));
+    const oceanTracks = (recipe.motion?.tracks ?? []).filter(track => track.kind === 'geometry' && track.property === 'oceanTime');
+    const key = JSON.stringify([recipe.particles, involvedNodes, involvedNodes.map(node => geometryRecords.get(node.geometry).signature), oceanTracks]);
     if (particleBake?.key !== key) {
       const geometries = new Map([...geometryRecords].map(([id, record]) => [id, record.geometry]));
-      particleBake = { key, sampler: agentSceneModule('particles').bakeAgentParticles(recipe.particles, recipe, geometries) };
+      // An emitter on a sea with an oceanTime track samples the sea at the ocean time of each particle's birth (#2152).
+      const sea = {
+        oceanTimeAt: (geometryId, time) => stagedState.motionSampler?.sample(time)?.geometries?.get(geometryId)?.oceanTime ?? null,
+        geometryAt: (geometryId, oceanTime) => oceanTimeGeometry(recipe, stagedState.maxGeometryVertices, geometryId, oceanTime),
+      };
+      particleBake = { key, sampler: agentSceneModule('particles').bakeAgentParticles(recipe.particles, recipe, geometries, sea) };
     }
     return particleBake.sampler;
   }
 
   function commit(stagedState, incrementRevision) {
-    publishPose(stagedState, stagedState.initialPose);
-    if (stagedState.topologyChanged) {
+    // A pose that swaps in new parts (particles, cloth) is a topology change too: a renderer holding the old parts would
+    // otherwise try to update parts it never saw, which failed with "Unknown part identity" (#2204).
+    const posedPartsChanged = publishPose(stagedState, stagedState.initialPose);
+    if (stagedState.topologyChanged || posedPartsChanged) {
       topologyRevision++;
     }
     if (incrementRevision && state) {
@@ -2151,6 +2207,7 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
       const candidate = (onlyFieldEdits && fieldEditCandidate(state.recipe, operations)) || authoredRecipe(state.recipe);
       const removedNodes = new Set();
       const removedMaterials = new Set();
+      const removals = [];
       for (const operation of operations) {
         const section = Object.hasOwn(NULLABLE_SECTION_OPERATIONS, operation.type) ? NULLABLE_SECTION_OPERATIONS[operation.type] : null;
         if (section) {
@@ -2177,7 +2234,15 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
             merged[nestedField] = { ...candidate[lookField][nestedField], ...patch[nestedField] };
           }
           // A preset starts the sky again from its own sun, so fields kept from the earlier sky never hide it.
-          if (patch.sky) merged.sky = { ...!patch.sky.preset && candidate[lookField].sky, type: 'physical', ...patch.sky };
+          if (patch.sky) {
+            const kept = candidate[lookField].sky;
+            const type = patch.sky.type ?? kept?.type ?? 'physical';
+            merged.sky = { ...!patch.sky.preset && kept?.type === type && kept, type, ...patch.sky };
+          }
+          // The sky's derived colours kept from an earlier sky or setup are not choices: only the patch's own values beat the sky.
+          if (lookField === 'environment' && merged.sky?.type === 'physical') {
+            for (const field of SKY_OVERRIDABLE_FIELDS) if (!Object.hasOwn(patch, field)) delete merged[field];
+          }
           candidate[lookField] = merged;
           continue;
         }
@@ -2262,6 +2327,7 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
           if (index < 0) {
             throw invalidField('id', operation.id, `the ID of an existing ${removal} entry; scene_inspect lists them`);
           }
+          removals.push(operation);
           candidate[removal].splice(index, 1);
           if (operation.type === 'remove-material') {
             removedMaterials.add(operation.id);
@@ -2296,6 +2362,7 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
           }
         }
       }
+      assertRemovedResourcesUnused(candidate, removals);
       // Plain field edits put only values the operation copy already checked into the candidate, so the recipe is not copied and checked a second time.
       try {
         return commit(stage(candidate, null, removedNodes, removedMaterials, onlyFieldEdits, onlyFieldEdits ? poseEditNodeIds(operations) : null), true);
@@ -2337,7 +2404,7 @@ export function createAgentScene(input, inputLimits = {}, options = {}) {
         return result;
       });
       const resident = geometryStats(ownedGeometryRecords());
-      const diagnostics = [...recipeDiagnostics(state.recipe), ...closedRoomProblems(), ...staleBakeProblems(), ...(state.bakeSkipped ? [agentSceneModule('bake').bakeSkippedDiagnostic(state.bakeSkipped)] : []),...coplanarProblems()];
+      const diagnostics = [...recipeDiagnostics(state.recipe), ...closedRoomProblems(), ...staleBakeProblems(), ...(state.bakeSkipped ? [agentSceneModule('bake').bakeSkippedDiagnostic(state.bakeSkipped)] : []),...coplanarProblems(), ...(agentSceneModuleLoaded('unsupportedPart') ? agentSceneModule('unsupportedPart').unsupportedPartProblems(state.parts, state.recipe, revision) : []), ...(state.particleSampler?.diagnostics() ?? [])];
       return {
         revision, topologyRevision,
         ...(state.recipe.motion?.ik?.length ? { motionIk: agentSceneModule('motion').compileAgentMotion(state.recipe.motion, state.recipe).sweepIk() } : {}),

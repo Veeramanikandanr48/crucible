@@ -130,6 +130,8 @@ function toByte(unit) {
  * than 4,000,000). Returns `{ count, positions, colors, scales, rotations, bounds, skipped }`, where `skipped` is `{ count, fields }`: a splat with any non-finite field (a scale that overflows counts) is dropped, `count` is how many were dropped (0 for a clean file) and `fields` names the fields that were non-finite. It throws only when no splat is usable. In the arrays: positions are xyz, colors are
  * RGBA bytes (RGB from the DC spherical harmonic, A from the sigmoid of opacity), scales are the exponentiated
  * axis lengths in metres and rotations are unit quaternions in w, x, y, z order.
+ * `upAxis` is `'y'` (default, no change) or `'z'` for a Z-up file such as one written by Blender: positions and rotations are
+ * turned by -90 degrees about x, so the file's +z comes out on +y and each splat's orientation turns with it.
  */
 export function parseGaussianSplatPly(buffer, options = {}) {
   const source = openSplatPly(buffer, options, 'parseGaussianSplatPly');
@@ -153,6 +155,7 @@ export async function parseGaussianSplatPlyAsync(buffer, options = {}) {
 
 function openSplatPly(buffer, options, caller) {
   const { maximumBytes, maximumCount } = resolveLimits(options);
+  resolveUpAxis(options, caller);
   if (!(buffer instanceof ArrayBuffer) && !ArrayBuffer.isView(buffer)) {
     throw new TypeError(`${caller} expects an ArrayBuffer or a typed array`);
   }
@@ -174,12 +177,36 @@ function openSplatPly(buffer, options, caller) {
     throw new Error(`Gaussian splat PLY is truncated: ${vertexCount} splats need ${vertexCount * stride} bytes, ${Math.max(0, bytes.length - vertexStart)} are present`);
   }
   const body = new DataView(bytes.buffer, bytes.byteOffset + vertexStart, vertexCount * stride);
-  return { view: body, vertexCount, layout, stride };
+  return { view: body, vertexCount, layout, stride, upAxis: resolveUpAxis(options, caller) };
 }
 
 const FIELD_NAMES = [...REQUIRED_PROPERTIES];
+const UP_AXES = ['y', 'z'];
+const HALF_SQUARE_ROOT = Math.SQRT1_2;
 
-function createSplatReader({ view, vertexCount, layout, stride }) {
+function resolveUpAxis(options, caller) {
+  const upAxis = options.upAxis ?? 'y';
+  if (!UP_AXES.includes(upAxis)) {
+    throw new RangeError(`${caller} upAxis must be 'y' (the default, Crucible's up) or 'z' (Blender and CAD files), got ${String(upAxis)}`);
+  }
+  return upAxis;
+}
+
+// A turn of -90 degrees about x sends the file's +z (up) to +y: (x, y, z) becomes (x, z, -y).
+// The same turn, as the quaternion (w, x, y, z) = (cos 45, -sin 45, 0, 0), is multiplied in front of each splat's own rotation.
+function turnZUpToYUp(row) {
+  const [x, y, z] = [row[0], row[1], row[2]];
+  row[0] = x;
+  row[1] = z;
+  row[2] = -y;
+  const [w, qx, qy, qz] = [row[10], row[11], row[12], row[13]];
+  row[10] = HALF_SQUARE_ROOT * (w + qx);
+  row[11] = HALF_SQUARE_ROOT * (qx - w);
+  row[12] = HALF_SQUARE_ROOT * (qy + qz);
+  row[13] = HALF_SQUARE_ROOT * (qz - qy);
+}
+
+function createSplatReader({ view, vertexCount, layout, stride, upAxis }) {
   const positions = new Float32Array(vertexCount * 3);
   const colors = new Uint8Array(vertexCount * 4);
   const scales = new Float32Array(vertexCount * 3);
@@ -206,6 +233,7 @@ function createSplatReader({ view, vertexCount, layout, stride }) {
       }
     }
     if (!valid) return;
+    if (upAxis === 'z') turnZUpToYUp(values);
     writeSplat(kept++, values);
   }
   function writeSplat(slot, row) {

@@ -1,1 +1,0 @@
-- glTF import names the field and index of a `null` or non-object entry in `nodes`, `meshes`, `accessors`, `bufferViews`, `buffers`, `materials`, `textures`, `images`, `skins` or `animations`, and of such an array that is not an array, instead of a "Cannot read properties" TypeError; a `null` array still loads as absent (#1248).

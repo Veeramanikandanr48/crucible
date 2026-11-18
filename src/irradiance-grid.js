@@ -2,9 +2,9 @@ import { createTracer } from './ray-query.js';
 import { readTriangle } from './triangle-math.js';
 import { registerShaderFeatureCode, layerTextureSupport } from './shader-registry.js';
 import {
-  MAX_BAKE_PARTS, MAX_GPU_BAKE_PARTS, buildWorld, createDirectIrradiance, createGatherer, diffuseAlbedo, emittedRadiance, normalizeLights, sceneScale, validatePart, withReach,
+  buildWorld, createDirectIrradiance, createGatherer, diffuseAlbedo, emittedRadiance, normalizeLights, sceneScale, validatePart, withReach,
 } from './light-bake.js';
-import { worldBounds } from './probe-trace.js';
+import { MAX_PROBE_GRID_PARTS, worldBounds } from './probe-trace.js';
 import { createGridMedium, MAXIMUM_FOG_SCATTERS } from './grid-medium.js';
 
 // A baked grid of diffuse light: at each node of a 3D grid the light that other surfaces bounce toward it (the sun's lit
@@ -83,7 +83,8 @@ function nodePoint(layout, node, point) {
   point[2] = layout.origin[2] + Math.floor(node / (width * height)) * layout.cellSize;
 }
 
-function gridLayout(parts, resolution) {
+/** The grid origin, cell size and node counts for the parts' bounds: no side has more than `resolution` nodes. */
+export function gridLayout(parts, resolution) {
   const minimum = [Infinity, Infinity, Infinity];
   const maximum = [-Infinity, -Infinity, -Infinity];
   for (const part of parts) {
@@ -235,8 +236,8 @@ function requireTraceSettings(resolution, samples) {
  * their neighbours. Returns `{ origin, cellSize, size, data, seconds, nodes, solidNodes }`; the same input gives the same bytes.
  */
 export function traceIrradianceGrid(parts, lighting, { resolution = true, samples = DEFAULT_GRID_SAMPLES, bounces = 3, maxSeconds = 60 } = {}) {
-  if (!Array.isArray(parts) || parts.length === 0 || parts.length > MAX_BAKE_PARTS) {
-    throw new RangeError(`The irradiance grid takes from 1 to ${MAX_BAKE_PARTS} parts: it traces on the CPU, and only lightmaps trace on the GPU (up to ${MAX_GPU_BAKE_PARTS} parts). Use fewer parts or drop bake.irradianceGrid.`);
+  if (!Array.isArray(parts) || parts.length === 0 || parts.length > MAX_PROBE_GRID_PARTS) {
+    throw new RangeError(`The irradiance grid takes from 1 to ${MAX_PROBE_GRID_PARTS} parts: it traces on the CPU. Use fewer parts or drop bake.irradianceGrid.`);
   }
   parts.forEach(validatePart);
   requireTraceSettings(resolution, samples);

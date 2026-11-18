@@ -1,0 +1,20 @@
+{
+  "action": "opened",
+  "number": 2001,
+  "pull_request": {
+    "number": 2001,
+    "title": "Add a thing (#1944)",
+    "body": "Closes #1944",
+    "user": {
+      "login": "someone-else"
+    },
+    "author_association": "CONTRIBUTOR",
+    "labels": [],
+    "assignees": [],
+    "milestone": null,
+    "draft": false
+  },
+  "repository": {
+    "full_name": "codepawl/crucible"
+  }
+}

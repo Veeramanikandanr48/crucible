@@ -1,7 +1,8 @@
 // One native session per sequence job (issue 896): the first frame of a stills or video job creates a session on the Cycles kernel,
 // and each later frame renders through it. A frame whose scene differs only in the camera reuses the uploaded scene, the compiled
-// kernel and the acceleration structures; one whose materials, lights or instance transforms changed sends those tables; one the
-// session cannot take (other counts, geometry, textures or environment) gets a new session. Every frame equals the one-shot
+// kernel and the acceleration structures; one whose materials, lights, instance transforms or triangles changed sends those tables (new
+// triangles rebuild only the changed meshes' BLASes and the TLAS); one the session cannot take (other counts, other meshes placed, a changed
+// emissive mesh, textures or environment) gets a new session, with Cook's refusal as the reason. Every frame equals the one-shot
 // `traceNative` render of the same input byte for byte, and its route says which of these happened.
 import { isNativeTimeLimitError } from './agent-native-trace.mjs';
 
@@ -64,6 +65,8 @@ export function createNativeSequence({ tracer }) {
       heldInput = nextInput;
       Object.assign(route, { path: 'updated', changedTables, accelerationRebuilt: report.accelerationRebuilt, kernelRespecialized: report.kernelRespecialized,
         updateSeconds: report.updateSeconds });
+      // Set only when the frame sent a new triangles table: how many meshes got a new BLAS (the others are kept).
+      if (report.changedMeshes !== undefined) route.changedMeshes = report.changedMeshes;
       return null;
     } catch (error) {
       // A failed update closes the session by design, so the frame goes to a new one.

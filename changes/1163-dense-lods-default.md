@@ -1,0 +1,1 @@
+- A scene file now gives a dense scan levels of detail by default (`renderer.denseLods`, about 2.7x faster GPU frames on the Monster scan, a slight change in far detail); set `"denseLods": false` to keep every triangle (#1163).

@@ -1,1 +1,0 @@
-- The Cook path tracer matches Cycles more closely: bokeh corners sit at Cycles' blade rotation, metals and glass mixes keep their energy, and soft shadows from many lights clean up faster (#1172)

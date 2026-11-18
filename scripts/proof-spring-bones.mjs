@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -16,6 +16,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 const FOX_URL = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/Fox/glTF-Binary/Fox.glb';
 // The file is written to disk only when it matches this hash.
 const FOX_SHA256 = 'd97044e701822bac5a62696459b27d7b375aada5de8574ed4362edbba94771f7';
+const FOX_MAXIMUM_BYTES = 4 * 1024 * 1024;
 const outputDirectory = resolve(process.argv[2] ?? 'artifacts/981');
 const backend = process.env.PROOF_BACKEND ?? 'gpu';
 const WIDTH = 640;
@@ -30,12 +31,17 @@ const jobs = join(workDirectory, 'jobs');
 await mkdir(assets);
 await mkdir(outputDirectory, { recursive: true });
 
-const foxBytes = Buffer.from(await (await fetch(FOX_URL)).arrayBuffer());
-const assetId = createHash('sha256').update(foxBytes).digest('hex');
+// curl writes the file, so the bytes never pass through this script before the hash check, and --max-filesize bounds the size.
+const foxPath = join(assets, 'fox.glb');
+const download = spawnSync('curl', ['--fail', '--silent', '--show-error', '--location', '--max-filesize', String(FOX_MAXIMUM_BYTES), '--output', foxPath, FOX_URL], { encoding: 'utf8' });
+if (download.status !== 0) {
+  throw new Error(`Downloading ${FOX_URL} failed (curl exit ${download.status}): ${download.stderr || download.error}. Check the network, that curl is installed and that the file is under ${FOX_MAXIMUM_BYTES} bytes.`);
+}
+const assetId = createHash('sha256').update(await readFile(foxPath)).digest('hex');
 if (assetId !== FOX_SHA256) {
+  await rm(foxPath);
   throw new Error(`The downloaded Fox.glb has sha256 ${assetId}, expected ${FOX_SHA256}. Check the file at ${FOX_URL} and update FOX_SHA256 only if the new file is the same fox.`);
 }
-await writeFile(join(assets, 'fox.glb'), foxBytes);
 
 let browserPath = process.env.CHROME_PATH;
 if (browserPath && process.env.PROOF_CHROME_FLAGS) {

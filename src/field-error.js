@@ -22,6 +22,9 @@ export function describeReceived(value) {
 // Builds the validation error an agent-facing check throws: the field path, the value received and what is accepted,
 // with an example or a range. withFieldPrefix turns the path into a full recipe path for entries of a list.
 export function invalidField(path, value, expected, ErrorType = RangeError) {
+  if (/^one of\s*$/.test(expected)) {
+    expected = 'an ID that exists, but none is defined yet; add one first';
+  }
   const error = new ErrorType(`${path}: got ${describeReceived(value)}; expected ${expected}.`);
   error.fieldPath = path;
   return error;

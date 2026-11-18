@@ -10,6 +10,9 @@ Options:
     --scenes a,b          only these scenes (default: all normal-* scenes)
     --label before        name of the Cook run in the output
     --instancing          trace with instances instead of one flattened mesh, so the object matrix reaches the kernel
+    --reference-scenes a  reference scenes exported with export-scene.mjs and run beside the normal-* ones (default brick-graph,
+                          whose wall carries a tangent-space normal map; "none" skips them). The add-on's `maps` scene is built in
+                          Blender, so it runs through packages/blender-addon/tests/render_cook_and_cycles.py instead.
 A Cook checkout other than the installed package is read through NODE_OPTIONS (an `--import` of a module hook) in the environment.
 """
 import glob
@@ -24,6 +27,7 @@ sys.path.insert(0, HERE)
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 SCENE_PREFIX = "normal-"
+DEFAULT_REFERENCE_SCENES = "brick-graph"
 TILE_GATE_FRACTION = 0.05
 MEAN_GATE_FRACTION = 0.02
 
@@ -33,6 +37,11 @@ def load_sphere_light_runner():
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
     return module
+
+
+def export_reference_scenes(runner, output_directory, reference_scene_names):
+    for name in reference_scene_names:
+        runner.run(["node", os.path.join(HERE, "export-scene.mjs"), output_directory, "--scene", name])
 
 
 def passes_gates(summary):
@@ -56,7 +65,11 @@ def main():
     blender = runner.find_blender()
     os.makedirs(os.path.join(options["output_directory"], "renders"), exist_ok=True)
     runner.run(["node", os.path.join(HERE, "texture-scenes.mjs"), options["output_directory"]])
+    reference_flag = runner.read_flag(argument_list, "--reference-scenes", DEFAULT_REFERENCE_SCENES)
+    reference_scene_names = [name for name in reference_flag.split(",") if name and name != "none"]
+    export_reference_scenes(runner, options["output_directory"], reference_scene_names)
     scene_names = sorted(os.path.basename(path)[:-5] for path in glob.glob(os.path.join(options["output_directory"], "scenes", f"{SCENE_PREFIX}*.json")))
+    scene_names += reference_scene_names
     if wanted:
         scene_names = [name for name in scene_names if name in wanted]
     results = {}

@@ -1,5 +1,5 @@
 import { invalidField } from './field-error.js';
-import { planLightmaps, estimateBake, traceLightmaps } from './light-bake.js';
+import { planLightmaps, estimateBake, traceLightmaps, MAX_BAKE_TEXELS } from './light-bake.js';
 import { runKernel } from './kernel-offload.js';
 import { motionEnvironment } from './agent-motion.js';
 import { normalizeProbeList, traceProbes } from './probe-trace.js';
@@ -154,7 +154,7 @@ export function bakeSkippedDiagnostic(reason) {
   return {
     kind: 'bake-skipped', severity: 'warning', target: 'bake',
     message: `The edit is applied but the light bake did not run, so the old bake was dropped and the scene is drawn without baked light. ${reason}`,
-    fix: 'Fit the bake to the scene: fewer parts, a lower bake.samples or bake.texelsPerUnit (scene_apply set-bake), or remove bake.irradianceGrid and bake.probes when the part limit is theirs (they trace on the CPU, 256 parts). The bake runs again on the next edit.',
+    fix: 'Fit the bake to the scene: fewer parts, a lower bake.samples or bake.texelsPerUnit (scene_apply set-bake), or remove bake.irradianceGrid and bake.probes when the part limit is theirs (they trace on the CPU, 1,024 parts). The bake runs again on the next edit.',
   };
 }
 
@@ -172,87 +172,74 @@ function isPreset(settings) {
 
 // Path steps in total: texels x samples x bounces. Measured, a path costs about the same in a closed room and in an
 // open one whatever the number of lights, so this tracks the time of a bake better than a count of rays does.
+// More texels than the bake takes at all counts as infinite work, so the shrinking lowers texelsPerUnit until they fit too.
 function pathWorkOf(plan, settings) {
-  return estimateBake(plan, settings).texels * settings.samples * settings.bounces;
+  const { texels } = estimateBake(plan, settings);
+  return texels > MAX_BAKE_TEXELS ? Infinity : texels * settings.samples * settings.bounces;
 }
 
-// The densest texelsPerUnit, to two decimals, that still fits the explicit limit at the given samples and bounces (0 when none does).
-function largestFittingTexelsPerUnit(plan, settings) {
-  let fitting = 0;
-  let tooMuch = settings.texelsPerUnit;
-  for (let step = 0; step < 12; step++) {
-    const middle = Math.floor((fitting + tooMuch) / 2 * 100) / 100;
-    if (middle <= fitting) {
-      break;
-    }
-    if (pathWorkOf(plan, { ...settings, texelsPerUnit: middle }) <= BAKE_EXPLICIT_PATH_WORK_LIMIT) {
-      fitting = middle;
-    } else {
-      tooMuch = middle;
-    }
-  }
-  return fitting >= BAKE_RANGES.texelsPerUnit[0] ? fitting : 0;
-}
-
-function overLimitMessage(plan, settings, pathWork) {
-  const fittingSamples = Math.floor(BAKE_EXPLICIT_PATH_WORK_LIMIT * settings.samples / pathWork);
-  const fittingTexelsPerUnit = largestFittingTexelsPerUnit(plan, settings);
-  const choices = [];
-  if (fittingSamples >= BAKE_RANGES.samples[0]) {
-    choices.push(`samples ${fittingSamples} or fewer with texelsPerUnit ${settings.texelsPerUnit}`);
-  }
-  if (fittingTexelsPerUnit > 0) {
-    choices.push(`texelsPerUnit ${fittingTexelsPerUnit} or less with samples ${settings.samples}`);
-  }
-  const advice = choices.length > 0 ? `At bounces ${settings.bounces} this scene fits ${choices.join(', or ')}.` : 'Remove parts or lights, or lower bounces.';
-  return `The bake would follow ${pathWork} path steps (texels x samples x bounces); the limit for explicit settings is ${BAKE_EXPLICIT_PATH_WORK_LIMIT}. ${advice}`;
-}
-
-function scalePresetDown(settings) {
+function scaleSettingsDown(settings, floor) {
   return {
     ...settings,
-    samples: Math.max(PRESET_SAMPLES_FLOOR, Math.floor(settings.samples * 0.8)),
-    texelsPerUnit: Math.max(BAKE_RANGES.texelsPerUnit[0], Math.round(settings.texelsPerUnit * 0.9 * 100) / 100),
+    samples: Math.max(floor.samples, Math.floor(settings.samples * 0.8)),
+    texelsPerUnit: Math.max(floor.texelsPerUnit, Math.round(settings.texelsPerUnit * 0.9 * 100) / 100),
   };
+}
+
+// The lowest samples and texel density the shrinking goes to: the preset floor, or what was asked when that is already lower.
+function shrinkFloor(settings) {
+  return { samples: Math.min(settings.samples, PRESET_SAMPLES_FLOOR), texelsPerUnit: Math.min(settings.texelsPerUnit, BAKE_RANGES.texelsPerUnit[0]) };
 }
 
 /**
  * Keeps a bake inside its work limits before any ray is traced. The estimate counts texels, samples and bounces and reads
- * no clock, so the same recipe always resolves to the same settings. Explicit samples or texelsPerUnit are never changed:
- * they fail up front only over the hard limit, and otherwise run until the real maxSeconds limit. A preset is scaled down
- * (samples by a fifth, texel density by a tenth, repeatedly) until it fits BAKE_PRESET_PATH_WORK.
+ * no clock, so the same recipe always resolves to the same settings. Explicit settings that fit BAKE_EXPLICIT_PATH_WORK_LIMIT
+ * are never changed: they run until the real maxSeconds limit. A preset is scaled down (samples by a fifth, texel density by
+ * a tenth, repeatedly) until it fits BAKE_PRESET_PATH_WORK. Explicit settings over the hard limit are scaled down the same
+ * way until they fit it, and the result says what was asked and what ran, so a large scene gets some baked light instead of
+ * none. Only a scene that does not fit at the floor is refused.
  */
 export function fitSettingsToBudget(plan, settings) {
-  if (!isPreset(settings)) {
-    const pathWork = pathWorkOf(plan, settings);
-    if (pathWork > BAKE_EXPLICIT_PATH_WORK_LIMIT) {
-      throw new RangeError(overLimitMessage(plan, settings, pathWork));
-    }
+  const explicit = !isPreset(settings);
+  const budget = explicit ? BAKE_EXPLICIT_PATH_WORK_LIMIT : BAKE_PRESET_PATH_WORK;
+  if (pathWorkOf(plan, settings) <= budget) {
     return { used: settings, reduced: false, reduction: null };
   }
+  const floor = shrinkFloor(settings);
   // Samples and texel density shrink first. When the floor of both still does not fit (a large hall), a bounce is given up and
-  // the density and samples start again from the preset, so the result is the largest bake that fits and never a refusal.
-  // One bounce at the floor always fits a scene the explicit limit lets through, and past that the scene is too large to bake.
+  // the density and samples start again from the asked settings, so the result is the largest bake that fits.
   for (let bounces = settings.bounces; bounces >= BAKE_RANGES.bounces[0]; bounces--) {
     let used = { ...settings, bounces };
-    while (pathWorkOf(plan, used) > BAKE_PRESET_PATH_WORK && !atPresetFloor(used)) {
-      used = scalePresetDown(used);
+    while (pathWorkOf(plan, used) > budget && !atFloor(used, floor)) {
+      used = scaleSettingsDown(used, floor);
     }
-    if (pathWorkOf(plan, used) <= BAKE_PRESET_PATH_WORK) {
-      const reduced = used.samples !== settings.samples || used.bounces !== settings.bounces || used.texelsPerUnit !== settings.texelsPerUnit;
-      return { used, reduced, reduction: reduced ? reductionMessage(settings, used) : null };
+    if (pathWorkOf(plan, used) <= budget) {
+      return { used, reduced: true, reduction: reductionMessage(settings, used, explicit) };
     }
   }
-  throw new RangeError(`Even ${PRESET_SAMPLES_FLOOR} samples, 1 bounce and texelsPerUnit ${BAKE_RANGES.texelsPerUnit[0]} is over the preset budget of ${BAKE_PRESET_PATH_WORK} path steps for this scene. Remove parts or lights.`);
+  throw new RangeError(overLimitMessage(plan, settings, budget, floor));
 }
 
-function atPresetFloor(settings) {
-  return settings.samples <= PRESET_SAMPLES_FLOOR && settings.texelsPerUnit <= BAKE_RANGES.texelsPerUnit[0];
+function atFloor(settings, floor) {
+  return settings.samples <= floor.samples && settings.texelsPerUnit <= floor.texelsPerUnit;
 }
 
-// What the agent reads in bake.reduction: what the preset asked for, what ran, and the one thing to do for more.
-function reductionMessage(asked, used) {
-  return `The preset asked for samples ${asked.samples}, bounces ${asked.bounces}, texelsPerUnit ${asked.texelsPerUnit}; this scene is too large for that within the preset budget of ${BAKE_PRESET_PATH_WORK} path steps, so it baked samples ${used.samples}, bounces ${used.bounces}, texelsPerUnit ${used.texelsPerUnit} (bake.used). For a denser bake pass explicit samples, bounces and texelsPerUnit, up to ${BAKE_EXPLICIT_PATH_WORK_LIMIT} path steps and ${BAKE_MAXIMUM_SECONDS} s.`;
+// What the agent reads in bake.reduction: what was asked, what ran, and the one thing to do for more.
+function reductionMessage(asked, used, explicit) {
+  const asking = `samples ${asked.samples}, bounces ${asked.bounces}, texelsPerUnit ${asked.texelsPerUnit}`;
+  const running = `samples ${used.samples}, bounces ${used.bounces}, texelsPerUnit ${used.texelsPerUnit} (bake.used)`;
+  if (explicit) {
+    return `The explicit settings asked for ${asking}; this scene is over the hard limit of ${BAKE_EXPLICIT_PATH_WORK_LIMIT} path steps for that, so it baked ${running} instead of failing. For the settings you asked for, remove parts or lights.`;
+  }
+  return `The preset asked for ${asking}; this scene is too large for that within the preset budget of ${BAKE_PRESET_PATH_WORK} path steps, so it baked ${running}. For a denser bake pass explicit samples, bounces and texelsPerUnit, up to ${BAKE_EXPLICIT_PATH_WORK_LIMIT} path steps and ${BAKE_MAXIMUM_SECONDS} s.`;
+}
+
+function overLimitMessage(plan, settings, budget, floor) {
+  const atFloorSettings = { ...settings, samples: floor.samples, texelsPerUnit: floor.texelsPerUnit, bounces: BAKE_RANGES.bounces[0] };
+  const limitName = isPreset(settings) ? 'the preset budget' : 'the limit for explicit settings';
+  const { texels } = estimateBake(plan, atFloorSettings);
+  const size = texels > MAX_BAKE_TEXELS ? `${texels} texels, over the ${MAX_BAKE_TEXELS} the bake takes` : `${pathWorkOf(plan, atFloorSettings)} path steps (texels x samples x bounces), over ${limitName} of ${budget}`;
+  return `Even samples ${atFloorSettings.samples}, bounces 1 and texelsPerUnit ${atFloorSettings.texelsPerUnit} is ${size}. Remove parts or lights.`;
 }
 
 function timeLimitMessage(error, settings) {

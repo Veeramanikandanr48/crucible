@@ -84,7 +84,7 @@ test('the GLSL of agx and neutral prints the constants the path tracer uses', ()
 test('the display curve is replaced in all four programs, and the look only in the post pass', () => {
   const sources = { main: fragmentShader, liquid: liquidFragmentShader, background: environmentBackgroundFragment, post: postFragment };
   for (const [kind, source] of Object.entries(sources)) {
-    for (const name of ['agx', 'neutral']) {
+    for (const name of ['agx', 'neutral', 'standard']) {
       const changed = viewTransformShader.apply(source, kind, name, false);
       assert.ok(!changed.includes('2.51 * color'), `${kind} ${name} drops the ACES fit`);
       assert.ok(changed.includes('selectedViewTransform(color)'));

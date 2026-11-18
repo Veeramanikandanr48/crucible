@@ -16,6 +16,15 @@ function queryPartsOf(scene) {
   return scene.parts.map(part => ({ id: part.name, geometry: part.geometry, matrix: part.matrix, material: part.material?.id }));
 }
 
+/** Every part's material by part ID, so a mark can tell which unmarked parts share its material. */
+export function partMaterialsFor(record) {
+  const materials = {};
+  for (const part of queryPartsOf(record.scene)) {
+    if (part.material !== undefined && part.material !== null) materials[part.id] = part.material;
+  }
+  return materials;
+}
+
 /** One cached scene query per session. It is rebuilt when the revision or any part matrix (a seeked pose) changes. */
 export function sceneQueryFor(record) {
   const parts = queryPartsOf(record.scene);

@@ -174,7 +174,7 @@ A `curve` point is `[x, y, z]` with automatic smooth handles, or `{ position, ha
 
 - **Expecting a solid Boolean.** These generators do not perform solid Boolean operations or provide a mesh editor. Build the pieces and place them with part matrices.
 - **A hole that touches the contour.** `extrude` throws `Every hole must lie strictly inside the contour.` Move the hole inward or make it smaller.
-- **Consecutive duplicate points.** A path or profile with two identical neighbors throws. Remove the repeat.
+- **Consecutive duplicate points.** A path or profile with two identical neighbors throws, naming the repeated point (`path[2]`). Remove the repeat.
 - **Looking for caps on an open tube.** `tube` leaves its ends open. Use `curve`, which adds flat caps, when the shape must be closed.
 - **A folded lathe profile.** A profile that doubles back can intersect itself.
 - **Generating inside the render loop.** Build once, then share the geometry. The renderer does not take new geometry after construction.

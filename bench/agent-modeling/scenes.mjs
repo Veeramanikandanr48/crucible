@@ -86,6 +86,30 @@ const FINDINGS_CHECKS = [
   { kind: 'centreAt', node: 'statue', position: STATUE_CENTRE },
 ];
 
+const ASK_USER_PIN_CHECKS = [
+  { kind: 'lint' },
+  { kind: 'parts', min: 3, max: 3 },
+  { kind: 'materialOf', node: 'statue', red: true, label: 'the pinned statue is red' },
+  { kind: 'materialOf', node: 'plinth', red: false, label: 'the plinth is not recoloured' },
+];
+
+// The plinth and the floor share the stone material, so colouring the plinth alone needs a material of its own.
+const ASK_USER_LASSO_CHECKS = [
+  { kind: 'lint' },
+  { kind: 'parts', min: 3, max: 3 },
+  { kind: 'materialOf', node: 'statue', blue: true, label: 'the lassoed statue is blue' },
+  { kind: 'materialOf', node: 'plinth', blue: true, label: 'the lassoed plinth is blue' },
+  { kind: 'materialOf', node: 'floor', blue: false, label: 'the floor outside the lasso is not recoloured' },
+];
+
+// The plinth and the floor share the stone material, so reddening the pinned plinth needs a material of its own.
+const ASK_USER_PIN_SHARED_CHECKS = [
+  { kind: 'lint' },
+  { kind: 'parts', min: 3, max: 3 },
+  { kind: 'materialOf', node: 'plinth', red: true, label: 'the pinned plinth is red' },
+  { kind: 'materialOf', node: 'floor', red: false, label: 'the floor sharing its material is not recoloured' },
+];
+
 export const SCENE_TASKS = [
   {
     id: 'camera-closeup',
@@ -155,6 +179,36 @@ colour so it turns warmer (red up, blue down) between time 0 and time 4. ${FINIS
     checks: SUNSET_CHECKS,
   },
   {
+    // The answer comes from bench/agent-modeling/ask-user-pin.json: run.mjs hands it to the server as CRUCIBLE_ASK_USER_FIXTURE.
+    id: 'ask-user-pin',
+    askUserFixture: 'ask-user-pin.json',
+    startRecipe: stageRecipe(),
+    ownPreamble: true,
+    prompt: `${PLAIN_PREAMBLE} ${STAGE} A person has pinned one spot on the picture of this scene and left a note about a change to make there.
+Read their pin with scene_ask_user (it returns the part under the pin and their note), then make that change to that part and nothing else. ${FINISH}`,
+    checks: ASK_USER_PIN_CHECKS,
+  },
+  {
+    // The answer comes from bench/agent-modeling/ask-user-pin-shared.json, a pin on the plinth, whose stone material the floor also uses.
+    id: 'ask-user-pin-shared',
+    askUserFixture: 'ask-user-pin-shared.json',
+    startRecipe: stageRecipe(),
+    ownPreamble: true,
+    prompt: `${PLAIN_PREAMBLE} ${STAGE} A person has pinned one spot on the picture of this scene and left a note about a change to make there.
+Read their pin with scene_ask_user (it returns the part under the pin and their note), then make that change to that part and nothing else. ${FINISH}`,
+    checks: ASK_USER_PIN_SHARED_CHECKS,
+  },
+  {
+    // The answer comes from bench/agent-modeling/ask-user-lasso.json, drawn around the statue and the plinth.
+    id: 'ask-user-lasso',
+    askUserFixture: 'ask-user-lasso.json',
+    startRecipe: stageRecipe(),
+    ownPreamble: true,
+    prompt: `${PLAIN_PREAMBLE} ${STAGE} A person has drawn a lasso around a region of the picture of this scene and left a note about a change to make there.
+Read their lasso with scene_ask_user (it returns the parts under the outline and their note), then make that change to those parts and nothing else. ${FINISH}`,
+    checks: ASK_USER_LASSO_CHECKS,
+  },
+  {
     id: 'film-reveal',
     startRecipe: stageRecipe(),
     ownPreamble: true,
@@ -217,6 +271,24 @@ export const SCENE_REFERENCES = {
       ],
     },
   }),
+  'ask-user-pin': (() => {
+    const recipe = stageRecipe();
+    recipe.materials = recipe.materials.map(material => (material.id === 'bronze' ? { id: 'bronze', color: [0.85, 0.12, 0.1] } : material));
+    return recipe;
+  })(),
+  'ask-user-pin-shared': (() => {
+    const recipe = stageRecipe();
+    recipe.materials.push({ id: 'plinth-red', color: [0.85, 0.12, 0.1] });
+    recipe.nodes = recipe.nodes.map(node => (node.id === 'plinth' ? { ...node, material: 'plinth-red' } : node));
+    return recipe;
+  })(),
+  'ask-user-lasso': (() => {
+    const recipe = stageRecipe();
+    recipe.materials = recipe.materials.map(material => (material.id === 'bronze' ? { id: 'bronze', color: [0.1, 0.2, 0.85] } : material));
+    recipe.materials.push({ id: 'plinth-stone', color: [0.1, 0.2, 0.85] });
+    recipe.nodes = recipe.nodes.map(node => (node.id === 'plinth' ? { ...node, material: 'plinth-stone' } : node));
+    return recipe;
+  })(),
   'film-reveal': stageRecipe({
     motion: {
       duration: 6,

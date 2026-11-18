@@ -32,6 +32,8 @@ SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 REPOSITORY_ROOT = os.path.abspath(os.path.join(SCRIPT_DIRECTORY, "..", ".."))
 # The scene reading (camera, lights, world description, meshes) is shared with the Blender render add-on.
 sys.path.insert(0, os.path.join(REPOSITORY_ROOT, "packages", "blender-addon"))
+sys.path.insert(0, SCRIPT_DIRECTORY)
+from light_bounce_limits import clear_light_bounce_limits  # noqa: E402
 from cook_blender import blender_conversions as conversions  # noqa: E402
 from cook_blender.scene_export import add_light_entry, build_camera_entries, column_major_yup_matrix, describe_world, encode_array, geometry_key, mesh_to_arrays  # noqa: E402
 HDR_RADIANCE_LIMIT = 60000.0
@@ -548,12 +550,15 @@ def apply_reference_variant(scene, variant):
         scene.view_settings.gamma = 1.0
     elif variant == "no-world":
         scene.world = None
-    elif variant in ("sun-only", "points-only", "areas-only", "spots-only"):
-        keep = {"sun-only": "SUN", "points-only": "POINT", "areas-only": "AREA", "spots-only": "SPOT"}[variant]
+    elif variant in ("sun-only", "points-only", "areas-only", "spots-only", "sun-only-unlimited-bounces"):
+        keep = {"sun-only": "SUN", "points-only": "POINT", "areas-only": "AREA", "spots-only": "SPOT", "sun-only-unlimited-bounces": "SUN"}[variant]
         for light_object in bpy.data.objects:
             if light_object.type == "LIGHT" and light_object.data.type != keep:
                 hide_object_everywhere(light_object)
         scene.world = None
+        if variant == "sun-only-unlimited-bounces":
+            # The JSON carries no per-light limit, so clear it on the original to match what the export can say.
+            log("cleared per-light bounce limits " + json.dumps(clear_light_bounce_limits(bpy.data.objects)))
 
 
 def run_reference(options):

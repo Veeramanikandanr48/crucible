@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { MeshoptEncoder } from 'meshoptimizer';
 import { createAccessorReader } from '../src/gltf-accessors.js';
+import { decodeMeshoptViews } from '../src/gltf-meshopt.js';
 import { parseGltf } from '../src/gltf.js';
 
 const MESHOPT = 'EXT_meshopt_compression';
@@ -90,7 +91,7 @@ function compressedView({ buffer = 1, data, count, byteStride, mode, filter, tar
 }
 
 /** The same sphere, either as plain buffer views or as one meshopt-compressed GLB (positions, octahedral normals, triangle indices). */
-function sphereGlb({ compressed, fallback = 'zero' }) {
+function sphereGlb({ compressed, fallback = 'zero', emptyView = null }) {
   const mesh = sphere();
   const vertexCount = mesh.positions.length / 3;
   const normalBytes = compressed ? octahedralNormals(mesh.normals) : bytesOf(mesh.normals);
@@ -118,10 +119,23 @@ function sphereGlb({ compressed, fallback = 'zero' }) {
   const { binary, offsets } = joinChunks([position.encoded, normal.encoded, index.encoded]);
   const fallbackBuffer = { byteLength: 1 << 20, extensions: { [MESHOPT]: { fallback: true } } };
   if (fallback === 'unreachable') fallbackBuffer.uri = 'fallback.bin';
+  const bufferViews = [position.view(offsets[0]), normal.view(offsets[1]), index.view(offsets[2])];
+  const nodes = base.nodes;
+  const meshes = base.meshes;
+  if (emptyView) {
+    // The shape another tool wrote for a mesh that simplified to nothing: a second mesh whose accessors and meshopt view are empty.
+    bufferViews.push({ buffer: 1, byteLength: 0, byteStride: 12, target: 34962, extensions: { [MESHOPT]: { buffer: 0, byteOffset: offsets[0], byteLength: 1, mode: 'ATTRIBUTES', byteStride: 12, count: 0 } } });
+    accessors.push({ bufferView: 3, componentType: FLOAT, count: emptyView === 'read' ? vertexCount : 0, type: 'VEC3' });
+    nodes.push({ mesh: 1 });
+    meshes.push({ primitives: [{ attributes: { POSITION: 3 } }] });
+  }
   const document = {
     ...base,
+    nodes,
+    meshes,
+    scenes: [{ nodes: nodes.map((_, nodeIndex) => nodeIndex) }],
     accessors,
-    bufferViews: [position.view(offsets[0]), normal.view(offsets[1]), index.view(offsets[2])],
+    bufferViews,
     buffers: [{ byteLength: binary.length }, fallbackBuffer],
     extensionsUsed: [MESHOPT, 'KHR_mesh_quantization'],
     extensionsRequired: [MESHOPT, 'KHR_mesh_quantization'],
@@ -166,6 +180,17 @@ test('a compressed buffer view that cannot be decoded names the extension', asyn
   const binaryStart = 28 + new DataView(glb.buffer).getUint32(12, true);
   glb.fill(0xff, binaryStart, binaryStart + 64);
   await assert.rejects(parseGltf(glb.buffer), /EXT_meshopt_compression could not decode a buffer view/);
+});
+
+test('an unread meshopt view with count 0 is skipped with a warning and the rest of the file loads', async () => {
+  const asset = await parseGltf(sphereGlb({ compressed: true, emptyView: 'unread' }));
+  assert.equal(asset.parts.length, 1);
+  assert.ok(asset.parts[0].geometry.positions.length > 0);
+  assert.ok(asset.warnings.some(warning => /bufferViews\[3\].*count is 0 and no accessor reads it/.test(warning)), asset.warnings.join(' | '));
+});
+
+test('a meshopt view with count 0 that an accessor reads still fails with the count error', async () => {
+  await assert.rejects(parseGltf(sphereGlb({ compressed: true, emptyView: 'read' })), /bufferViews\[3\]\.extensions\.EXT_meshopt_compression\.count 0: expected a positive safe integer/);
 });
 
 test('a caller supplied decoder still takes the place of the built-in one', async () => {
@@ -236,4 +261,61 @@ test('the public showcase and sample GLBs load without a decoder option', async 
   const bytes = await readFile(new URL('../public/wall-e.glb', import.meta.url));
   const asset = await parseGltf(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), { maxVertices: 500000 });
   assert.ok(asset.parts.length > 0);
+});
+
+test('the bundled Dark store showcase GLB loads and reports its empty meshopt views', async () => {
+  globalThis.createImageBitmap ??= async () => ({ width: 4, height: 4, close() {} });
+  const bytes = await readFile(new URL('../public/showcase/darkstore/scene.glb', import.meta.url));
+  const asset = await parseGltf(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), { maxTexturePixels: 67108864 });
+  assert.ok(asset.parts.length > 0);
+  assert.ok(asset.warnings.some(warning => /count is 0 and no accessor reads it/.test(warning)));
+});
+
+/** One valid small view whose extension fields are then overridden, read with a decoder that counts its calls. */
+async function loadWithExtensionOverrides(overrides, mode = 'ATTRIBUTES') {
+  const byteStride = mode === 'ATTRIBUTES' ? 4 : 2;
+  const count = mode === 'TRIANGLES' ? 3 : 4;
+  const { encoded, view } = compressedView({ data: new Uint8Array(count * byteStride), count, byteStride, mode });
+  const bufferView = view(0);
+  Object.assign(bufferView.extensions[MESHOPT], overrides);
+  let decoderCalls = 0;
+  const countingDecoder = { ready: Promise.resolve(), decodeGltfBuffer() { decoderCalls++; } };
+  await decodeMeshoptViews([bufferView], () => encoded, countingDecoder);
+  return decoderCalls;
+}
+
+const FIELD = String.raw`bufferViews\[0\]\.extensions\.EXT_meshopt_compression\.`;
+
+test('a valid view of every mode reaches the decoder', async () => {
+  for (const mode of ['ATTRIBUTES', 'TRIANGLES', 'INDICES']) assert.equal(await loadWithExtensionOverrides({}, mode), 1, mode);
+});
+
+test('a meshopt view with a bad byteStride names the field and the allowed values without calling the decoder', async () => {
+  for (const byteStride of [3, 0, 260, 6, -4, 4.5]) {
+    await assert.rejects(loadWithExtensionOverrides({ byteStride }), new RegExp(`${FIELD}byteStride .*expected a multiple of 4 from 4 to 256 for ATTRIBUTES`), String(byteStride));
+  }
+  for (const mode of ['TRIANGLES', 'INDICES']) {
+    await assert.rejects(loadWithExtensionOverrides({ byteStride: 3 }, mode), new RegExp(`${FIELD}byteStride 3: expected 2 or 4 for ${mode}`));
+  }
+});
+
+test('a negative, fractional or non-numeric byteOffset is named instead of reaching the decoder', async () => {
+  for (const byteOffset of [-8, 1.5, '0']) {
+    await assert.rejects(loadWithExtensionOverrides({ byteOffset }), new RegExp(`${FIELD}byteOffset .*expected a non-negative safe integer`), String(byteOffset));
+  }
+});
+
+test('a zero or missing byteLength and count are named', async () => {
+  await assert.rejects(loadWithExtensionOverrides({ byteLength: 0 }), new RegExp(`${FIELD}byteLength 0: expected a positive safe integer`));
+  await assert.rejects(loadWithExtensionOverrides({ count: 0 }), new RegExp(`${FIELD}count 0: expected a positive safe integer`));
+  await assert.rejects(loadWithExtensionOverrides({ count: undefined }), new RegExp(`${FIELD}count undefined: expected a positive safe integer`));
+});
+
+test('a TRIANGLES count that is not a multiple of 3 is named', async () => {
+  await assert.rejects(loadWithExtensionOverrides({ count: 4 }, 'TRIANGLES'), new RegExp(`${FIELD}count 4: expected a multiple of 3 for TRIANGLES`));
+});
+
+test('an unknown mode or filter is named with the allowed values', async () => {
+  await assert.rejects(loadWithExtensionOverrides({ mode: 'STRIPS' }), new RegExp(`${FIELD}mode "STRIPS": expected one of ATTRIBUTES, TRIANGLES, INDICES`));
+  await assert.rejects(loadWithExtensionOverrides({ filter: 'FANCY' }), new RegExp(`${FIELD}filter "FANCY": expected one of NONE, OCTAHEDRAL, QUATERNION, EXPONENTIAL`));
 });

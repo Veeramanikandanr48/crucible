@@ -1,1 +1,0 @@
-- `denseSamples` renders scenes with more than one triangle per pixel with fewer MSAA samples (default off), which took a 1.6 million triangle frame from about 3.7 to 3.0 ms at 2 samples (#1163).

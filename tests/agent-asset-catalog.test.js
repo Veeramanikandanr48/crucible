@@ -7,9 +7,10 @@ import { join, dirname } from 'node:path';
 import { mat4 } from 'gl-matrix';
 import { box } from '../src/geometry.js';
 import { exportGlb } from '../src/export.js';
-import { createAgentAssetCatalog } from '../scripts/agent-asset-catalog.mjs';
+import { createAgentAssetCatalog, readCatalogFile } from '../scripts/agent-asset-catalog.mjs';
 import { AGENT_ASSET_LIMITS, agentAssetDecodeOptions, withCatalogLimitAdvice } from '../src/agent-asset-limits.js';
 import { GLTF_CAPABILITIES, parseGltf } from '../src/gltf.js';
+import { createClips } from '../src/gltf-animation.js';
 
 async function fixture(context) {
   const directory = await mkdtemp(join(tmpdir(), 'crucible-catalog-'));
@@ -182,11 +183,10 @@ test('a Kenney GLB loads with the colormap that sits next to it, embedded into t
   assert.equal(listing.assets[0].assetId, createHash('sha256').update(stored).digest('hex'));
 });
 
-test('a GLB texture that is missing, remote, outside the folder or not an image is refused with the file and the fix', async context => {
+test('a GLB texture that is missing, remote, outside the folder or not an image is refused with the file and the fix (a missing one is skipped, see #2072)', async context => {
   const directory = await boatFixture(context);
   const boat = await readFile(join(directory, 'boat-fishing-small.glb'));
   const attempts = [
-    ['Textures/absent.png', /boat-fishing-small\.glb: image "Textures\/absent\.png" was not found next to the GLB/],
     ['https://example.invalid/colormap.png', /remote or embedded address.*relative path/],
     ['data:image/png;base64,AAAA', /remote or embedded address/],
     ['../colormap.png', /leaves the GLB's folder.*relative path/],
@@ -202,6 +202,19 @@ test('a GLB texture that is missing, remote, outside the folder or not an image 
   await writeFile(join(directory, 'Textures', 'notes.png'), 'not an image');
   await writeFile(join(directory, 'boat-fishing-small.glb'), withDocument(boat, document => { document.images[0].uri = 'Textures/notes.png'; }));
   await assert.rejects(createAgentAssetCatalog(directory), /not a PNG, JPEG or WebP/);
+});
+
+test('a GLB whose texture is missing is skipped with the fix while the good GLB still lists, and naming it directly keeps the error (#2072)', async context => {
+  const directory = await boatFixture(context);
+  const boat = await readFile(join(directory, 'boat-fishing-small.glb'));
+  await writeFile(join(directory, 'bad.glb'), withDocument(boat, document => { document.images[0].uri = 'Textures/absent.png'; }));
+  const listing = (await createAgentAssetCatalog(directory)).list();
+  assert.deepEqual(listing.assets.map(asset => asset.name), ['boat-fishing-small.glb']);
+  assert.deepEqual(listing.skipped, [{
+    name: 'bad.glb',
+    reason: "bad.glb: image \"Textures/absent.png\" was not found next to the GLB. Copy that file into the GLB's folder at the same relative path.",
+  }]);
+  await assert.rejects(readCatalogFile(directory, 'bad.glb'), /bad\.glb: image "Textures\/absent\.png" was not found next to the GLB\. Copy that file into the GLB's folder/);
 });
 
 test('a texture folder that links out of the catalog folder is refused', async context => {
@@ -334,4 +347,15 @@ test('resolveName refuses an unknown or non-string name with a hint (#1843)', as
   assert.throws(() => catalog.resolveName('cub'), /Near names: "cube\.glb"/);
   assert.throws(() => catalog.resolveName('tree.glb'), /Run scene_asset_catalog/);
   assert.throws(() => catalog.resolveName(7), TypeError);
+});
+
+test('an unnamed clip has the same name in the catalog as in the decoded asset (#2075)', async context => {
+  const { directory, bytes } = await fixture(context);
+  const animations = [{ channels: [], samplers: [] }, { name: 'Walk', channels: [], samplers: [] }, { name: '', channels: [], samplers: [] }];
+  await writeFile(join(directory, 'cube.glb'), withDocument(bytes, document => { document.animations = animations; }));
+  const catalog = await createAgentAssetCatalog(directory);
+  const listed = catalog.list().assets[0].animations.map(clip => clip.name);
+  assert.deepEqual(listed, ['animation_0', 'Walk', 'animation_2']);
+  const decoded = createClips({ animations }, () => undefined, () => undefined).map(clip => clip.name);
+  assert.deepEqual(decoded, listed);
 });

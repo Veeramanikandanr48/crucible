@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { sphere } from '../src/geometry.js';
 import { simplifyGeometry, findLockedVertices, MAXIMUM_SIMPLIFY_TRIANGLES } from '../src/geometry-simplify.js';
 import { generateGeometryLods } from '../src/mesh-lod.js';
-import { addLodsToDenseParts, trianglesPerPixel } from '../src/dense-lods.js';
+import { addLodsToDenseParts, trianglesPerPixel, DEFAULT_MINIMUM_TRIANGLES } from '../src/dense-lods.js';
 
 // A flat grid in the xy plane whose uv is (x, y) and whose colour is a function of the vertex, so a surviving
 // vertex proves it kept its own attributes.
@@ -192,4 +192,49 @@ test('addLodsToDenseParts says what to pass when the canvas size is missing', ()
 test('addLodsToDenseParts rejects bad ratios on a sparse scene too', () => {
   const parts = [surfacePart('ball', sphere(8, 8))];
   assert.throws(() => addLodsToDenseParts(parts, { pixels: 1e9, ratios: [2] }), /ratios must be strictly decreasing/);
+});
+
+test('simplifyGeometry names an index past the vertex count instead of crashing in the collapser (#1900)', () => {
+  const positions = new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]);
+  const geometry = { positions, indices: new Uint32Array([0, 1, 2, 0, 2, 9]) };
+  assert.throws(() => simplifyGeometry(geometry), error => {
+    assert.ok(error instanceof RangeError);
+    assert.match(error.message, /index 9 at indices\[5\]/);
+    assert.match(error.message, /4 vertices/);
+    return true;
+  });
+  assert.throws(() => simplifyGeometry({ positions, indices: new Uint16Array([0, 1, 4]) }), /index 4 at indices\[2\]/);
+});
+
+test('simplifyGeometry names a positions length that is not a multiple of three (#1900)', () => {
+  const geometry = { positions: new Float32Array(10), indices: new Uint32Array([0, 1, 2]) };
+  assert.throws(() => simplifyGeometry(geometry), error => error instanceof RangeError && /length of 10/.test(error.message));
+});
+
+test('simplifyGeometry treats null options as the defaults (#1900)', () => {
+  const geometry = sphere(16, 8);
+  const withNull = simplifyGeometry(geometry, null);
+  const withDefaults = simplifyGeometry(geometry);
+  assert.deepEqual(withNull.map(level => level.triangles), withDefaults.map(level => level.triangles));
+  assert.equal(withNull.length, 2);
+});
+
+test('simplifyGeometry still takes an index equal to the last vertex (#1900)', () => {
+  const positions = new Float32Array([0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0]);
+  const geometry = { positions, indices: new Uint32Array([0, 1, 2, 0, 2, 3]) };
+  assert.equal(simplifyGeometry(geometry, { ratios: [0.5] }).length, 1);
+});
+
+test('addLodsToDenseParts gives levels to mid-size meshes by default, so a scene of many of them is not left at full detail (#2144)', () => {
+  const midSize = sphere(60, 40);
+  const small = sphere(50, 30);
+  const tiny = sphere(8, 8);
+  assert.ok(midSize.indices.length / 3 >= DEFAULT_MINIMUM_TRIANGLES, 'the sphere is a mid-size mesh');
+  assert.ok(midSize.indices.length / 3 < 20000, 'it is under the old 20000 floor');
+  assert.ok(small.indices.length / 3 < DEFAULT_MINIMUM_TRIANGLES, 'a smaller mesh sits under the floor');
+  const parts = [surfacePart('mid', midSize), surfacePart('small', small), surfacePart('tiny', tiny)];
+  const result = addLodsToDenseParts(parts, { pixels: 100 });
+  assert.ok(result[0].lods.length > 1, 'a mesh over the default floor gets levels');
+  assert.equal(result[1].lods, undefined, 'a mesh under the default floor does not (4000 triangles, not 1500: the lower floor shimmered more and drew no faster, #2157)');
+  assert.equal(result[2].lods, undefined, 'a tiny mesh does not');
 });

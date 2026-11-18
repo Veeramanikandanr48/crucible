@@ -2,12 +2,14 @@ import { createHash } from 'node:crypto';
 import { open, readdir, realpath, lstat } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 
+import { clipDisplayName } from '../src/clip-name.js';
 import { AGENT_ASSET_LIMITS, assetBytesLimitMessage } from '../src/agent-asset-limits.js';
 import { MAXIMUM_CATALOG_ENVIRONMENT_BYTES, MAXIMUM_CATALOG_LOOK_BYTES } from '../src/look-catalog.js';
-import { imageLimitProblem } from '../src/image-header.js';
+import { imageLimitProblem, readImageDimensions } from '../src/image-header.js';
 import { TEXTURE_SEQUENCE_LIMITS } from '../src/texture-sequence-limits.js';
 import { decompressDracoGlb, usesDraco } from './agent-draco.mjs';
 import { transcodeKtx2Glb, usesKtx2 } from './agent-ktx2.mjs';
+import { findSequenceRuns } from './agent-asset-sequences.mjs';
 
 const MAXIMUM_ASSETS = AGENT_ASSET_LIMITS.maxAssets;
 const IMAGE_FILE_PATTERN = /\.(png|jpe?g|webp)$/i;
@@ -15,7 +17,7 @@ const MAXIMUM_BYTES = AGENT_ASSET_LIMITS.maxBytes;
 
 const IMAGE_EXTENSIONS = { png: /\.png$/i, jpeg: /\.jpe?g$/i, webp: /\.webp$/i };
 /**
- * A file the catalog refuses for its size or pixel bounds. Listing skips it and says why, so one such file does not hide the
+ * A file the catalog refuses for its size, its pixel bounds or a texture it cannot find (#2072). Listing skips it and says why, so one such file does not hide the
  * others; reading it by name still throws.
  */
 export class SkippableCatalogFileError extends RangeError {
@@ -178,7 +180,7 @@ async function readSiblingImage(directory, glbName, uri, segments) {
   try {
     original = await lstat(path);
   } catch {
-    throw new Error(`${label} was not found next to the GLB. Copy that file into the GLB's folder at the same relative path.`);
+    throw new SkippableCatalogFileError(`${label} was not found next to the GLB. Copy that file into the GLB's folder at the same relative path.`);
   }
   if (!original.isFile() || original.isSymbolicLink()) throw new Error(`${label} must be a regular file, without links.`);
   const resolved = await realpath(path);
@@ -312,10 +314,72 @@ export function describeCatalogFile(name, { bytes, document, assetId, imageForma
     images: document.images?.length ?? 0,
     animationCount: animations.length,
     animationsTruncated: animations.length > 16,
-    animations: animations.slice(0, 16).map((animation, index) => ({ index, name: String(animation?.name ?? `Clip ${index}`).slice(0, 80) })),
+    animations: animations.slice(0, 16).map((animation, index) => ({ index, name: clipDisplayName(animation, index).slice(0, 80) })),
   });
 }
 
+
+/** The catalog record of a collapsed run of numbered images: pattern, first and last frame number, count and frame size. */
+async function describeSequenceRun(directory, run, skipped) {
+  let first;
+  try {
+    first = await readCatalogFile(directory, run.names[0]);
+  } catch (error) {
+    if (!(error instanceof SkippableCatalogFileError)) throw error;
+    skipped.push({ name: run.pattern, reason: `first frame ${run.names[0]}: ${error.message}` });
+    return null;
+  }
+  const { width, height } = readImageDimensions(first.bytes);
+  return Object.freeze({ kind: 'sequence', name: run.pattern, first: run.first, last: run.last, frames: run.names.length, width, height });
+}
+
+const HASH_CONCURRENCY = 16;
+
+/** Reads and hashes every frame of a sequence (a few at a time) and records each in `frameEntries`; returns the IDs in frame order. */
+async function hashFrames(sequence, frameEntries) {
+  const frameIds = new Array(sequence.names.length);
+  let next = 0;
+  async function worker() {
+    while (next < sequence.names.length) {
+      const index = next++;
+      const name = sequence.names[index];
+      let result;
+      try {
+        result = await readCatalogFile(sequence.directory, name);
+      } catch (error) {
+        throw new error.constructor(`${sequence.metadata.name}: frame ${name}: ${error.message}`);
+      }
+      frameIds[index] = result.assetId;
+      if (!frameEntries.has(result.assetId)) frameEntries.set(result.assetId, { directory: sequence.directory, filename: name, metadata: describeCatalogFile(name, result) });
+    }
+  }
+  await Promise.all(Array.from({ length: HASH_CONCURRENCY }, worker));
+  return frameIds;
+}
+
+/**
+ * A cheap summary of the catalog files in `root` (name, size and modification time, no bytes read), so the runtime can tell whether a
+ * file was added, removed or rewritten since the catalog was built (#2209). Only the files the catalog lists are looked at, and at
+ * most as many as the catalog accepts plus one, so a huge folder costs a bounded number of stats.
+ */
+export async function fingerprintAssetDirectory(root) {
+  let directory;
+  let listing;
+  try {
+    directory = await realpath(root);
+    listing = await readdir(directory, { withFileTypes: true });
+  } catch {
+    // An unreadable folder has no fingerprint; building the catalog reports the real error with its own advice.
+    return 'unreadable';
+  }
+  const names = listing.filter(entry => /\.(glb|png|jpe?g|webp|hdr|cube)$/i.test(entry.name)).map(entry => entry.name).sort();
+  const parts = [`${names.length}`];
+  for (const name of names.slice(0, MAXIMUM_ASSETS + TEXTURE_SEQUENCE_LIMITS.maxFrames + 1)) {
+    const status = await lstat(join(directory, name)).catch(() => null);
+    parts.push(`${name}:${status ? `${status.size}:${status.mtimeMs}` : 'gone'}`);
+  }
+  return parts.join('|');
+}
 
 /**
  * Explicit local directory catalog. IDs bind bytes, rather than agent-supplied file paths.
@@ -325,6 +389,7 @@ export function describeCatalogFile(name, { bytes, document, assetId, imageForma
 export async function createAgentAssetCatalog(root, packFiles = []) {
   const entries = new Map();
   const skipped = [];
+  const sequences = new Map();
   if (root !== null) {
     if (typeof root !== 'string' || !isAbsolute(root)) {
       throw new TypeError('Asset root must be an explicit absolute directory path.');
@@ -342,7 +407,9 @@ export async function createAgentAssetCatalog(root, packFiles = []) {
     if (imageFileCount > TEXTURE_SEQUENCE_LIMITS.maxFrames) {
       throw new RangeError(`Asset catalog has ${imageFileCount} image files, over the ${TEXTURE_SEQUENCE_LIMITS.maxFrames} a texture sequence can use. Remove images from the --assets directory.`);
     }
-    for (const file of files) {
+    const runs = findSequenceRuns(files.filter(file => file.isFile() && IMAGE_FILE_PATTERN.test(file.name)).map(file => file.name));
+    const collapsedNames = new Set(runs.flatMap(run => run.names));
+    for (const file of files.filter(candidate => !collapsedNames.has(candidate.name))) {
       let result;
       try {
         result = await readCatalogFile(directory, file.name);
@@ -354,13 +421,41 @@ export async function createAgentAssetCatalog(root, packFiles = []) {
       if (entries.has(result.assetId)) continue;
       entries.set(result.assetId, { directory, filename: file.name, metadata: describeCatalogFile(file.name, result) });
     }
+    for (const run of runs) {
+      const metadata = await describeSequenceRun(directory, run, skipped);
+      if (metadata) sequences.set(run.pattern, { directory, names: run.names, metadata, frameIds: null });
+    }
   }
   for (const file of packFiles) {
     if (!entries.has(file.assetId)) entries.set(file.assetId, { directory: file.directory, filename: file.filename, metadata: file.metadata });
   }
+  // The frames of collapsed sequences are hashed when a recipe names the sequence, or when a pinned frame ID is not known yet
+  // (a recipe from an earlier run), never at startup. The IDs go in frameEntries, which list() does not show.
+  const frameEntries = new Map();
+  const hashing = new Map();
+  function hashSequenceFrames(pattern) {
+    const sequence = sequences.get(pattern);
+    if (sequence.frameIds) return Promise.resolve(sequence.frameIds);
+    if (!hashing.has(pattern)) {
+      hashing.set(pattern, hashFrames(sequence, frameEntries).then(frameIds => {
+        sequence.frameIds = frameIds;
+        return frameIds;
+      }, error => {
+        hashing.delete(pattern);
+        throw error;
+      }));
+    }
+    return hashing.get(pattern);
+  }
+  async function lookupEntry(assetId) {
+    const known = entries.get(assetId) ?? frameEntries.get(assetId);
+    if (known) return known;
+    for (const pattern of sequences.keys()) await hashSequenceFrames(pattern);
+    return frameEntries.get(assetId);
+  }
   return Object.freeze({
     list() {
-      return { assets: structuredClone([...entries.values()].map(entry => entry.metadata)), maximumBytes: MAXIMUM_BYTES, maximumAssets: MAXIMUM_ASSETS, ...(skipped.length ? { skipped: structuredClone(skipped) } : {}) };
+      return { assets: structuredClone([...entries.values()].map(entry => entry.metadata)), ...(sequences.size ? { sequences: [...sequences.values()].map(sequence => ({ ...sequence.metadata })) } : {}), maximumBytes: MAXIMUM_BYTES, maximumAssets: MAXIMUM_ASSETS, ...(skipped.length ? { skipped: structuredClone(skipped) } : {}) };
     },
     /**
      * The asset id of the GLB listed under exactly this name (a file in --assets, or `pack/file` for a pack), so a recipe can name
@@ -384,16 +479,28 @@ export async function createAgentAssetCatalog(root, packFiles = []) {
       throw new Error(`No catalog GLB is named "${name}". ${advice} A name must match exactly, such as "sheep_body.glb".`);
     },
     /**
+     * The frame asset IDs, in frame order, of the sequence listed under exactly this pattern (such as "frame_####.png"), so a
+     * recipe can write `map.sequence.catalog` instead of thousands of IDs. The frames are hashed on the first call.
+     */
+    async resolveSequence(pattern) {
+      if (typeof pattern !== 'string' || !sequences.has(pattern)) {
+        const near = [...sequences.keys()].filter(candidate => typeof pattern === 'string' && pattern && (candidate.includes(pattern) || pattern.includes(candidate))).slice(0, 5);
+        const advice = near.length ? `Near patterns: ${near.map(candidate => `"${candidate}"`).join(', ')}.` : sequences.size ? 'Run scene_asset_catalog and pass the pattern of one of its sequences.' : 'The catalog lists no sequence: a run of more than 64 consecutively numbered images becomes one.';
+        throw new RangeError(`map.sequence.catalog must be the pattern of a catalog sequence, such as "frame_####.png"; no sequence matches ${typeof pattern === 'string' ? `"${pattern.slice(0, 80)}"` : String(pattern)}. ${advice}`);
+      }
+      return [...(await hashSequenceFrames(pattern))];
+    },
+    /**
      * The length `read` returns, known from the catalog record without loading the file. A GLB whose images sit beside it is
      * larger than its file on disk, because `read` embeds those images.
      */
     async size(assetId) {
-      const entry = entries.get(assetId);
+      const entry = await lookupEntry(assetId);
       if (!entry) throw new Error(`Unknown asset ID ${String(assetId).slice(0, 12)}. Call scene_asset_catalog and pass an assetId it lists.`);
       return entry.metadata.bytes;
     },
     async read(assetId) {
-      const entry = entries.get(assetId);
+      const entry = await lookupEntry(assetId);
       if (!entry) throw new Error(`Unknown asset ID ${String(assetId).slice(0, 12)}. Call scene_asset_catalog and pass an assetId it lists.`);
       const result = await readCatalogFile(entry.directory, entry.filename);
       if (result.assetId !== assetId) throw new Error('Asset bytes changed since catalog creation. Restart the runtime to refresh the catalog.');

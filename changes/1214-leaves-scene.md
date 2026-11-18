@@ -1,1 +1,0 @@
-- `bench/native-tracer/temporal-job.mjs` takes `--scene leaves`: 28 hanging leaves in front of an f/1.2 camera for the foliage and depth of field case of the temporal blend (#1214).

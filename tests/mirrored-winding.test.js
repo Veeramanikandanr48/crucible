@@ -3,6 +3,7 @@ import test from 'node:test';
 import { mat3 } from 'gl-matrix';
 import { materialLayerState } from '../src/material-layers.js';
 import { groupParts, isMirroredMatrix, CrucibleRenderer } from '../src/renderer.js';
+import { WebGL2GlazeBackend } from '../src/glaze-backend-webgl2.js';
 
 const quad = {
   positions: new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]),
@@ -45,6 +46,7 @@ test('a mirrored batch draws with clockwise front faces and restores the default
     frontFace(mode) { calls.push(`frontFace ${mode}`); },
     drawElementsInstanced() { calls.push('draw'); },
   };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   renderer.drawBatch({ mirrored: true, indexCount: 6, instanceCount: 1 });
   renderer.drawBatch({ mirrored: false, indexCount: 6, instanceCount: 1 });
   assert.deepEqual(calls, ['frontFace cw', 'draw', 'frontFace ccw', 'draw']);
@@ -64,6 +66,7 @@ test('updateParts regroups once when a part crosses a mirror instead of throwing
     batch.mirrored = isMirroredMatrix(part.matrix);
   };
   renderer.context = { ARRAY_BUFFER: 1, bindBuffer() {}, bufferSubData() {} };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   for (const scaleX of [1, 0.5, -0.5, -1, -0.25, 0.75]) {
     part.matrix[0] = scaleX;
     assert.equal(renderer.updateParts([part]), 1);

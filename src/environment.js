@@ -34,7 +34,17 @@ function requireNumberInRange(value, name, minimum, maximum) {
   }
 }
 
-export function createEnvironmentMap({ width, height, data, intensity = 1, rotation = 0, showBackground = false, backgroundBlur = 0 } = {}) {
+// A sun the background pass draws as a sharp disc on top of the baked map: a unit direction in map space and its linear radiance.
+function requireSunDisc(sunDisc) {
+  const { direction, radiance } = sunDisc;
+  const isTriple = value => Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
+  if (!isTriple(direction) || !isTriple(radiance)) {
+    throw new TypeError('Environment map sunDisc must be { direction: [x, y, z], radiance: [r, g, b] } with finite numbers.');
+  }
+  return Object.freeze({ direction: Object.freeze([...direction]), radiance: Object.freeze([...radiance]) });
+}
+
+export function createEnvironmentMap({ width, height, data, intensity = 1, rotation = 0, showBackground = false, backgroundBlur = 0, sunDisc = null } = {}) {
   requireIntegerInRange(width, 'width', 4, MAXIMUM_ENVIRONMENT_SIZE);
   requireIntegerInRange(height, 'height', 2, MAXIMUM_ENVIRONMENT_SIZE);
   if (!(data instanceof Float32Array)) throw new TypeError('Environment map data must be a Float32Array of linear RGB or RGBA values.');
@@ -48,7 +58,8 @@ export function createEnvironmentMap({ width, height, data, intensity = 1, rotat
   requireNumberInRange(rotation, 'rotation', -1e6, 1e6);
   requireNumberInRange(backgroundBlur, 'backgroundBlur', 0, 1);
   if (typeof showBackground !== 'boolean') throw new TypeError('Environment map showBackground must be a boolean.');
-  return Object.freeze({ kind: 'environment-map', width, height, channels, data, intensity, rotation, showBackground, backgroundBlur });
+  const resolvedSunDisc = sunDisc === null ? null : requireSunDisc(sunDisc);
+  return Object.freeze({ kind: 'environment-map', width, height, channels, data, intensity, rotation, showBackground, backgroundBlur, sunDisc: resolvedSunDisc });
 }
 
 // The renderer accepts descriptors that were spread from a created map (to animate rotation), so it re-checks the shape without rescanning the data.
@@ -397,6 +408,9 @@ uniform vec3 eye;
 uniform float backgroundLevel;
 uniform float exposure;
 uniform float hdrEnabled;
+uniform vec3 sunMapDirection;
+uniform vec3 sunDiscRadiance;
+uniform float sunDiscRadius;
 out vec4 outputColor;
 ${environmentLookupGlsl}
 vec3 toneMap(vec3 color) {
@@ -406,6 +420,12 @@ void main() {
   vec4 world = inverseViewProjection * vec4(textureCoordinate * 2.0 - 1.0, 1.0, 1.0);
   vec3 direction = normalize(world.xyz / world.w - eye);
   vec3 radiance = environmentRadiance(direction, backgroundLevel);
+  // The sun is a disc of sunDiscRadius radians drawn per pixel, not baked into the map, so a narrow lens still sees a sharp round edge.
+  vec3 mapDirection = environmentDirection(direction);
+  float sunAngle = atan(length(cross(mapDirection, sunMapDirection)), dot(mapDirection, sunMapDirection));
+  float edgeWidth = max(fwidth(sunAngle), 1e-7);
+  float discCoverage = clamp((sunDiscRadius - sunAngle) / edgeWidth + 0.5, 0.0, 1.0) * step(0.0, mapDirection.y) * (1.0 - clamp(backgroundLevel, 0.0, 1.0));
+  radiance += sunDiscRadiance * environmentIntensity * discCoverage;
   outputColor = vec4(hdrEnabled > 0.5 ? min(radiance * exposure, vec3(65504.0)) : pow(toneMap(radiance * exposure), vec3(1.0 / 2.2)), 1.0);
 }`;
 

@@ -1,1 +1,0 @@
-- A native render job and `render:file-cook` check a scene against the adapter capacity before exporting it, fail with one error naming the count, the limit and what to drop, and report the capacity used (#1158)

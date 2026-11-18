@@ -46,6 +46,12 @@ const SMOOTH_SIGMA_TEXELS = 1.5;
 const SMOOTH_MINIMUM_FACING = 0.9;
 const SMOOTH_PLANE_TEXELS = 1;
 const DILATION_PASSES = 2;
+// Texels of empty space between charts, so each chart edge has its own filled texels on both sides (dilation fills two).
+const CHART_GAP_TEXELS = 2.5;
+// The share of the atlas the charts cover once the gap is in; it picks the resolution the gap is sized for before the unwrap.
+const EXPECTED_UTILIZATION = 0.6;
+const MINIMUM_CHART_MARGIN = 0.01;
+const MAXIMUM_CHART_MARGIN = 0.1;
 // How far outside a chart (in texels, centre to edge) a texel still takes the chart's own surface instead of a neighbour's light.
 const GUTTER_TEXELS = 0.75;
 const AVERAGE_GRID = 16;
@@ -601,10 +607,10 @@ function unscaledAfterUnwrap(extracted, scale) {
 }
 
 /** Gives a geometry its lightmap UVs in channel 0, from the unwrap that `uv_unwrap` uses. */
-function unwrapForLightmap(geometry, scale) {
+function unwrapForLightmap(geometry, scale, margin) {
   const { positions, normals, indices } = scaledForUnwrap(geometry, scale);
   const mesh = meshFromGeometry({ positions, normals, indices }, { quads: false, tags: 'none' });
-  const unwrapped = unwrapUv(mesh);
+  const unwrapped = unwrapUv(mesh, { margin });
   const { geometry: unwrappedGeometry } = extractRender(unwrapped.mesh);
   return { geometry: unscaledAfterUnwrap(unwrappedGeometry, scale), utilization: Math.max(unwrapped.utilization, SURFACE_UTILIZATION_FLOOR) };
 }
@@ -613,13 +619,13 @@ function unwrapForLightmap(geometry, scale) {
  * Gives a geometry lightmap UVs in `lightUvs` and keeps its own `uvs` and `colors`. The unwrap splits vertices along its
  * seams, so each source vertex index rides through it as a corner colour and the attributes are gathered back from it.
  */
-function unwrapIntoSecondUvSet(geometry, scale) {
+function unwrapIntoSecondUvSet(geometry, scale, margin) {
   const { positions, normals, indices } = scaledForUnwrap(geometry, scale);
   const vertexCount = positions.length / 3;
   const sourceIndices = new Float32Array(vertexCount * 3);
   for (let vertex = 0; vertex < vertexCount; vertex++) sourceIndices[vertex * 3] = vertex;
   const mesh = meshFromGeometry({ positions, normals, indices, colors: sourceIndices }, { quads: false, tags: 'none' });
-  const unwrapped = unwrapUv(mesh);
+  const unwrapped = unwrapUv(mesh, { margin });
   const extracted = unscaledAfterUnwrap(extractRender(unwrapped.mesh).geometry, scale);
   const newCount = extracted.positions.length / 3;
   const result = { positions: extracted.positions, normals: extracted.normals, indices: extracted.indices, lightUvs: extracted.uvs };
@@ -650,6 +656,16 @@ function lightmapResolution(area, utilization, options) {
   const wanted = Math.sqrt(area / utilization) * options.texelsPerUnit;
   const rounded = Math.ceil(wanted / 4) * 4;
   return Math.min(Math.max(rounded, BAKE_LIMITS.maxResolution.minimum), options.maxResolution);
+}
+
+/**
+ * The gap the unwrap leaves between charts and around the atlas, as a share of it. It is sized in texels: bilinear sampling at
+ * a chart edge reads a texel on either side, so with less than a texel of the chart's own colour beyond the edge it blends in
+ * whatever chart sits next to it in the atlas, and that shows as a step across the seam of a curved mesh.
+ */
+function chartMargin(area, settings) {
+  const expectedResolution = lightmapResolution(area, EXPECTED_UTILIZATION, settings);
+  return Math.min(Math.max(CHART_GAP_TEXELS / expectedResolution, MINIMUM_CHART_MARGIN), MAXIMUM_CHART_MARGIN);
 }
 
 /** The world position and facing of every texel a triangle of the geometry covers, or null where nothing covers it. */
@@ -776,48 +792,86 @@ function dilate(radiance, covered, resolution) {
   }
 }
 
+/** Groups the covered texels into cubes of one smoothing radius, so a texel finds its neighbours in the world and not only in its own chart. */
+function groupTexelsByCell(covered, positions, cellSize) {
+  const cells = new Map();
+  for (let texel = 0; texel < covered.length; texel++) {
+    if (!covered[texel]) continue;
+    const key = cellKey(Math.floor(positions[texel * 3] / cellSize), Math.floor(positions[texel * 3 + 1] / cellSize), Math.floor(positions[texel * 3 + 2] / cellSize));
+    if (!cells.has(key)) cells.set(key, []);
+    cells.get(key).push(texel);
+  }
+  return cells;
+}
+
+function cellKey(cellX, cellY, cellZ) {
+  return `${cellX},${cellY},${cellZ}`;
+}
+
+/**
+ * The texels of one surface near a texel, with their weights: every covered texel within the smoothing radius in the world
+ * (any chart of the part), whose normal agrees and whose position is within `planeTolerance` of this texel's plane. Walking
+ * the world and not the texture window means a texel on a chart border averages over the same surface patch that the texel
+ * across the seam does, so the two charts agree there. Texels come out in index order, so the same input gives the same bytes.
+ */
+function surfaceNeighbours(center, cells, positions, normals, settings) {
+  const { cellSize, radiusSquared, sigmaSquared, planeTolerance } = settings;
+  const centerX = positions[center * 3];
+  const centerY = positions[center * 3 + 1];
+  const centerZ = positions[center * 3 + 2];
+  const cellX = Math.floor(centerX / cellSize);
+  const cellY = Math.floor(centerY / cellSize);
+  const cellZ = Math.floor(centerZ / cellSize);
+  const found = [];
+  for (let shiftX = -1; shiftX <= 1; shiftX++) {
+    for (let shiftY = -1; shiftY <= 1; shiftY++) {
+      for (let shiftZ = -1; shiftZ <= 1; shiftZ++) {
+        const members = cells.get(cellKey(cellX + shiftX, cellY + shiftY, cellZ + shiftZ));
+        if (!members) continue;
+        for (const neighbour of members) {
+          const deltaX = positions[neighbour * 3] - centerX;
+          const deltaY = positions[neighbour * 3 + 1] - centerY;
+          const deltaZ = positions[neighbour * 3 + 2] - centerZ;
+          const distanceSquared = deltaX * deltaX + deltaY * deltaY + deltaZ * deltaZ;
+          if (distanceSquared > radiusSquared) continue;
+          const facing = normals[center * 3] * normals[neighbour * 3] + normals[center * 3 + 1] * normals[neighbour * 3 + 1] + normals[center * 3 + 2] * normals[neighbour * 3 + 2];
+          if (facing < SMOOTH_MINIMUM_FACING) continue;
+          const offset = deltaX * normals[center * 3] + deltaY * normals[center * 3 + 1] + deltaZ * normals[center * 3 + 2];
+          if (Math.abs(offset) > planeTolerance) continue;
+          found.push({ texel: neighbour, weight: Math.exp(-distanceSquared / (2 * sigmaSquared)) });
+        }
+      }
+    }
+  }
+  return found.sort((left, right) => left.texel - right.texel);
+}
+
 /**
  * Smooths the gathered values (each an array of three floats per texel) over neighbouring texels of the same surface.
  * A texel has only `samples` rays, so its value is noisy, and the noise reads as grain on every wall. A neighbour counts only
- * when it lies on the same plane (its normal agrees and its position is within a texel of this texel's plane), so a corner,
- * a seam between charts and the gap between two parts never leak light into each other. Same input, same bytes.
+ * when it lies on the same plane (its normal agrees and its position is within a texel of this texel's plane), so a corner
+ * and the gap between two parts never leak light into each other. Neighbours are found by world distance, so the two sides
+ * of a chart seam are smoothed over the same patch and a curved mesh keeps no step where its charts meet. Same input, same bytes.
  */
 export function smoothTexels(arrays, covered, positions, normals, resolution, spacing) {
-  const radius = SMOOTH_RADIUS_TEXELS;
-  const sigmaSquared = SMOOTH_SIGMA_TEXELS * SMOOTH_SIGMA_TEXELS;
-  const planeTolerance = spacing * SMOOTH_PLANE_TEXELS;
+  const radius = SMOOTH_RADIUS_TEXELS * spacing;
+  const settings = { cellSize: radius, radiusSquared: radius * radius, sigmaSquared: (SMOOTH_SIGMA_TEXELS * spacing) ** 2, planeTolerance: spacing * SMOOTH_PLANE_TEXELS };
+  const cells = groupTexelsByCell(covered, positions, radius);
   let sources = arrays;
   for (let pass = 0; pass < SMOOTH_PASSES; pass++) {
     const results = sources.map(source => new Float32Array(source.length));
-    for (let row = 0; row < resolution; row++) {
-      for (let column = 0; column < resolution; column++) {
-        const center = row * resolution + column;
-        if (!covered[center]) continue;
-        const totals = sources.map(() => [0, 0, 0]);
-        let weightSum = 0;
-        for (let rowShift = -radius; rowShift <= radius; rowShift++) {
-          const neighbourRow = row + rowShift;
-          if (neighbourRow < 0 || neighbourRow >= resolution) continue;
-          for (let columnShift = -radius; columnShift <= radius; columnShift++) {
-            const neighbourColumn = column + columnShift;
-            if (neighbourColumn < 0 || neighbourColumn >= resolution) continue;
-            const neighbour = neighbourRow * resolution + neighbourColumn;
-            if (!covered[neighbour]) continue;
-            const facing = normals[center * 3] * normals[neighbour * 3] + normals[center * 3 + 1] * normals[neighbour * 3 + 1] + normals[center * 3 + 2] * normals[neighbour * 3 + 2];
-            if (facing < SMOOTH_MINIMUM_FACING) continue;
-            const offset = (positions[neighbour * 3] - positions[center * 3]) * normals[center * 3] + (positions[neighbour * 3 + 1] - positions[center * 3 + 1]) * normals[center * 3 + 1] + (positions[neighbour * 3 + 2] - positions[center * 3 + 2]) * normals[center * 3 + 2];
-            if (Math.abs(offset) > planeTolerance) continue;
-            const weight = Math.exp(-(rowShift * rowShift + columnShift * columnShift) / (2 * sigmaSquared));
-            weightSum += weight;
-            sources.forEach((source, which) => {
-              for (let channel = 0; channel < 3; channel++) totals[which][channel] += weight * source[neighbour * 3 + channel];
-            });
-          }
+    for (let center = 0; center < resolution * resolution; center++) {
+      if (!covered[center]) continue;
+      const nearby = surfaceNeighbours(center, cells, positions, normals, settings);
+      let weightSum = 0;
+      for (const { weight } of nearby) weightSum += weight;
+      sources.forEach((source, which) => {
+        for (let channel = 0; channel < 3; channel++) {
+          let total = 0;
+          for (const { texel, weight } of nearby) total += weight * source[texel * 3 + channel];
+          results[which][center * 3 + channel] = total / weightSum;
         }
-        results.forEach((result, which) => {
-          for (let channel = 0; channel < 3; channel++) result[center * 3 + channel] = totals[which][channel] / weightSum;
-        });
-      }
+      });
     }
     sources = results;
   }
@@ -933,7 +987,10 @@ export function planLightmaps(parts, lighting, options = {}) {
     if (!cache.has(part.geometry)) cache.set(part.geometry, new Map());
     const unwraps = cache.get(part.geometry);
     const key = scaleKey(scale);
-    if (!unwraps.has(key)) unwraps.set(key, slot ? unwrapIntoSecondUvSet(part.geometry, scale) : unwrapForLightmap(part.geometry, scale));
+    if (!unwraps.has(key)) {
+      const margin = chartMargin(worldTriangleArea(part), settings);
+      unwraps.set(key, slot ? unwrapIntoSecondUvSet(part.geometry, scale, margin) : unwrapForLightmap(part.geometry, scale, margin));
+    }
     entries.push({ part, index, unwrapped: unwraps.get(key), area: worldTriangleArea(part), slot });
   });
   return { parts, lights, settings, started, entries, skipped };

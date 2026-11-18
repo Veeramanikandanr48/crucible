@@ -1,3 +1,0 @@
-- goal:lit-box: the renderer constructor, resize() and replaceParts are core code every scene bundles, so the density fix cannot move out of it; about 25 to 36 bytes gzip.
-- goal:gltf-box: the renderer constructor, resize() and replaceParts are core code every scene bundles, so the density fix cannot move out of it; about 25 to 36 bytes gzip.
-- goal:agent-scene: the renderer constructor, resize() and replaceParts are core code every scene bundles, so the density fix cannot move out of it; about 25 to 36 bytes gzip.

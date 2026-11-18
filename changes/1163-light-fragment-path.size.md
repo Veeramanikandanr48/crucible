@@ -1,9 +1,0 @@
-- entry:core: 70 bytes gzip so the colour program carries one varying less, which takes 2.0 ms (15 percent) off the opaque pass of a 5.2 million triangle scan (#1163), a measured speed gain.
-- entry:core+lazy: 71 bytes gzip for the same change.
-- scene:lit-box: 80 bytes gzip for the same change.
-- scene:lit-box+lazy: 80 bytes gzip for the same change.
-- scene:agent-scene: 88 bytes gzip for the same change.
-- scene:agent-scene+lazy: 84 bytes gzip for the same change.
-- goal:lit-box: 80 bytes gzip for the same change; goal:light work, the cost is two preprocessor branches in each shader.
-- goal:gltf-box: 56 bytes gzip for the same change.
-- goal:agent-scene: 88 bytes gzip for the same change.

@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeMaterialSnippet, probeMaterialSnippets, MATERIAL_SNIPPET_CAPABILITIES } from '../src/material-snippet.js';
 import { createFragmentShader, createVertexShader, createDepthVertexShader, withDepthCode, depthFragmentShader } from '../src/shaders.js';
-import { groupParts } from '../src/renderer.js';
+import { groupParts, shaderFeaturesOfParts } from '../src/renderer.js';
+import '../src/world-material-shader.js';
 import { createAgentScene, loadAgentSceneModules } from '../src/agent-scene.js';
 
 const DISSOLVE = `float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -147,4 +148,75 @@ test('a recipe sets, edits and clears the snippet and scene_capabilities reports
   scene.apply([{ type: 'set-material', id: 'stone', snippet: null }], { expectedRevision: scene.revision });
   assert.equal(scene.parts.find(part => part.name === 'a').material.snippet, undefined);
   assert.equal(MATERIAL_SNIPPET_CAPABILITIES.limits.maxUniforms, 16);
+});
+
+const FOUR_TONES = `void waterHook(inout vec3 color, WaterInputs water) {
+  float band = floor(clamp(water.lit, 0.0, 0.999) * 4.0) / 3.0;
+  color = mix(deep, shallow, band);
+  if (water.foam > 0.5) color = vec3(1.0);
+}`;
+const fourTones = (overrides = {}) => ({ fragment: FOUR_TONES, uniforms: { deep: [0.02, 0.1, 0.3], shallow: [0.2, 0.6, 0.8] }, ...overrides });
+
+test('a snippet may define only waterHook, and the entry error names both entries', () => {
+  const snippet = normalizeMaterialSnippet(fourTones());
+  assert.match(snippet.feature, /^s[0-9a-f]{8}$/);
+  refuses(fourTones({ fragment: 'void waterHook(inout vec3 color) { }' }), /entry function is missing.*waterHook\(inout vec3 color, WaterInputs water\)/s);
+  refuses(fourTones({ uniforms: { waterHook: 1 } }), /keyword or an input the engine provides/);
+  refuses(fourTones({ fragment: FOUR_TONES.replace('water.lit', 'water.lit /* x */').replace('color = mix', '#define A 1\n color = mix') }), /Preprocessor/);
+  refuses(fourTones({ fragment: `${FOUR_TONES}\n${'x'.repeat(5000)}` }), /4096|bytes/i);
+});
+
+test('the water hook runs after lighting on water only, with its own struct, and leaves the material hook out', () => {
+  const snippet = normalizeMaterialSnippet(fourTones());
+  const prefix = `u67_${snippet.feature}_`;
+  const source = createFragmentShader(['studioLighting', 'water', snippet.feature]);
+  assert.ok(source.includes(`struct ${prefix}WaterInputs { vec3 normal; vec3 view; float foam; float depthBelow; float time; float lit; };`));
+  assert.ok(source.includes(`void ${prefix}waterHook(inout vec3 color, ${prefix}WaterInputs water)`));
+  const call = source.indexOf(`if (TAG_WATER && u67_${snippet.feature} > 0.5) ${prefix}waterHook(radiance, ${prefix}WaterInputs(normal, viewDirection, waterFoam, 0.0, time,`);
+  assert.ok(call > 0, 'the call is in the main shader');
+  assert.ok(call > source.indexOf('radiance += emission;'), 'after lighting and emission');
+  assert.ok(call < source.indexOf('float fog = 1.0 - exp(-length(worldPosition - eye)'), 'before fog and tone mapping');
+  assert.doesNotMatch(source, new RegExp(`${prefix}materialHook`));
+  assert.doesNotMatch(createFragmentShader(['studioLighting', normalizeMaterialSnippet(dissolve()).feature]), /waterHook/);
+  const shadowSource = withDepthCode(depthFragmentShader, new Set(['studioLighting', snippet.feature]));
+  assert.equal(shadowSource, depthFragmentShader, 'a water-only snippet adds nothing to the shadow pass');
+  assert.doesNotMatch(shadowSource, /waterHook|WaterInputs/);
+});
+
+test('two water snippets share one shader without clashing on the struct', () => {
+  const first = normalizeMaterialSnippet(fourTones());
+  const second = normalizeMaterialSnippet(fourTones({ uniforms: { deep: [0, 0, 0], shallow: [1, 1, 1], extra: 1 } }));
+  const source = createFragmentShader(['studioLighting', 'water', first.feature, second.feature]);
+  assert.match(source, new RegExp(`struct u67_${first.feature}_WaterInputs`));
+  assert.match(source, new RegExp(`struct u67_${second.feature}_WaterInputs`));
+});
+
+test('a snippet with a water hook asks the renderer for the water shading code, one without does not', async () => {
+  const featuresWith = async (snippet) => {
+    const recipe = {
+      format: 'crucible.scene', schemaVersion: 1,
+      geometries: [{ id: 'plane', type: 'box' }],
+      materials: [{ id: 'surface', snippet }],
+      nodes: [{ id: 'surface', geometry: 'plane', material: 'surface' }],
+    };
+    await loadAgentSceneModules(recipe);
+    return shaderFeaturesOfParts(createAgentScene(recipe).parts);
+  };
+  assert.ok((await featuresWith(fourTones())).has('water'), 'the water locals the hook reads are declared');
+  assert.ok(!(await featuresWith(dissolve())).has('water'), 'a material hook alone adds nothing');
+});
+
+test('probing a water snippet compiles it with the struct declared and reports its lines', () => {
+  const snippet = normalizeMaterialSnippet({ fragment: 'void waterHook(inout vec3 color, WaterInputs water) {\n  vec3 wrong = 1.0;\n}' });
+  let compiled = '';
+  const context = {
+    FRAGMENT_SHADER: 1, COMPILE_STATUS: 2,
+    createShader: () => ({}), shaderSource: (shader, text) => { compiled = text; }, compileShader() {}, deleteShader() {},
+    getShaderParameter: () => true, getShaderInfoLog: () => '', getExtension: () => null,
+  };
+  probeMaterialSnippets([{ name: 'sea', material: { snippet } }], () => context);
+  assert.match(compiled, /struct WaterInputs \{ vec3 normal; vec3 view; float foam; float depthBelow; float time; float lit; \};/);
+  assert.match(compiled, /waterHook\(color, WaterInputs\(/);
+  assert.doesNotMatch(compiled, /\bmaterialHook\(/);
+  assert.match(MATERIAL_SNIPPET_CAPABILITIES.waterHook, /WaterInputs water/);
 });

@@ -34,7 +34,7 @@ function quad(scale, withUvs = true) {
   };
 }
 
-const translate = x => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, 0, 0, 1];
+const translate = (x, z = 0) => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, 0, z, 1];
 
 function checker(size, seedByte) {
   const data = new Uint8ClampedArray(size * size * 4);
@@ -44,8 +44,8 @@ function checker(size, seedByte) {
   return { image: { width: size, height: size, data }, colorSpace: 'srgb' };
 }
 
-function part(name, x, material, scale = 0.8) {
-  return { name, geometry: quad(scale), matrix: translate(x), material };
+function part(name, x, material, scale = 0.8, z = 0) {
+  return { name, geometry: quad(scale), matrix: translate(x, z), material };
 }
 
 // Scenes whose materials set none of the fields the v1 job tables drop: their job input must not change.
@@ -61,9 +61,9 @@ const unchangedScenes = {
     part('leaf', 0.2, { color: [1, 1, 1], map: checker(4, 5), alphaMode: 'mask', alphaCutoff: 0.4 }),
   ],
   'glass, clearcoat, subsurface and a light mask': [
-    part('glass', 0, { color: [1, 1, 1], transmission: 0.9, ior: 1.45, roughness: 0.05 }),
-    part('lacquer', 0.1, { color: [0.7, 0.1, 0.1], clearcoat: 0.8, clearcoatRoughness: 0.1 }),
-    part('wax', 0.2, { color: [0.9, 0.8, 0.6], subsurface: { weight: 0.5, radius: [1, 0.4, 0.2] } }),
+    part('glass', 0, { color: [1, 1, 1], transmission: 0.9, ior: 1.45, roughness: 0.05 }, 0.8, 0.3),
+    part('lacquer', 0.1, { color: [0.7, 0.1, 0.1], clearcoat: 0.8, clearcoatRoughness: 0.1 }, 0.8, 0.2),
+    part('wax', 0.2, { color: [0.9, 0.8, 0.6], subsurface: { weight: 0.5, radius: [1, 0.4, 0.2] } }, 0.8, 0.1),
     part('masked', 0.3, { color: [0.5, 0.5, 0.9], lightMask: 1 }),
   ],
   'fields set to their defaults': [
@@ -306,6 +306,26 @@ cookTest('a job frame of a scene without carried fields has the pixels of the v1
   if (!viaV2) return;
   const direct = traceNative(buildNativeInput(buildTraceScene(parts, environment), camera, packOptions, pack), { width: WIDTH, height: HEIGHT, samples: 8, kernel: 'cycles' });
   assert.deepEqual(viaV2, Buffer.from(direct.rgba.buffer, direct.rgba.byteOffset, direct.rgba.byteLength));
+});
+
+// Reference: NVIDIA GeForce RTX 3060 (Vulkan), Cook 0.2.0, albedo sum of the scene above with every quad in its own plane (#1918).
+// With the quads in one plane the sum was 29.2404 on the GPU and about 36.1 on lavapipe, because the winner of an exact depth tie differs.
+const GLASS_SCENE_ALBEDO_SUM = 42.44808478653431;
+const GLASS_SCENE_TOLERANCE = 1e-3;
+
+cookTest('the albedo of the untied glass scene matches the sum measured on a real GPU', { skip: addonSkip }, t => {
+  const parts = unchangedScenes['glass, clearcoat, subsurface and a light mask'];
+  let traced;
+  try {
+    traced = traceNative(buildNativeInput(buildTraceScene(parts, environment), camera, packOptions, pack), { width: WIDTH, height: HEIGHT, samples: 8, kernel: 'cycles' });
+  } catch (error) {
+    if (/adapter|Vulkan|ray quer/i.test(error.message)) return t.skip(error.message);
+    throw error;
+  }
+  let albedoSum = 0;
+  for (const value of traced.albedo) albedoSum += value;
+  const relativeError = Math.abs(albedoSum - GLASS_SCENE_ALBEDO_SUM) / GLASS_SCENE_ALBEDO_SUM;
+  assert.ok(relativeError < GLASS_SCENE_TOLERANCE, `albedo sum ${albedoSum} is ${(relativeError * 100).toFixed(3)} percent from the GPU reference ${GLASS_SCENE_ALBEDO_SUM}`);
 });
 
 cookTest('a job frame with a blend pane differs from the same scene traced from the v1 tables with the same kernel', { skip: addonSkip }, async t => {

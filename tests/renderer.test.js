@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mat4, mat3 } from 'gl-matrix';
 import { CrucibleRenderer, groupParts, shaderFeatureRepresentatives, textureDescriptorInfo } from '../src/renderer.js';
+import { WebGL2GlazeBackend } from '../src/glaze-backend-webgl2.js';
 import { resolveLiquidOptics } from '../src/liquid-optics.js';
 import { createSkinPose } from '../src/skinning.js';
 import { materialLayerState } from '../src/material-layers.js';
@@ -15,6 +16,7 @@ function retainedRenderer(parts) {
   const renderer = Object.create(CrucibleRenderer.prototype);
   const batch = { instanceBuffer: {}, instanceData: new Float32Array(parts.length * 42).fill(7), castShadow: true, receivesShadow: true, compositeMode: 0, alphaMode: 'opaque', alphaCutoff: 0, opacity: 1, doubleSided: false };
   renderer.context = { ARRAY_BUFFER: 34962, bindBuffer() {}, bufferSubData(target, offset, data) { writes.push({ target, offset, data: Array.from(data) }); } };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   renderer.partLocations = new Map(parts.map((item, index) => [item, {
     batch, index, geometry: item.geometry, map: item.material.map ?? null, normalMatrix: mat3.create(), layerState: materialLayerState(item.material), skin: item.skin ?? null,
     jointMatrices: item.skin?.jointMatrices, skinIndices: item.geometry.skinIndices, skinWeights: item.geometry.skinWeights,
@@ -197,6 +199,7 @@ test('blend instances upload back to front by distance to the eye', () => {
   const uploads = [];
   const renderer = Object.create(CrucibleRenderer.prototype);
   renderer.context = { ARRAY_BUFFER: 34962, bindBuffer() {}, bufferSubData(target, offset, data) { uploads.push(Array.from(data)); } };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   const instanceData = new Float32Array(3 * 42);
   [1, 9, 4].forEach((distance, index) => { instanceData[index * 42 + 14] = -distance; instanceData[index * 42] = index; });
   const batch = { instanceBuffer: {}, instanceData, instanceCount: 3 };
@@ -384,6 +387,7 @@ test('GPU uploads use descriptor color spaces, filter anisotropically, cache sha
     texImage2D(...arguments_) { uploaded.push(arguments_[2]); },
     deleteTexture(texture) { if (texture) deleted.push(texture); }, deleteFramebuffer() {}, deleteProgram() {},
   };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   const color = { image: { width: 4, height: 4 }, colorSpace: 'srgb' };
   const data = { ...color, colorSpace: 'linear' };
   const first = renderer.createTexture(color);
@@ -410,6 +414,7 @@ test('draw batches bind all channels with their flags and scalar uniforms', () =
     uniform3f(name, ...values) { uniforms.push([name, ...values]); },
     uniform4f(name, ...values) { uniforms.push([name, ...values]); },
   };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   const layerState = materialLayerState({ clearcoat: 0.7, clearcoatRoughness: 0.2, sheenColor: [0.1, 0.2, 0.3], sheenRoughness: 0.4 });
   renderer.drawBatch({ textures: [{}, {}, {}, {}, {}], layerState, mapState: [{}, {}, {}, null, {}, 0.5, -1, 0.4, 0.6, 0.1, 0.2, 0.05] }, true);
   assert.deepEqual(bindings, [33985, 33986, 33987, 33988, 33989]);
@@ -507,6 +512,7 @@ test('skin palette and influence textures cache by pose and geometry identity an
     texImage2D(...arguments_) { allocations.push(arguments_); }, deleteTexture(texture) { if (texture) deleted.push(texture); },
     deleteFramebuffer() {}, deleteProgram() {},
   };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   renderer.skinTextures = new Map();
   renderer.influenceTextures = new Map();
   const pose = createSkinPose(2);
@@ -570,6 +576,7 @@ test('color, benchmark and shadow passes bind the same skin textures and disable
     TEXTURE0: 33984, activeTexture(unit) { bindings.push(unit); }, bindTexture() {}, bindVertexArray() {}, drawElementsInstanced() {},
     uniform1f(name, value) { uniforms.push([name, value]); }, uniform1i(name, value) { uniforms.push([name, value]); },
   };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   const batch = { skin: {}, skinTexture: { texture: {} }, influenceTexture: { texture: {} } };
   renderer.drawBatch(batch, true);
   renderer.drawBatch(batch);
@@ -591,6 +598,7 @@ test('the shadow depth pass draws both faces of a single-sided batch, so the sun
     disable(capability) { culling.push(['disable', capability]); },
     uniform1f() {}, uniform3f() {}, activeTexture() {}, bindTexture() {},
   };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   const singleSided = { doubleSided: false, alphaMode: 'opaque', alphaCutoff: 0, opacity: 1, mapState: [null], textures: [] };
   renderer.applyAlphaState(singleSided, false);
   assert.deepEqual(culling, [['disable', 2884]]);
@@ -616,6 +624,7 @@ test('blend batches draw their opaque texels with depth writes before the blende
   context.blendFuncSeparate = (...functions) => blendFunctions.push(functions.join());
   const renderer = Object.create(CrucibleRenderer.prototype);
   renderer.context = context;
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   renderer.uniforms = { shadowMap: 'shadowMap' };
   renderer.canvas = { width: 4, height: 4 };
   const baked = { alphaMode: 'blend', alphaCutoff: 0, opacity: 1, instanceCount: 1, instanceData: new Float32Array(42).fill(1) };
@@ -640,6 +649,7 @@ test('blend batches draw their opaque texels with depth writes before the blende
 test('resize keeps the projection centered at 699 px and 1440 px', () => {
   const renderer = Object.create(CrucibleRenderer.prototype);
   renderer.context = { getParameter: () => 8192, isContextLost: () => false };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   renderer.projection = new Float32Array(16);
   renderer.pixelRatio = 1;
   renderer.multisampleSamples = 1;
@@ -680,6 +690,7 @@ test('drawAmbientOcclusion unprojects in view space so far camera coordinates do
     uniformMatrix4fv(name, transpose, value) { uploaded[name] = new Float32Array(value); },
     drawArrays() {},
   };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   renderer.drawAmbientOcclusion({ eye: [6000.3, 1.0, 9.2], projection: 'perspective' }, { ambientOcclusionRadius: 0.5 });
   const matrix = uploaded.inverseViewProjection;
   const clipZ = (-renderer.projection[10] * 129.2 + renderer.projection[14]) / 129.2;

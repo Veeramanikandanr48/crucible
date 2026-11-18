@@ -11,7 +11,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { prepareServedFileScene } from './file-scene.mjs';
 import { readNativeCapacity } from './native-capacity.mjs';
-import { collectExportChunks, traceFrameNative } from './agent-native-trace.mjs';
+import { readHeldNativeExport, traceFrameNative } from './agent-native-trace.mjs';
 import { chunkedTriangleBound } from './native-bake-page.js';
 import { MissingAddonError, USAGE, listIgnoredFrameEffects, parseArguments } from './render-file-native-options.mjs';
 
@@ -45,12 +45,6 @@ async function startViteServer(root) {
   return { server, port };
 }
 
-// Runs in the page: one chunk (base64) of a table that exportTablesInPage left there.
-async function readExportChunkInPage({ name, offset }) {
-  const { readExportChunk } = await import('/scripts/native-bake-page.js');
-  return readExportChunk(window.__nativeExportTables, name, offset);
-}
-
 // Runs in the page: packs the loaded scene into the tables the native tracer reads, like the MCP render job does.
 async function exportTablesInPage({ width, height, bounces, seed, instancing, camera, listParts, hideParts, patchMaterials, maximumTriangles }) {
   const [{ createCamera, describeIgnoredFeatures }, { buildTraceScene, resolveTexture }, pack, { buildNativeInput }, { buildJobNativeInput, buildFlattenedJobNativeInput }, { exportNativeSceneTables, splitExportForChunks }, gridVolumeInput] = await Promise.all([
@@ -75,9 +69,10 @@ async function exportTablesInPage({ width, height, bounces, seed, instancing, ca
   const tracerCamera = createCamera(camera, width, height);
   const packed = exportNativeSceneTables({ parts, environment, camera: tracerCamera, options: { width, height, bounces, seed, fireflyClamp: 20, noiseThreshold: 0 }, kernel: 'cycles', instancing, transport: 'chunks', maximumTriangles,
     modules: { buildTraceScene, resolveTexture, buildNativeInput, buildJobNativeInput, buildFlattenedJobNativeInput, pack, gridVolumeInput } });
-  // The tables stay in the page for readExportChunkInPage: no single message has to carry the scene.
+  // The tables stay in the page as one Blob (window.__nativeExportBlob) that the runner reads over DevTools: no single message
+  // has to carry the scene.
   const { manifest, tables } = splitExportForChunks(packed);
-  window.__nativeExportTables = tables;
+  window.__nativeExportBlob = () => new Blob(Object.values(tables));
   const exported = manifest;
   return { ...exported, ignored: describeIgnoredFeatures(parts, environment, 'cpu', { kernelMaterials: exported.wholeMaterials, clipStart: tracerCamera.clipStart }), partCount: parts.length, hiddenCount: hidden.size, listedParts };
 }
@@ -195,8 +190,7 @@ async function main() {
     const capacityRead = readNativeCapacity(tracer);
     const manifest = await page.evaluate(exportTablesInPage, { width: options.width, height: options.height, bounces: options.bounces, seed: options.seed, instancing: options.instancing, camera,
       listParts: options.listParts ?? null, hideParts: options.hideParts ?? null, patchMaterials: options.patchMaterials, maximumTriangles: chunkedTriangleBound(capacityRead.capacity?.maxUniqueTriangles) });
-    const exported = await collectExportChunks(manifest, (name, offset) => page.evaluate(readExportChunkInPage, { name, offset }), { capacity: capacityRead.capacity });
-    await page.evaluate(() => { window.__nativeExportTables = null; });
+    const exported = await readHeldNativeExport(page, manifest, { blobExpression: 'window.__nativeExportBlob()', release: () => { window.__nativeExportBlob = null; }, capacity: capacityRead.capacity });
     const packSeconds = (performance.now() - packStarted) / 1000;
     const denoiser = options.denoise === 'oidn' ? await loadOidnIfAvailable() : null;
     const { traced, peak } = await traceWithGpuMemory({ tracer, exported, width: options.width, height: options.height, samples: options.samples, bounces: options.bounces, seed: options.seed,

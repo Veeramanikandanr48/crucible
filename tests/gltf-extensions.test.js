@@ -364,6 +364,51 @@ test('KHR_draco_mesh_compression decodes through the supplied Draco loader', asy
   assert.deepEqual(Array.from(asset.parts[0].geometry.positions), Array.from(TRIANGLE_POSITIONS));
 });
 
+function dracoSparseData({ componentType = 5126, sparseIndex = 1 } = {}) {
+  const sparseIndices = new Uint16Array([sparseIndex]);
+  const sparseValues = new Float32Array([9, 8, 7]);
+  return triangleDocument({
+    extraChunks: [new Uint8Array(8), bytesOf(sparseIndices), bytesOf(sparseValues)],
+    edit: document => {
+      document.accessors[0].bufferView = undefined;
+      document.accessors[0].componentType = componentType;
+      document.accessors[0].sparse = {
+        count: 1,
+        indices: { bufferView: 3, componentType: 5123 },
+        values: { bufferView: 4 },
+      };
+      document.meshes[0].primitives[0] = { attributes: { POSITION: 0 }, extensions: { KHR_draco_mesh_compression: { bufferView: 2, attributes: { POSITION: 0 } } } };
+      document.extensionsUsed = ['KHR_draco_mesh_compression'];
+      document.extensionsRequired = ['KHR_draco_mesh_compression'];
+    },
+  });
+}
+
+function dracoLoaderReturning(positions) {
+  const decodedGeometry = new BufferGeometry();
+  decodedGeometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
+  return { preload() {}, decodeDracoFile(buffer, onLoad) { onLoad(decodedGeometry); } };
+}
+
+test('a sparse block on a Draco-compressed accessor substitutes on top of the decoded data', async () => {
+  const asset = await parseGltf(dracoSparseData(), { decoders: { draco: dracoLoaderReturning(TRIANGLE_POSITIONS) } });
+  assert.deepEqual(Array.from(asset.parts[0].geometry.positions), [0, 0, 0, 9, 8, 7, 0, 1, 0]);
+});
+
+test('a sparse index past the decoded vertex count fails by name for a Draco accessor', async () => {
+  await assert.rejects(
+    parseGltf(dracoSparseData({ sparseIndex: 3 }), { decoders: { draco: dracoLoaderReturning(TRIANGLE_POSITIONS) } }),
+    /Sparse accessor index is out of range/,
+  );
+});
+
+test('a Draco accessor whose sparse block disagrees with the decoded type says how to fix it', async () => {
+  await assert.rejects(
+    parseGltf(dracoSparseData({ componentType: 5123 }), { decoders: { draco: dracoLoaderReturning(TRIANGLE_POSITIONS) } }),
+    /sparse block but its Draco data decoded as Float32Array, not Uint16Array.*Fix:/,
+  );
+});
+
 test('KHR_texture_basisu textures arrive as RGBA8 pixels from the supplied KTX2 loader', async context => {
   mockImageBitmap(context);
   const ktx2Header = new Uint8Array(80);

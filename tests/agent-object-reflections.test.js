@@ -84,3 +84,14 @@ test('the object reflection cache is replaced when only the physical sky changes
   const withoutSunDisc = stageObjectReflections(first, withSky({ ...recipe.environment.sky, sunDisc: false }), sourceParts, sourceParts, graph, null);
   assert.notEqual(withoutSunDisc, first);
 });
+
+test('a metallic scene over the bake triangle limit applies and skips the automatic probes (#2202)', () => {
+  const recipe = stillLife();
+  recipe.geometries.push({ id: 'dense', type: 'sphere', segments: 400, rings: 300 });
+  recipe.nodes.push({ id: 'dense', geometry: 'dense', material: 'floor', translation: [2, 0.5, 0], scale: [0.5, 0.5, 0.5] });
+  const scene = createAgentScene(recipe);
+  assert.equal(scene.inspect().reflections, undefined);
+  assert.ok(scene.parts.every(part => part.material.environmentProbe === undefined));
+  const revision = scene.inspect().revision;
+  scene.apply([{ type: 'add-material', material: { id: 'iron', color: [0.04, 0.04, 0.05], roughness: 0.2, metallic: 0.6 } }], { expectedRevision: revision });
+});

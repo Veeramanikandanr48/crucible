@@ -4,11 +4,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { createAgentPreviewFixture } from './agent-preview-fixture.mjs';
+import { assertToolNamesMatchServer } from './mcp-tool-list.mjs';
 
 // Pinned so a client release cannot change the result unnoticed.
 const INSPECTOR_VERSION = '2.13.0';
 const PYTHON_SDK_VERSION = '2.3.0';
-const EXPECTED_TOOL_COUNT = 22;
 const COMMAND_TIMEOUT_MS = 240000;
 // Run npx's own script with node so no shell has to quote the JSON arguments.
 const npxCli = resolve(dirname(process.execPath), process.platform === 'win32'
@@ -48,8 +48,7 @@ function record(client, version, step, passed, seconds, note = '') {
 try {
   const listed = inspector('--method', 'tools/list');
   assert.equal(listed.status, 0, listed.stderr);
-  const toolCount = JSON.parse(listed.stdout).tools.length;
-  assert.equal(toolCount, EXPECTED_TOOL_COUNT);
+  const toolCount = (await assertToolNamesMatchServer(JSON.parse(listed.stdout).tools)).length;
   record('MCP Inspector CLI', INSPECTOR_VERSION, 'tools/list', true, listed.seconds, `${toolCount} tools`);
 
   const recipeArgument = `recipe=${JSON.stringify(createAgentPreviewFixture())}`;
@@ -68,7 +67,7 @@ try {
     'python', '-I', pythonClientScript, process.execPath, serverScript, recipePath]);
   assert.equal(python.status, 0, python.stderr);
   const summary = JSON.parse(python.stdout.trim().split('\n').pop());
-  assert.equal(summary.tools, EXPECTED_TOOL_COUNT);
+  await assertToolNamesMatchServer(summary.toolNames.map(name => ({ name })));
   record('MCP Python SDK', PYTHON_SDK_VERSION, 'initialize, tools/list, scene_create, scene_look PNG', true, python.seconds, `${summary.pngBytes} byte PNG`);
 } finally {
   rmSync(workFolder, { recursive: true, force: true });

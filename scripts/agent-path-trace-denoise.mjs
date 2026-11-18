@@ -39,7 +39,7 @@ export async function chooseDenoiser(requested, { preferOidn = false, loadOidn =
       ? { denoise: 'oidn', denoiser, note: 'The native backend denoises with OIDN and the albedo and normal guides by default.' }
       : { denoise: 'oidn', denoiser };
   }
-  const reason = `needs ${OIDN_PACKAGE}, which is not on npm yet, and its binary: use a source checkout of Crucible and run \`npm run fetch --prefix packages/denoise-oidn\`, or set OIDN_DENOISE_PATH`;
+  const reason = `needs ${OIDN_PACKAGE}, and its binary: npm install it, run \`node node_modules/@codepawlhq/crucible-denoise-oidn/fetch-oidn.mjs\`, or set OIDN_DENOISE_PATH`;
   const lead = defaultsToOidn ? 'The native backend denoises with OIDN, which' : 'denoise "oidn"';
   if (preferOidn) return { denoise: 'atrous', note: `${lead} ${reason}: the GPU a-trous filter ran instead (it smooths, so it is biased; denoise "wavelet" picks the CPU filter).` };
   return { denoise: 'wavelet', note: `${lead} ${reason}: the wavelet filter ran instead.` };

@@ -34,7 +34,7 @@ export function gpuTriangleCapacity({ maximumTextureSize, maximumBufferBytes, ma
 }
 
 /** A table of `texelCount` RGBA texels, padded to whole rows. */
-function createTable(texelCount, channels = 4) {
+export function createTable(texelCount, channels = 4) {
   const rows = Math.max(1, Math.ceil(texelCount / DATA_TEXTURE_WIDTH));
   if (rows > MAXIMUM_TEXTURE_SIZE) throw new RangeError('The scene is too large for the GPU path tracer tables.');
   return { width: DATA_TEXTURE_WIDTH, height: rows, channels, data: new Float32Array(DATA_TEXTURE_WIDTH * rows * channels) };
@@ -92,15 +92,21 @@ export const NATIVE_TRIANGLE_TEXELS = 9;
  * leaves those floats at 0 and no material asks for them.
  */
 export function packTriangles(scene, { secondUvSet = false } = {}) {
+  const texelsPerTriangle = secondUvSet ? TRIANGLE_TEXELS : NATIVE_TRIANGLE_TEXELS;
+  const table = createTable(scene.bvh.triangleOrder.length * texelsPerTriangle);
+  writeTriangles(table.data, 0, scene, { secondUvSet });
+  return table;
+}
+
+/** Writes the triangles of `scene` in leaf order into `data`, starting at triangle slot `firstSlot`. */
+export function writeTriangles(data, firstSlot, scene, { secondUvSet = false } = {}) {
   const { positions, normals, uvs, uvs1, colors, indices, triangleMaterial, bvh } = scene;
   const order = bvh.triangleOrder;
   const nativeSecondSetMaterials = !secondUvSet && uvs1 ? scene.materials?.map(materialUvSet) : null;
   const texelsPerTriangle = secondUvSet ? TRIANGLE_TEXELS : NATIVE_TRIANGLE_TEXELS;
-  const table = createTable(order.length * texelsPerTriangle);
-  const { data } = table;
   for (let slot = 0; slot < order.length; slot++) {
     const triangle = order[slot];
-    const base = slot * texelsPerTriangle * 4;
+    const base = (firstSlot + slot) * texelsPerTriangle * 4;
     const corners = [indices[triangle * 3], indices[triangle * 3 + 1], indices[triangle * 3 + 2]];
     const uvSource = nativeSecondSetMaterials?.[triangleMaterial[triangle]] === 1 ? uvs1 : uvs;
     for (let axis = 0; axis < 3; axis++) {
@@ -121,7 +127,6 @@ export function packTriangles(scene, { secondUvSet = false } = {}) {
     }
     if (secondUvSet && uvs1) packSecondUvSet(data, base, uvs1, corners);
   }
-  return table;
 }
 
 function packSecondUvSet(data, base, uvs1, corners) {

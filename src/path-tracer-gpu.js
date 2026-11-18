@@ -1,7 +1,8 @@
 import { resolveLightSelection } from './path-tracer-light-tree.js';
 import { buildFragmentSource, VERTEX_SOURCE } from './path-tracer-gpu-shader.js';
 import { gpuTriangleCapacity, packAtlas, packEnvironment, packLightTree, packLights, packMaterials, packNodes, packSubsurface, packTriangles, sceneUsesSubsurface } from './path-tracer-gpu-pack.js';
-import { MAX_GPU_TRACE_TRIANGLES, MAX_TRACE_TRIANGLES } from './path-tracer-scene.js';
+import { packInstancedScene } from './path-tracer-gpu-instance-pack.js';
+import { isInstancedScene, MAX_GPU_TRACE_TRIANGLES, MAX_TRACE_TRIANGLES, uniqueTriangleCount } from './path-tracer-scene.js';
 
 // The GPU backend of the path tracer: one WebGL2 fragment pass per sample draws every pixel of a band, and four float
 // targets add the samples up. It needs a page with WebGL2 (a canvas), EXT_color_buffer_float and EXT_float_blend. The
@@ -79,7 +80,7 @@ export async function withBlueNoiseTile(options) {
  * instead of tracing a black image.
  */
 function refuseUnallocatedTables(gl, scene) {
-  const triangleCount = scene.indices.length / 3;
+  const triangleCount = uniqueTriangleCount(scene);
   if (triangleCount <= MAX_TRACE_TRIANGLES) return;
   const glError = gl.getError();
   if (glError === gl.NO_ERROR) return;
@@ -91,10 +92,12 @@ export function uploadScene(gl, program, scene, options = {}) {
   const atlas = packAtlas(scene.materials);
   const lights = packLights(scene.lights);
   const environment = packEnvironment(scene.environment);
-  const nodes = packNodes(scene.bvh);
-  const triangles = packTriangles(scene, { secondUvSet: true });
+  const instanced = isInstancedScene(scene) ? packInstancedScene(scene) : null;
+  const nodes = instanced?.nodes ?? packNodes(scene.bvh);
+  const triangles = instanced?.triangles ?? packTriangles(scene, { secondUvSet: true });
   const materials = packMaterials(scene.materials, atlas, scene.shadowOnlyParts);
   const floatTables = [['uNodes', nodes], ['uTriangles', triangles], ['uMaterials', materials], ['uLights', lights.table]];
+  if (instanced) floatTables.push(['uInstances', instanced.instances]);
   if (sceneUsesSubsurface(scene.materials)) floatTables.push(['uSubsurface', packSubsurface(scene.materials)]);
   if (options.lightSelection === 'tree') floatTables.push(['uLightTree', packLightTree(scene.lights)]);
   let unit = 0;
@@ -104,6 +107,7 @@ export function uploadScene(gl, program, scene, options = {}) {
     bind(name);
   }
   refuseUnallocatedTables(gl, scene);
+  if (instanced) gl.uniform1i(gl.getUniformLocation(program, 'uTopRoot'), instanced.topRoot);
   createTexture(gl, unit, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, atlas.width, atlas.height, atlas.data);
   bind('uAtlas');
   const colors = environment?.colors ?? new Float32Array(4);
@@ -237,10 +241,11 @@ export function getKernel(hasSubsurface, texelBake = false, options = {}) {
   const lightImportance = options.lightSelection === 'importance';
   const lightTree = options.lightSelection === 'tree';
   const radianceCache = options.radianceCache === true;
-  const key = `${hasSubsurface}:${texelBake}:${blueNoise}:${lightImportance}:${radianceCache}:${lightTree}`;
+  const instanced = options.instanced === true;
+  const key = `${hasSubsurface}:${texelBake}:${blueNoise}:${lightImportance}:${radianceCache}:${lightTree}${instanced ? ':instanced' : ''}`;
   if (!programs.has(key)) {
     const started = performance.now();
-    const program = createProgram(gl, { hasSubsurface, texelBake, blueNoise, lightImportance, radianceCache, lightTree });
+    const program = createProgram(gl, { hasSubsurface, texelBake, blueNoise, lightImportance, radianceCache, lightTree, instanced });
     gl.getProgramParameter(program, gl.LINK_STATUS);
     programs.set(key, { program, compileSeconds: (performance.now() - started) / 1000 });
     if (!texelBake) kernelCompileCount++;
@@ -298,7 +303,7 @@ export async function traceOnGpu(scene, camera, rawOptions, shouldStop) {
   const tiledOptions = await withBlueNoiseTile(rawOptions);
   const options = { ...tiledOptions, lightSelection: resolveLightSelection(tiledOptions.lightSelection, scene.lights) };
   const { gl, gpu } = getContext();
-  const { program, compileSeconds } = getKernel(sceneUsesSubsurface(scene.materials), false, options);
+  const { program, compileSeconds } = getKernel(sceneUsesSubsurface(scene.materials), false, { ...options, instanced: isInstancedScene(scene) });
   const { width, height, samples } = options;
   gl.useProgram(program);
   const { lightCount } = uploadScene(gl, program, scene, options);
@@ -320,7 +325,7 @@ const TEXEL_ROW_WIDTH = 2048;
  */
 export async function traceTexelsOnGpu(scene, texels, options, shouldStop) {
   const { gl, gpu } = getContext();
-  const { program, compileSeconds } = getKernel(sceneUsesSubsurface(scene.materials), true);
+  const { program, compileSeconds } = getKernel(sceneUsesSubsurface(scene.materials), true, { instanced: isInstancedScene(scene) });
   const { count, points, normals } = texels;
   const { samples, seed } = options;
   const width = Math.min(count, TEXEL_ROW_WIDTH);
@@ -354,6 +359,9 @@ export async function traceTexelsOnGpu(scene, texels, options, shouldStop) {
 }
 
 /** The triangles this page's WebGL2 context can hold in its data textures (MAX_TEXTURE_SIZE rows of the triangle table), up to MAX_GPU_TRACE_TRIANGLES. */
+// The WebGL2 tracer reads instanced scenes (path-tracer-gpu-instance-pack.js); buildTraceSceneForDevice keeps copies of one mesh as instances for it.
+export const supportsInstancing = true;
+
 export function gpuTriangleLimit() {
   const { gl } = getContext();
   return gpuTriangleCapacity({ maximumTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE) }, MAX_GPU_TRACE_TRIANGLES);

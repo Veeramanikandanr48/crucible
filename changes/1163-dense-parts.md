@@ -1,1 +1,0 @@
-- `denseSamples` is judged on the same part list at construction, on resize and after `replaceParts` (a scene near the threshold no longer flips on its first resize because the ground was counted, and a scene that gains or loses triangles is re-judged) (#1163).

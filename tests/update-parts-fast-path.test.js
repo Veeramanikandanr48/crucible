@@ -67,6 +67,8 @@ test('rejections still throw after the fast path has been taken', () => {
     [material => { material.alphaMode = 'blend'; }, /Shadow casting|Alpha mode/],
     [material => { material.alphaMode = 'mask'; }, /Alpha mode/],
     [material => { material.doubleSided = true; }, /double-sided/],
+    [material => { material.retro = Object.freeze({ affineUV: true }); }, /retro and mask opacity changes require a new renderer: set them when the part is made/],
+    [material => { material.waterGlint = Object.freeze({ edge: Object.freeze({ threshold: 0.4, intensity: 1 }) }); }, /changes require a new renderer: set them when the part is made/],
     [material => { material.map = { name: 'other' }; }, /Texture map/],
     [material => { material.normalMap = {}; }, /new renderer|standard PBR/],
     [material => { material.transmission = 0.5; }, /liquid or foam pass/],

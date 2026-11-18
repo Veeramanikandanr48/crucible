@@ -139,12 +139,26 @@ export const LOCAL_VOLUME_BLUR_RATE = 1.5;
 /** Samples the march takes per cell of the density noise at least: fewer step over whole cells and the dither of the start offset shows as pixel-pitch grain (#855). */
 export const LOCAL_VOLUME_STEPS_PER_NOISE_CELL = 2;
 
+/** The most samples a ray takes through a volume whose noise has several octaves: its finest cell is 2^(octaves - 1) times smaller, so the cap of LOCAL_VOLUME_MAXIMUM_STEPS undercounts it (#1855). */
+export const LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS = 96;
+
+/**
+ * The samples a ray of `chord` length needs for noise of `octaves` octaves at base `scale`: LOCAL_VOLUME_STEPS_PER_NOISE_CELL per cell of the finest
+ * octave (scale * 2^(octaves - 1), lacunarity 2), at most LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS. The post shader repeats the rule.
+ */
+export function localVolumeOctaveStepCount(octaves, scale, chord) {
+  const finestScale = scale * 2 ** (octaves - 1);
+  return Math.min(LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS, Math.ceil(chord * finestScale * LOCAL_VOLUME_STEPS_PER_NOISE_CELL));
+}
+
 /**
  * The samples a ray takes through a noisy volume: the volume's `steps`, raised so that each noise cell along `length` gets
- * LOCAL_VOLUME_STEPS_PER_NOISE_CELL of them, up to LOCAL_VOLUME_MAXIMUM_STEPS. Without noise it is `steps`. The post shader repeats the rule.
+ * LOCAL_VOLUME_STEPS_PER_NOISE_CELL of them, up to LOCAL_VOLUME_MAXIMUM_STEPS (LOCAL_VOLUME_MAXIMUM_OCTAVE_STEPS counted from the finest octave
+ * when noiseOctaves is above 1). Without noise it is `steps`. The post shader repeats the rule.
  */
 export function localVolumeStepCount(volume, length) {
   if (!(volume.noiseAmount > 0)) return volume.steps;
+  if (volume.noiseOctaves > 1) return Math.max(volume.steps, localVolumeOctaveStepCount(volume.noiseOctaves, volume.noiseScale, length));
   const cellSteps = Math.ceil(length * volume.noiseScale * LOCAL_VOLUME_STEPS_PER_NOISE_CELL);
   return Math.min(LOCAL_VOLUME_MAXIMUM_STEPS, Math.max(volume.steps, cellSteps));
 }
@@ -213,7 +227,7 @@ export function localVolumeGridSample(volume, x, y, z, out, withBlackbody = fals
     out.fill(0);
     return out;
   }
-  const baked = withBlackbody ? bakedGridEmission(volume.gridData, volume.temperatureScale) : null;
+  const baked = withBlackbody ? bakedGridEmission(volume.gridData, volume.temperatureScale, volume.flameTemperature) : null;
   sampleVolumeGrid(volumeGridFloats(volume.gridData), volume.gridData.resolution, unitX, unitY, unitZ, out, baked);
   if (volume.detailNoise) erodeGridCell(volume.detailNoise, volume.gridData.resolution, unitX, unitY, unitZ, out, withBlackbody);
   return out;

@@ -3,12 +3,13 @@
 // Runs use the Claude Code subscription, so the summary has tokens, calls and time and never dollars.
 //
 // node bench/agent-modeling/bench.mjs --claude <claude executable> --models haiku,sonnet,opus --runs 3 --label baseline
-//   [--tasks crate,look-fog] [--kinds look,light] [--topics relations,explosion] [--dry-run] [--suggest <base ref>] [--smoke] [--findings off] [--backend gpu|cpu] [--budget 3] [--timeout 1200] [--resume]
+//   [--tasks crate,look-fog] [--kinds look,light] [--topics relations,explosion] [--dry-run] [--suggest <base ref>] [--smoke] [--skill-mode none|legacy|references] [--findings off] [--backend gpu|cpu] [--budget 3] [--timeout 1200] [--resume]
 //
 // --tasks, --kinds and --topics add to each other (a union of the tasks named, of the kinds and of the tasks tagged with a topic);
-// with none of them the bench runs every task. An unknown task, kind or topic is an error that lists the valid ones. --dry-run
+// with none of them the bench runs every task in suite.mjs. --tasks also takes the tasks scenes.mjs defines that the default run
+// leaves out (findings-fix). An unknown task, kind or topic is an error that lists the valid ones. --dry-run
 // prints the selected tasks and stops. --suggest <base ref> prints the bench command for the current branch's diff against that
-// ref (a full bench for the MCP server file or a skill, a subset otherwise) and stops. Bench what changed (subsets.mjs); the full
+// ref (a full bench for the MCP server file or SKILL.md, a subset for a reference file under skills/ and a subset otherwise; a skill change adds --skill-mode references) and stops. Bench what changed (subsets.mjs); the full
 // bench runs for those shared changes and once before a release cut.
 //
 // --smoke runs the two smoke tasks once. --resume continues the same label (same models, same --runs): attempts already
@@ -19,8 +20,9 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { benchSummary, formatSummaryTable } from './bench-summary.mjs';
-import { BENCH_TASKS, SMOKE_TASKS } from './suite.mjs';
-import { selectTasks, subsetCommand, suggestSubset } from './subsets.mjs';
+import { BENCH_TASKS, OPTIONAL_TASK_IDS, SMOKE_TASKS } from './suite.mjs';
+import { selectTasks, skillModeAdvice, subsetCommand, suggestSubset } from './subsets.mjs';
+import { resolveSkillMode } from './skill-prompt.mjs';
 
 const resultsDirectory = join(resolve(import.meta.dirname), 'results');
 
@@ -35,6 +37,7 @@ const { values: options } = parseArgs({
     topics: { type: 'string' },
     'dry-run': { type: 'boolean', default: false },
     suggest: { type: 'string' },
+    'skill-mode': { type: 'string' },
     smoke: { type: 'boolean', default: false },
     backend: { type: 'string', default: 'gpu' },
     budget: { type: 'string', default: '3' },
@@ -53,10 +56,12 @@ if (options.suggest) {
   console.log(`${changedPaths.length} changed files against ${options.suggest}: ${reason}`);
   if (suggestion.unmapped.length) console.log(`Not mapped to a task: ${suggestion.unmapped.join(', ')}`);
   if (command) console.log(command);
+  for (const line of skillModeAdvice(suggestion, command, options.suggest)) console.log(line);
   process.exit(0);
 }
+const skillMode = resolveSkillMode({ skillMode: options['skill-mode'] });
 const hasSelection = options.tasks || options.kinds || options.topics;
-const taskIds = options.smoke && !hasSelection ? SMOKE_TASKS : selectTasks(options, BENCH_TASKS);
+const taskIds = options.smoke && !hasSelection ? SMOKE_TASKS : selectTasks(options, BENCH_TASKS, OPTIONAL_TASK_IDS);
 if (options['dry-run']) {
   console.log(`${taskIds.length} of ${BENCH_TASKS.length} tasks: ${taskIds.join(', ')}`);
   process.exit(0);
@@ -70,7 +75,7 @@ function runModel(model) {
     join(import.meta.dirname, 'run.mjs'),
     '--claude', options.claude, '--model', model, '--tasks', taskIds.join(','), '--runs', String(runs),
     '--backend', options.backend, '--budget', options.budget, '--timeout', options.timeout,
-    '--findings', options.findings, '--label', benchName, '--run-name', runName,
+    '--findings', options.findings, '--skill-mode', skillMode, '--label', benchName, '--run-name', runName,
     ...(options.resume ? ['--resume', runName] : []),
   ];
   return new Promise((resolvePromise, reject) => {
@@ -94,5 +99,5 @@ for (const model of models) {
 
 const summary = benchSummary(recordsByModel, runs);
 const benchFile = join(resultsDirectory, `bench-${benchName}.json`);
-await writeFile(benchFile, `${JSON.stringify({ bench: benchName, date: new Date().toISOString(), runsPerTask: runs, tasks: taskIds, backend: options.backend, summary, recordsByModel }, null, 2)}\n`);
+await writeFile(benchFile, `${JSON.stringify({ bench: benchName, date: new Date().toISOString(), runsPerTask: runs, tasks: taskIds, backend: options.backend, skillMode, summary, recordsByModel }, null, 2)}\n`);
 console.log(`\n${formatSummaryTable(summary, runs)}\n\nBench file: bench/agent-modeling/results/bench-${benchName}.json`);

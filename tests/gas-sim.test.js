@@ -21,6 +21,19 @@ function totalDensity(frame) {
   return total;
 }
 
+// Mean and spread of detailed density over plain density across the cells that hold smoke, and how many empty cells stayed empty.
+function modulationStatistics(plainFrame, detailedFrame) {
+  const ratios = [];
+  let filledEmptyCells = 0;
+  plainFrame.density.forEach((plainDensity, index) => {
+    if (plainDensity === 0) filledEmptyCells += detailedFrame.density[index] === 0 ? 0 : 1;
+    else if (plainDensity > 0.01) ratios.push(detailedFrame.density[index] / plainDensity);
+  });
+  const mean = ratios.reduce((sum, ratio) => sum + ratio, 0) / ratios.length;
+  const spread = Math.sqrt(ratios.reduce((sum, ratio) => sum + (ratio - mean) ** 2, 0) / ratios.length);
+  return { mean, spread, filledEmptyCells, count: ratios.length };
+}
+
 function densityCentroidHeight(frame, bake) {
   const [nx, ny] = bake.resolution;
   const cellSize = bake.size[0] / nx;
@@ -59,8 +72,32 @@ test('the same options give identical bytes for every frame, another seed does n
   first.forEach((hash, index) => assert.notEqual(hash, other[index], `frame ${index} ignores the seed`));
 });
 
-test('the plume rises over the first second', () => {
-  const bake = bakeGasSim({ ...SMALL, frames: 24 });
+// The bytes a bake wrote before the advection located each traced position once per step (#1768): every grid an explosion names must keep them.
+test('a bake with velocity keeps the exact bytes it had before positions were located once per step', () => {
+  const baked = bakeGasSim({ resolution: 24, frames: 8, seed: 7, velocity: true });
+  const hash = createHash('sha256');
+  for (const frame of baked.frames) {
+    for (const channel of Object.keys(frame).sort()) hash.update(Buffer.from(frame[channel].buffer));
+  }
+  assert.equal(hash.digest('hex'), 'af906fb809df1d869d7008851c1325dbdddda7eb223e4838ca249c63d8ccaf9d');
+});
+
+// The default small bake, shared by the plume, burning and timing tests: the frames before frame 24 do not depend on how many frames are asked
+// for, so one 36 frame bake serves all three.
+let defaultBakePromise = null;
+let defaultBakeSeconds = 0;
+function defaultSmallBake() {
+  defaultBakePromise ??= Promise.resolve().then(() => {
+    const started = performance.now();
+    const bake = bakeGasSim({ ...SMALL, frames: 36 });
+    defaultBakeSeconds = (performance.now() - started) / 1000;
+    return bake;
+  });
+  return defaultBakePromise;
+}
+
+test('the plume rises over the first second', async () => {
+  const bake = await defaultSmallBake();
   const early = densityCentroidHeight(bake.frames[5], bake);
   const late = densityCentroidHeight(bake.frames[23], bake);
   assert.ok(late > early + 0.5, `the smoke centroid went from ${early.toFixed(2)} m to ${late.toFixed(2)} m`);
@@ -114,8 +151,8 @@ test('vorticity confinement makes the silhouette more ragged', () => {
   assert.ok(confinedRoughness > smoothRoughness * 1.3, `roughness ${smoothRoughness.toFixed(2)} without, ${confinedRoughness.toFixed(2)} with confinement`);
 });
 
-test('burning makes flame and heat that die away', () => {
-  const bake = bakeGasSim({ ...SMALL, frames: 36 });
+test('burning makes flame and heat that die away', async () => {
+  const bake = await defaultSmallBake();
   const peak = frame => Math.max(...frame.flame);
   assert.ok(peak(bake.frames[3]) > 0.05, 'the burst burns');
   assert.ok(peak(bake.frames[35]) < peak(bake.frames[3]) * 0.2, 'the flame dies away');
@@ -166,8 +203,38 @@ test('bakeGasSimToGrids registers one grid per frame that a grid volume can play
   assert.throws(() => bakeGasSimToGrids({}, ''), /namePrefix/);
 });
 
-test('a 32 cubed bake of 24 frames takes a few seconds', t => {
-  const started = performance.now();
-  bakeGasSim({ ...SMALL, frames: 24 });
-  t.diagnostic(`32^3 x 24 frames: ${((performance.now() - started) / 1000).toFixed(2)} s`);
+test('a 32 cubed bake of 36 frames takes a few seconds', async t => {
+  await defaultSmallBake();
+  t.diagnostic(`32^3 x 36 frames: ${defaultBakeSeconds.toFixed(2)} s`);
+});
+
+test('detail 0 leaves the bake byte for byte as it was and detail adds small puffs without moving the cloud', () => {
+  const options = { resolution: 32, frames: 24, seed: 5 };
+  const plain = bakeGasSim(options);
+  const explicitZero = bakeGasSim({ ...options, detail: 0 });
+  assert.deepEqual(frameHashes(explicitZero), frameHashes(plain));
+
+  const detailed = bakeGasSim({ ...options, detail: 1 });
+  assert.deepEqual(frameHashes(bakeGasSim({ ...options, detail: 1 })), frameHashes(detailed), 'the same seed gives the same bytes');
+  assert.notDeepEqual(frameHashes(detailed), frameHashes(plain));
+
+  const lastIndex = options.frames - 1;
+  const plainMass = totalDensity(plain.frames[lastIndex]);
+  const detailedMass = totalDensity(detailed.frames[lastIndex]);
+  assert.ok(Math.abs(detailedMass / plainMass - 1) < 0.15, `noise keeps the smoke mass within 15 percent, got ${detailedMass / plainMass}`);
+  assert.ok(Math.abs(densityCentroidHeight(detailed.frames[lastIndex], detailed) - densityCentroidHeight(plain.frames[lastIndex], plain)) < 0.4, 'the cloud stays where the sim put it');
+  for (const value of detailed.frames[lastIndex].density) assert.ok(Number.isFinite(value) && value >= 0);
+
+  const statistics = modulationStatistics(plain.frames[lastIndex], detailed.frames[lastIndex]);
+  assert.ok(statistics.count > 500, `the frame holds smoke to measure, got ${statistics.count} cells`);
+  assert.ok(statistics.spread > 0.2, `detail 1 mottles the smoke, got a spread of ${statistics.spread}`);
+  assert.ok(Math.abs(statistics.mean - 1) < 0.15, `the mean stays near 1, got ${statistics.mean}`);
+  assert.equal(statistics.filledEmptyCells, 0, 'empty cells stay empty');
+});
+
+test('detail is checked and the velocity channels are not warped', () => {
+  assert.throws(() => bakeGasSim({ resolution: 16, frames: 1, detail: 2 }), /detail must be a number from 0 to 1/);
+  const withVelocity = bakeGasSim({ resolution: 16, frames: 2, velocity: true, detail: 1 });
+  const plainVelocity = bakeGasSim({ resolution: 16, frames: 2, velocity: true });
+  assert.deepEqual(withVelocity.frames[1].velocityX, plainVelocity.frames[1].velocityX);
 });

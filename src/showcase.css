@@ -82,6 +82,24 @@ body.site.showcase > main { grid-template-columns: minmax(0, 1fr); }
 .showcase-cook figcaption strong { color: var(--text); font-weight: 600; }
 .showcase-cook figcaption small { font-size: 13px; }
 .showcase-cook figcaption a { color: var(--text); text-decoration: underline; }
+/* Community: work other people made, picked from Show and tell (src/community-showcase.js). */
+.showcase-community { display: grid; gap: 20px; }
+.community-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; align-items: start; }
+.community-grid[hidden] { display: none; }
+.community-grid figure { margin: 0; display: grid; gap: 12px; }
+.community-grid img { display: block; width: 100%; height: auto; border-radius: 12px; background: var(--surface); box-shadow: 0 0 0 1px var(--line, transparent); }
+.community-grid figcaption { display: grid; gap: 4px; color: var(--muted); font-size: 14px; }
+.community-grid figcaption strong { color: var(--text); font-weight: 600; }
+.community-grid figcaption small { font-size: 13px; }
+.community-grid figcaption a { color: var(--text); text-decoration: underline; }
+.community-submit { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+.site .community-submit-primary { display: inline-flex; align-items: center; gap: 8px; min-height: var(--control-height); padding: 8px 16px; border-radius: var(--radius); background: var(--primary); color: var(--primary-text); font-size: 15px; font-weight: 600; transition: opacity .12s; }
+.site .community-submit-primary:hover { opacity: .88; }
+.community-submit a:not(.community-submit-primary) { color: var(--muted); font-size: 15px; }
+.community-submit a:not(.community-submit-primary):hover { color: var(--text); text-decoration: underline; }
+@media (max-width: 900px) {
+  .community-grid { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 900px) {
   .showcase-cook-grid { grid-template-columns: minmax(0, 1fr); }
 }

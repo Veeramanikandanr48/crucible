@@ -6,7 +6,7 @@ The same field works from three places: the `crucible/addons/user-pass` addon, t
 
 ## Where a pass runs
 
-Passes run in order on the finished frame: after depth of field, motion blur, line art, bloom, grading and the view transform, as the last step before the canvas. The first pass reads the frame as it would have been shown. Each next pass reads the one before. Colours are display-referred (0 to 1), so quantising and dithering work on the values people see. The path tracer does not apply passes. Render passes (`pass: 'depth'` and the others) and the water mirror are unaffected.
+Passes run in order on the finished frame: after depth of field, motion blur, line art, bloom, grading and the view transform, as the last step before the canvas. The first pass reads the frame as it would have been shown. Each next pass reads the one before. Colours are display-referred (0 to 1), so quantising and dithering work on the values people see. The path tracer does not apply passes: a path traced job (`renderer.type` `pathTracer`, any backend) returns the plain traced frame, because the tracer has no first-hit depth, normal or object ID buffer for a pass to read. The job still completes, and its `metrics.diagnostics` carries a `post-passes-skipped` warning (#2226) that names the passes it left out. A scene without `postPasses` gets no such entry. Render passes (`pass: 'depth'` and the others) and the water mirror are unaffected.
 
 ## A pass
 
@@ -117,7 +117,7 @@ As a recipe section:
 
 # Material fragment hook
 
-A material can carry its own fragment code: a GLSL function that changes the surface colour and alpha, or discards the fragment. Use it for a dissolve, a shoreline cut from a mask, a leaf cutout or a stripe pattern. It works from the `snippet` field of a recipe material and from MCP (`scene_create`, `scene_apply` with `set-material`; `snippet: null` clears it). It follows the same rules as a post pass, and MCP accepts no host code.
+A material can carry its own fragment code: a GLSL function that changes the surface colour and alpha, or discards the fragment (water has a second entry point after lighting, [below](#a-water-hook-after-lighting)). Use it for a dissolve, a shoreline cut from a mask, a leaf cutout or a stripe pattern. It works from the `snippet` field of a recipe material and from MCP (`scene_create`, `scene_apply` with `set-material`; `snippet: null` clears it). It follows the same rules as a post pass, and MCP accepts no host code.
 
 ```json
 { "id": "stone", "color": [0.5, 0.5, 0.5], "snippet": { "fragment": "...", "uniforms": { "threshold": 0.4 }, "mask": "map" } }
@@ -125,11 +125,40 @@ A material can carry its own fragment code: a GLSL function that changes the sur
 
 | Field | Meaning |
 | --- | --- |
-| `fragment` | GLSL ES 3.00 text that defines `void materialHook(inout vec3 color, inout float alpha, vec2 uv, vec3 worldPosition)`. Helper functions and `const` values may come before it. 4096 bytes of code at most; comments and extra spaces are not counted (the text as sent may be up to 65536 bytes). |
+| `fragment` | GLSL ES 3.00 text that defines `void materialHook(inout vec3 color, inout float alpha, vec2 uv, vec3 worldPosition)`, or `waterHook` below. Helper functions and `const` values may come before it. 4096 bytes of code at most; comments and extra spaces are not counted (the text as sent may be up to 65536 bytes). |
 | `uniforms` | Named values, as for a post pass: a number is a `float`, `[x, y]` to `[x, y, z, w]` are vectors, `{ "type": "int", "value": 4 }` is an int. At most 16. |
 | `mask` | Optional, `"map"`: the snippet may sample `snippetMask` (a `sampler2D`), which is the material's own map or pattern. Load the image as the material `map`; there are no remote URLs. |
 
 Inputs: `color` is the base colour after the map and the vertex tint, `alpha` is the map alpha before the material opacity, `uv` is the texture coordinate and `worldPosition` the position in the world. `discard` removes the fragment in every alpha mode. A lowered `alpha` cuts only when the material has `alphaMode: "mask"`.
+
+## A water hook, after lighting
+
+A snippet may define `void waterHook(inout vec3 color, WaterInputs water)` instead of `materialHook`, or next to it. It runs only on a material with `"tag": "water"`, after the engine has lit the surface and before fog and tone mapping, so it can replace the lighting with flat tones or add a hard edge. `color` is the lit linear radiance, in and out. The engine declares the `WaterInputs` type; you do not.
+
+| Field | Meaning |
+| --- | --- |
+| `water.normal` | The shading normal, ripples and waves included. |
+| `water.view` | Unit vector from the surface to the eye. |
+| `water.foam` | The foam of the water shader, 0 to 1, from the ocean `foam` vertex group. |
+| `water.depthBelow` | Metres of water over the floor below. Always 0 for now: the water shader does not resolve it yet. |
+| `water.time` | Seconds, as the engine's clock. |
+| `water.lit` | The key light facing the surface times the shadow it receives, 0 to 1. |
+
+The same limits and checks as the material hook apply: 4096 bytes, 16 uniforms, no `#` lines, counted loops only. A snippet with only `waterHook` adds nothing to the shadow and ID passes. The path tracer and exports ignore it.
+
+```glsl
+void waterHook(inout vec3 color, WaterInputs water) {
+  float tilt = 1.0 - water.normal.y;
+  vec3 tone = tone0;
+  if (tilt > 0.004) tone = tone1;
+  if (tilt > 0.012) tone = tone2;
+  if (tilt > 0.03) tone = tone3;
+  color = tone * (0.6 + 0.4 * step(0.5, water.lit));
+  if (water.foam > foamCut) color = vec3(0.9, 0.95, 1.0);
+}
+```
+
+With `tone0` to `tone3` as vec3 uniforms and `foamCut` of 0.3, that draws four flat tones from the wave slope and hard-edged foam on an ocean sea.
 
 ## Where the hook runs
 

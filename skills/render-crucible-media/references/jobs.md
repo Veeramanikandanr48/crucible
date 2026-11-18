@@ -3,8 +3,9 @@
 <!-- skill-navigation:start -->
 This is the [Render job settings](#render-job-settings) reference. Read the opening paragraph, then only the section for the job:
 [One PNG](#one-png), [Eight stills](#eight-stills), [MP4 of recipe motion](#mp4-of-recipe-motion), [Shots, cuts and sound](#shots-cuts-and-sound),
-[Encoder](#encoder), [Render passes](#render-passes), [Compositing output: alpha, 16-bit, EXR, region, 60 fps](#compositing-output-alpha-16-bit-exr-region-60-fps),
-[Path traced still](#path-traced-still) (also traced video) and [Imported character clips](#imported-character-clips).
+[Encoder](#encoder), [Quality tiers, estimate and budget](#quality-tiers-estimate-and-budget), [Render passes](#render-passes),
+[Compositing output: alpha, 16-bit, EXR, region, 60 fps](#compositing-output-alpha-16-bit-exr-region-60-fps),
+[Path traced still](#path-traced-still) (also traced video), [Grid volumes and texture sequences](#grid-volumes-and-texture-sequences) and [Imported character clips](#imported-character-clips).
 <!-- skill-navigation:end -->
 
 Every recipe is the arguments of `scene_render_submit`. `sessionId` may be left out. `expectedRevision` is the
@@ -30,6 +31,11 @@ render the video.
 ```json
 { "expectedRevision": 3, "settings": { "kind": "stills", "width": 640, "height": 360, "duration": 4, "motion": { "start": 0 } } }
 ```
+
+`stillCount` (2 to 300) writes that many numbered PNGs (`frame-0.png` to `frame-<N-1>.png`) instead, one per 1/`fps` s of the motion clock, the
+instants a video of that `fps` would show. Leave `duration` out: it is `(stillCount - 1) / fps`, and any other value is refused. With
+`transparent: true` each frame is an RGBA PNG: a transparent frame sequence for compositing, in one job. For a longer clip, submit the next job with
+`motion.start` advanced by `stillCount / fps`. One job's files stay under 128 MiB together (a `png16` or `exr` frame counts up to 4 times an 8-bit one).
 
 ## MP4 of recipe motion
 
@@ -71,6 +77,30 @@ longer than one job (60 s) render parts with `track: "pcm"` (lossless, no encode
 fails the job and does not fall back, so choose `cpu` unless you know the machine. The result reports
 `metrics.videoEncoder`, `captureSeconds` and `renderSeconds`.
 
+## Quality tiers, estimate and budget
+
+`settings.quality` says what the render is for, so you need not know the renderer behind it.
+
+| Tier | What runs |
+|---|---|
+| `draft` | Glaze (the raster renderer), light shading, no multisampling, coarse detail: the fast preview |
+| `realtime` | Glaze at the preview's own settings |
+| `realtime-high` | Glaze with 8 samples and fine detail; needs a hardware GPU |
+| `final` | The path tracer at 256 samples with the wavelet denoiser, on `native` when Cook and a ray query adapter exist, else `gpu`, else `cpu` |
+
+```json
+{ "expectedRevision": 3, "settings": { "kind": "image", "width": 640, "height": 360, "quality": "draft" } }
+```
+
+The same call with `"quality": "final"` is the offline image. Leave `renderer` out: `quality` picks it. `final` needs a lit PNG, so with `passes`,
+`transparent`, `region`, `multilayer` or a `format` other than `png` it falls back. A tier the device cannot run falls back one tier at a time;
+`scene_render_submit` returns `quality` with `requested`, `picked` and `steps` naming what was missing, so say which tier ran.
+`scene_capabilities` topic `jobs` lists `tiers` for this device.
+
+`scene_render_submit` also returns `estimate` (`seconds`, `peakMemoryMiB`, `framesPerSecond`). To let the job choose, give `settings.budget`:
+`{ "secondsPerFrame": 2 }` (offline) or `{ "framesPerSecond": 30 }` (real time), with optional `memoryMiB`. Give exactly one of the two, and no
+`renderer` or `quality` beside it. The reply has `budget.picked`, `fits` and `reason`.
+
 ## Render passes
 
 `image` and `stills` jobs take `passes`, a list of `albedo`, `normal`, `emission`, `depth`, `objectId`, `diffuse`, `glossy`, `shadow`, `ao` and `mist` (lighting terms: use `exr` for them).
@@ -82,7 +112,8 @@ also writes one raw PNG per pass at the lit image's size, with no grading, bloom
 ```
 
 Only opaque and cutout geometry appears. `scene_render_result` metrics carry `objectNames` (read the names for the IDs;
-IDs follow draw order, not node order) and `depthRangeMetres`. Depth is metres over 100 in a 16-bit value (high byte
+IDs follow draw order, not node order), `objectNodes` (the node of each ID) and `depthRangeMetres`; `cryptomatte` adds `metrics.cryptomatte`
+(`{ objects, materials }`). Per-node line art is `environment.lines.nodes` in the recipe, not a pass. Depth is metres over 100 in a 16-bit value (high byte
 in red, low in green); background is `255, 255, 0`. Videos hold the lit image only.
 
 ## Compositing output: alpha, 16-bit, EXR, region, 60 fps
@@ -121,11 +152,30 @@ stops at 30 minutes, so keep a traced video short and small. It writes no passes
 
 `backend` is `cpu` (default, reproducible), `gpu` (needs a server started with `--backend gpu`) or `native`
 (hardware ray queries; it falls back to `gpu` or `cpu` and `metrics.pathTracer.backendNote` says why). Start with 16
-samples to judge the light, then raise them. Ranges: `samples` 1 to 1024, `bounces` 1 to 16, `maxSeconds` 1 to 600.
-`denoise` is `true` (the built-in filter), `false`, or `"oidn"` where the server has that optional package.
-The OIDN package `@codepawlhq/crucible-denoise-oidn` is not on npm yet, so an npm install of `@codepawlhq/crucible` does not have it. Use a source checkout: `npm run fetch --prefix packages/denoise-oidn` (or set `OIDN_DENOISE_PATH`). Without it the job does not fail: it runs the wavelet filter (the GPU a-trous filter on `backend: "native"`) and says so in `metrics.pathTracer.denoiser` and `denoiserNote`. Check `denoiser` before you judge grain.
+samples to judge the light, then raise them. Ranges: `samples` 1 to 1024 (default 64, 16 with `oidn`), `bounces` 1 to 16 (default 8), `maxSeconds` 1 to 600
+(default 120), `seed` 0 to 2147483647, `noiseThreshold` 0 to 0.1 (0 draws every sample).
+`denoise` is `true` (the built-in filter), `false`, `"wavelet"`, `"none"` or `"oidn"` where the server has that optional package.
+A scene far over the `cpu` tracer's 400,000 triangles is refused at submit with the count; `native` takes more, up to what the adapter reports, and refuses a bigger scene
+with the count and the limit. `metrics.report.noise.verdict` says whether to raise `samples`. Native traces grid volumes (next section).
+The OIDN package `@codepawlhq/crucible-denoise-oidn` is a separate package: `npm install @codepawlhq/crucible-denoise-oidn`, then `node node_modules/@codepawlhq/crucible-denoise-oidn/fetch-oidn.mjs` (or set `OIDN_DENOISE_PATH`). Without it the job does not fail: it runs the wavelet filter (the GPU a-trous filter on `backend: "native"`) and says so in `metrics.pathTracer.denoiser` and `denoiserNote`. Check `denoiser` before you judge grain.
+
+## Grid volumes and texture sequences
+
+New in 0.21.0. Both play on the `motion` clock, so a recipe whose only animation is one of them takes `motion: { "start": 0 }`.
+
+- Grid volumes (a blast from `add-explosion`, or your own `.67vg` files): a `grid` or each `frames` entry is a plain file name ending in `.67vg` in the server's grid
+  folder (its working directory, or the folder `JS67_GRID_DIRECTORY` names). The frame drawn is `floor(time * fps)`. A grid file is at most 64 MiB, and all grid files
+  plus the placed assets of one call at most 64 MiB. They draw in Glaze, the CPU and WebGPU path tracers and `renderer.backend: "native"` (Cook). With the scene's
+  motion blur on, bake with `velocity: true` so the blast smears along its flow. Older grid fires with `blackbodyIntensity` look 3 to 4 times dimmer than before 0.21.0:
+  raise it or the exposure.
+- The first draw of a grid volume compiles a shader, so a first `scene_create` or job may take tens of seconds (limit 60 s). The server keeps the blast bake
+  (`CRUCIBLE_BAKE_CACHE`) and Chrome's compiled shaders (`CRUCIBLE_SHADER_CACHE`, GPU backend) between runs, so later runs are fast; `off` or `0` turns them off.
+  A cold first frame is the same pixels as a warm one.
+- Texture sequences: a material `map.sequence` lists up to 4096 frames of up to 2048 pixels. Over 64 frames it streams: the host decodes the frame of each time and keeps
+  two, so a video walks the frames in order. A folder of more than 256 numbered images is one `sequences` entry in `scene_asset_catalog`; name it with `catalog` instead of
+  listing the frames.
 
 ## Imported character clips
 
 `animation: { "clip": 0, "start": 1 }` samples an imported asset's clip and `rendererTime` sets shader time. They
-are separate clocks from `motion`. Clip ids come from `scene_inspect`.
+are separate clocks from `motion`. Clip ids come from `scene_inspect`. A scene with no clips rejects `animation`: drop it or add a clip.

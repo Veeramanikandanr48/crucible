@@ -244,10 +244,17 @@ function puzzleSample() {
   return { recipe, game, replay, title: 'Crate pockets', expectedScore: undefined, puzzle: { crateIds, minimumTravel: 2 } };
 }
 
-const SAMPLES = { creature: creatureSample, drive: driveSample, character: characterSample, puzzle: puzzleSample };
+// The creature sample on a phone: the same game with the touch preset, played by a finger dragging the left-half stick up and a
+// second finger tapping to jump, in a Chrome context that emulates a touch phone. There is no replay: the page reads real touch events.
+function touchSample() {
+  const sample = creatureSample();
+  return { ...sample, game: { ...sample.game, input: 'touch' }, replay: undefined, title: 'Creature touch', touch: true };
+}
+
+const SAMPLES = { creature: creatureSample, drive: driveSample, character: characterSample, puzzle: puzzleSample, touch: touchSample };
 const sampleName = process.argv[3] ?? 'creature';
 assert.ok(SAMPLES[sampleName], `Unknown sample "${sampleName}". Use one of: ${Object.keys(SAMPLES).join(', ')}.`);
-const { recipe, game, replay, title, expectedScore, headRestHeight, assetFiles = {}, expectedAssets = [], puzzle } = SAMPLES[sampleName]();
+const { recipe, game, replay, title, expectedScore, headRestHeight, assetFiles = {}, expectedAssets = [], puzzle, touch } = SAMPLES[sampleName]();
 for (const [name, bytes] of Object.entries(assetFiles)) await writeFile(join(assetsDirectory, name), bytes);
 
 function serveFolder(folder) {
@@ -263,6 +270,31 @@ function serveFolder(folder) {
     }
   });
   return new Promise(resolveListening => server.listen(0, '127.0.0.1', () => resolveListening(server)));
+}
+
+// Real touch events through the DevTools protocol: finger 1 presses in the left half and drags up past the stick radius (60 px),
+// and finger 2 taps in the right half while finger 1 stays down (touchEnd lists the points that lift), which the touch preset reads as a jump.
+async function holdStickUpAndTapToJump(page) {
+  const session = await page.context().newCDPSession(page);
+  const dispatch = (type, touchPoints) => session.send('Input.dispatchTouchEvent', { type, touchPoints });
+  await page.waitForFunction(() => Boolean(window.__game?.input), null, { timeout: 60000 });
+  await page.evaluate(() => {
+    window.__peakHeight = 0;
+    const watch = () => {
+      window.__peakHeight = Math.max(window.__peakHeight, window.__game.controller.state.position[1]);
+      requestAnimationFrame(watch);
+    };
+    watch();
+  });
+  const stickStart = { x: 90, y: 500, id: 1 };
+  const stickHeld = { ...stickStart, y: 380 };
+  const tapPoint = { x: 300, y: 300, id: 2 };
+  await dispatch('touchStart', [stickStart]);
+  await dispatch('touchMove', [stickHeld]);
+  await page.waitForTimeout(500);
+  await Promise.all([dispatch('touchStart', [stickHeld, tapPoint]), dispatch('touchEnd', [tapPoint])]);
+  await page.waitForFunction(() => window.__peakHeight > 0.05, null, { timeout: 10000 });
+  await page.waitForFunction(() => window.__game.controller.state.position[2] < -0.2, null, { timeout: 30000 });
 }
 
 let browser;
@@ -285,15 +317,15 @@ try {
   const exported = await call('scene_export_web', { title });
   assert.ok(exported.bytes < 12 * 1024 * 1024, `bytes ${exported.bytes}`);
   const folder = dirname(exported.entry);
-  await writeFile(join(folder, 'replay.json'), JSON.stringify(replay));
+  if (replay) await writeFile(join(folder, 'replay.json'), JSON.stringify(replay));
 
   server = await serveFolder(folder);
   // GAME_SMOKE_CHROME_ARGS replaces the Chrome flags (a Linux GPU box needs Vulkan ones); GAME_SMOKE_VIDEO_DIR records the page as a 640x360 clip.
   const chromeArgs = process.env.GAME_SMOKE_CHROME_ARGS ? process.env.GAME_SMOKE_CHROME_ARGS.split(' ') : ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-blocklist', '--enable-unsafe-swiftshader'];
   browser = await chromium.launch({ executablePath: CHROME_PATH, headless: true, args: chromeArgs });
   const videoDirectory = process.env.GAME_SMOKE_VIDEO_DIR;
-  const viewport = videoDirectory ? { width: 640, height: 360 } : { width: 640, height: 400 };
-  pageContext = await browser.newContext({ viewport, ...(videoDirectory ? { recordVideo: { dir: videoDirectory, size: viewport } } : {}) });
+  const viewport = touch ? { width: 390, height: 664 } : videoDirectory ? { width: 640, height: 360 } : { width: 640, height: 400 };
+  pageContext = await browser.newContext({ viewport, ...(touch ? { hasTouch: true, isMobile: true, deviceScaleFactor: 2 } : {}), ...(videoDirectory ? { recordVideo: { dir: videoDirectory, size: viewport } } : {}) });
   const page = await pageContext.newPage();
   const problems = [];
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -301,7 +333,8 @@ try {
   page.on('request', request => requested.push(request.url()));
   page.on('pageerror', error => problems.push(error.message));
   page.on('console', message => { if (message.type() === 'error') problems.push(message.text()); });
-  await page.goto(`http://127.0.0.1:${server.address().port}/?replay=replay.json`);
+  await page.goto(`http://127.0.0.1:${server.address().port}/${replay ? '?replay=replay.json' : ''}`);
+  if (touch) await holdStickUpAndTapToJump(page);
   if (headRestHeight !== undefined) {
     // While the replay runs, the speed parameter rises and the bob clip lifts the head off its rest height.
     await page.waitForFunction(restHeight => {

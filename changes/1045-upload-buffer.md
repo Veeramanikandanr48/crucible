@@ -1,0 +1,1 @@
+- A grid sequence reuses one texel buffer for every frame it uploads, so a changing frame costs about 3 ms less at 1080p (#1045)

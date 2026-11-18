@@ -1,0 +1,20 @@
+{
+  "action": "opened",
+  "number": 2001,
+  "pull_request": {
+    "number": 2001,
+    "title": "Add a thing (#1944)",
+    "body": "Part of #1944\n\n## Evidence\nnone",
+    "user": {
+      "login": "anxuanng"
+    },
+    "author_association": "OWNER",
+    "labels": [],
+    "assignees": [],
+    "milestone": null,
+    "draft": false
+  },
+  "repository": {
+    "full_name": "codepawl/crucible"
+  }
+}

@@ -183,7 +183,7 @@ test('an environment track on a key light field names the sun track that animate
   const expectedSunProperties = { keyIntensity: 'intensity', keyColor: 'color', keyDirection: 'direction' };
   for (const [property, sunProperty] of Object.entries(expectedSunProperties)) {
     const track = { kind: 'environment', property, keyframes: keys(1, 2) };
-    assert.throws(() => createAgentScene(sceneRecipe([track])), new RegExp(`The key light is the sun kind: use \{ "kind": "sun", "property": "${sunProperty}" \}`));
+    assert.throws(() => createAgentScene(sceneRecipe([track])), new RegExp(`The key light is the sun kind: use { "kind": "sun", "property": "${sunProperty}" }`));
   }
   const unrelated = { kind: 'environment', property: 'sunColor', keyframes: keys(1, 2) };
   assert.throws(() => createAgentScene(sceneRecipe([unrelated])), error => !/sun kind/.test(error.message));

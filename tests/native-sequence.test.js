@@ -48,7 +48,7 @@ function fakeTracer({ failUpdate = false, failRender = null, failCreate = false,
         update(next) {
           events.push(['update', id]);
           if (failUpdate) throw new Error('the card failed part way');
-          return { accelerationRebuilt: false, kernelRespecialized: false, updateSeconds: 0.5, input: next };
+          return { accelerationRebuilt: false, kernelRespecialized: false, updateSeconds: 0.5, input: next, ...(next.triangles[0] === 5 ? { changedMeshes: 1 } : {}) };
         },
         render(frameOptions) {
           events.push(['render', id, Array.from(frameOptions.kernelParams)]);
@@ -95,10 +95,19 @@ cookTest('a frame the session cannot take closes it and starts a new one, saying
   const counted = sequence.trace(inputWith({ instanceCount: 2 }), TRACE_OPTIONS);
   assert.equal(counted.route.path, 'new-session');
   assert.match(counted.route.reason, /`instanceCount` changes from 1 to 2/);
-  const geometry = sequence.trace(inputWith({ instanceCount: 2, geometryByte: 5 }), TRACE_OPTIONS);
-  assert.equal(geometry.route.path, 'new-session');
-  assert.match(geometry.route.reason, /`triangles` differs/);
-  assert.deepEqual(tracer.events.filter(event => event[0] !== 'render'), [['create', 1], ['close', 1], ['create', 2], ['close', 2], ['create', 3]]);
+  assert.deepEqual(tracer.events.filter(event => event[0] !== 'render'), [['create', 1], ['close', 1], ['create', 2]]);
+});
+
+cookTest('a frame with other triangles goes through update and reports the meshes Cook rebuilt', () => {
+  const tracer = fakeTracer();
+  const sequence = createNativeSequence({ tracer });
+  sequence.trace(inputWith(), TRACE_OPTIONS);
+  const geometry = sequence.trace(inputWith({ geometryByte: 5 }), TRACE_OPTIONS);
+  assert.equal(geometry.route.path, 'updated');
+  assert.deepEqual(geometry.route.changedTables, ['triangles']);
+  assert.equal(geometry.route.changedMeshes, 1);
+  const camera = sequence.trace(inputWith({ geometryByte: 5, camera: 1 }), TRACE_OPTIONS);
+  assert.equal(camera.route.changedMeshes, undefined);
 });
 
 cookTest('a failed update, which closes the session by design, falls to a new session for that frame', () => {
@@ -193,7 +202,16 @@ function horizontalQuadMatrix(scale, height, facesUp) {
   return [scale, 0, 0, 0, 0, 0, -upOrDown * scale, 0, 0, upOrDown * scale, 0, 0, 0, height, 0, 1];
 }
 
-function frameOf({ eye = [0, 2.2, 6], floorColor = [0.6, 0.6, 0.6], lampEmission = 5, lampHeight = 2, extraQuad = false }) {
+// A particle: a small quad of its own geometry (not shared, as a flattened particle system exports it) that moves with the frame.
+function particleGeometry(offsetX) {
+  const positions = UNIT_QUAD.positions.map((value, index) => {
+    if (index % 3 === 0) return value * 0.1 + offsetX;
+    return value * 0.1 + (index % 3 === 1 ? 0.5 : 0);
+  });
+  return { ...UNIT_QUAD, positions };
+}
+
+function frameOf({ eye = [0, 2.2, 6], floorColor = [0.6, 0.6, 0.6], lampEmission = 5, lampHeight = 2, extraQuad = false, particleX = null }) {
   const scene = {
     materials: [{ color: floorColor, roughness: 0.8 }, { color: [1, 0.95, 0.9], emission: lampEmission, roughness: 1 }],
     instances: [
@@ -203,6 +221,10 @@ function frameOf({ eye = [0, 2.2, 6], floorColor = [0.6, 0.6, 0.6], lampEmission
     ],
   };
   if (extraQuad) scene.instances.push({ geometry: UNIT_QUAD, matrix: horizontalQuadMatrix(1, 1, true), materialIndex: 0 });
+  if (particleX !== null) {
+    const identity = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    scene.instances.push({ geometry: particleGeometry(particleX), matrix: identity, materialIndex: 0 });
+  }
   const camera = createCamera({ eye, target: [0, 0.5, 0], fov: 45 }, IMAGE_OPTIONS.width, IMAGE_OPTIONS.height);
   return renderNative.buildNativeInputV2(scene, camera, IMAGE_OPTIONS);
 }
@@ -255,4 +277,12 @@ cookTest('a sequence that changes its instance count mid-way falls back to a new
   const frames = paths([{ }, { eye: [1, 2.2, 6] }, { extraQuad: true }, { extraQuad: true, eye: [2, 2.2, 5] }]);
   assert.deepEqual(frames.map(frame => frame.route.path), ['new-session', 'reused', 'new-session', 'reused']);
   assert.match(frames[2].route.reason, /instanceCount/);
+});
+
+cookTest('moving particles take the update route on frame 2, rebuild only the changed mesh and equal a fresh trace', { skip: skipWithoutAddon }, () => {
+  const frames = paths([{ particleX: -0.5 }, { particleX: 0.5 }, { particleX: 0.5, eye: [1, 2.2, 6] }]);
+  assert.deepEqual(frames.map(frame => frame.route.path), ['new-session', 'updated', 'reused']);
+  assert.ok(frames[1].route.changedTables.includes('triangles'));
+  assert.equal(frames[1].route.changedMeshes, 1, 'only the particle mesh gets a new BLAS');
+  assert.equal(frames[1].route.accelerationRebuilt, true);
 });

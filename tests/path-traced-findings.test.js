@@ -26,6 +26,16 @@ const recipe = {
   camera: { target: [0, 0.5, 0], eye: [3, 2, 4], up: [0, 1, 0], fov: 50, near: 0.1, far: 60 },
 };
 
+const passRecipe = {
+  name: 'desaturate',
+  uniforms: { amount: 0.5 },
+  fragment: `
+    vec4 userPass(vec2 uv) {
+      vec3 color = texture(sceneColor, uv).rgb;
+      return vec4(mix(color, vec3(dot(color, vec3(0.299, 0.587, 0.114))), amount), 1.0);
+    }`,
+};
+
 test('a path traced job reports part findings and says why exposure findings and passes are unavailable',
   { skip: (!hasBuild && 'run npm run build:lib first') || (!hasBrowser && 'no Chrome'), timeout: 300000 }, async context => {
     const workDirectory = await mkdtemp(join(tmpdir(), 'crucible-traced-findings-'));
@@ -43,22 +53,32 @@ test('a path traced job reports part findings and says why exposure findings and
       const call = (name, toolArguments) => client.callTool({ name, arguments: toolArguments }, { timeout: 120000 });
       const created = (await call('scene_create', { recipe })).structuredContent;
       const settings = { kind: 'image', width: 64, height: 64, renderer: { type: 'pathTracer', backend: 'cpu', samples: 2, bounces: 2, denoise: false, seed: 1, maxSeconds: 60 } };
-      const submitted = await call('scene_render_submit', { sessionId: created.sessionId, expectedRevision: 0, settings });
-      assert.notEqual(submitted.isError, true, submitted.content?.[0]?.text);
-      const { jobId } = submitted.structuredContent;
-      let record;
-      for (;;) {
-        record = (await call('scene_render_status', { jobId })).structuredContent;
-        if (['completed', 'cancelled', 'failed'].includes(record.state)) break;
-        await delay(200);
-      }
-      assert.equal(record.state, 'completed', record.error);
-      const result = (await call('scene_render_result', { jobId })).structuredContent;
-      const diagnostics = (result.metrics ?? record.metrics).diagnostics ?? [];
+      const traceDiagnostics = async sessionId => {
+        const submitted = await call('scene_render_submit', { sessionId, expectedRevision: 0, settings });
+        assert.notEqual(submitted.isError, true, submitted.content?.[0]?.text);
+        const { jobId } = submitted.structuredContent;
+        let record;
+        for (;;) {
+          record = (await call('scene_render_status', { jobId })).structuredContent;
+          if (['completed', 'cancelled', 'failed'].includes(record.state)) break;
+          await delay(200);
+        }
+        assert.equal(record.state, 'completed', record.error);
+        const result = (await call('scene_render_result', { jobId })).structuredContent;
+        return (result.metrics ?? record.metrics).diagnostics ?? [];
+      };
+      const diagnostics = await traceDiagnostics(created.sessionId);
       const floating = diagnostics.find(problem => problem.kind === 'floating-node');
       assert.deepEqual(floating?.nodes, ['crate']);
       const unavailable = diagnostics.find(problem => problem.kind === 'findings-unavailable');
       assert.match(unavailable?.message ?? '', /object ID, depth and normal/);
+      assert.equal(diagnostics.some(problem => problem.kind === 'post-passes-skipped'), false, 'a scene without postPasses gets no skipped-pass warning');
+
+      const withPasses = (await call('scene_create', { recipe: { ...recipe, postPasses: [passRecipe] } })).structuredContent;
+      const passDiagnostics = await traceDiagnostics(withPasses.sessionId);
+      const skipped = passDiagnostics.find(problem => problem.kind === 'post-passes-skipped');
+      assert.equal(skipped?.severity, 'warning');
+      assert.match(skipped?.message ?? '', /does not run postPasses.*desaturate/);
 
       const refused = await call('scene_render_submit', { sessionId: created.sessionId, expectedRevision: 0, settings: { ...settings, passes: ['objectId'] } });
       assert.equal(refused.isError, true);

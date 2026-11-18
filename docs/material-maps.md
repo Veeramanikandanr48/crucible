@@ -120,6 +120,63 @@ Final alpha is the base map alpha (when `material.map` is set) times `opacity`. 
 
 glTF import maps `alphaMode` MASK and BLEND, `alphaCutoff`, `doubleSided` and `baseColorFactor[3]` (to `opacity`) onto these fields, and keeps the base color texture alpha. `exportGlb` writes them back. glTF has no additive blending, so an `add` material is exported as `BLEND` and loads back as `blend`.
 
+## Retro look
+
+ gives the PlayStation 1 look in the raster renderer:
+
+\
+| Field | Accepts | Does |
+|---|---|---|
+|  | , whole numbers from 16 to 4096 | Rounds each vertex to a width by height grid across the screen, so vertices jitter as the camera moves. |
+|  |  | Interpolates texture coordinates without perspective correction, so textures swim on large triangles. |
+
+- Set either or both. Anything else, or an empty object, throws with what to pass.
+- Raster only. The path tracer ignores it, and shadow maps are drawn from the unsnapped mesh.
+- A material without  compiles to the same shader as before. The snap grid and the affine switch are batch state like : parts that differ never share a draw call, and  rejects changes after upload.
+
+## Retro look
+
+`material.retro` gives the PlayStation 1 look in the raster renderer:
+
+```json
+{ "retro": { "vertexSnap": [160, 120], "affineUV": true } }
+```
+
+| Field | Accepts | Does |
+|---|---|---|
+| `vertexSnap` | `[width, height]`, whole numbers from 16 to 4096 | Rounds each vertex to a width by height grid across the screen, so vertices jitter as the camera moves. |
+| `affineUV` | `true` | Interpolates texture coordinates without perspective correction, so textures swim on large triangles. |
+
+- Set either or both. Anything else, or an empty object, throws with what to pass.
+- Raster only. The path tracer ignores it, and shadow maps are drawn from the unsnapped mesh.
+- The code is the lazy `retro-shader` addon (`@codepawlhq/crucible/addons/retro-shader`; a recipe loads it on its own). A renderer that draws a retro part without it throws an error that names the import. A material without `retro` compiles to the same shader as before.
+- The snap grid and the affine switch are batch state like `doubleSided`: parts with different `retro` objects never share a draw call. `updateParts` rejects a `retro` change after the part is created with an error that says to set it when the part is made, which needs a new renderer.
+
+## Water glints
+
+`material.waterGlint` adds stylized highlights to a `water` material (sparkles come on top of the physical sun glint, the edge redraws it). Both parts are off until the field names them, so water without the field draws exactly as before.
+
+```json
+{ "tag": "water", "waterGlint": { "edge": { "threshold": 0.4 }, "sparkle": { "shape": "star", "size": 0.4 } } }
+```
+
+| Part | Field | Accepts (default) | Does |
+|---|---|---|---|
+| `edge` | `threshold` | 0.05 to 0.95 (0.4) | Replaces the soft glint with the lobe cut at this share of its peak, so the highlight is a flat shape with a clean border that follows the waves. Higher is smaller. |
+| `edge` | `intensity` | 0 to 4 (1) | Brightness of that shape. |
+| `sparkle` | `density` | 0 to 1 (0.35) | Share of cells that carry a sparkle. |
+| `sparkle` | `size` | 0.02 to 2 m (0.12) | Width of a cell on the water, so how big a sparkle is. |
+| `sparkle` | `threshold` | 0.9 to 0.9999 (0.985) | A sparkle lights when its mirror direction has at least this cosine to the sun. Higher is fewer and tighter. |
+| `sparkle` | `shape` | `dot` or `star` (`star`) | Four-point star, or a round dot. |
+| `sparkle` | `twinkle` | 0 to 8 per second (1) | How fast each facet turns; 0 keeps them still, though waves and camera still move them. |
+| `sparkle` | `intensity` | 0 to 4 (1) | Brightness. |
+
+- Sparkles show on the sun path only: toward the sun they glitter, and none appear on the side away from it, in foam or in shadow.
+- Cells are on the water plane, so far sparkles are flattened by perspective and a cell under two pixels fades out.
+- Painted light streaks are not built.
+- Raster only. The path tracer ignores it. The material needs the `water` tag; any other tag throws with what to pass.
+- The code is the lazy `glitter-shader` addon (`@codepawlhq/crucible/addons/glitter-shader`; a recipe loads it on its own). Parts with different `waterGlint` objects never share a draw call, and `updateParts` rejects a change after the part is created.
+
 ## Moss layer
 
 A standard-tag material can grow moss: `moss` (0 to 1, default 0) sets how much of the up-facing surface it covers, and `mossColor` (linear RGB, default `[0.05, 0.085, 0.02]`) its colour.
@@ -144,6 +201,7 @@ A material on a standard tag (`surface` in recipes, `gltf` and `armor` in code) 
 | `transmission` | 0 to 1 | The share of light that passes through. The material draws after the opaque scene and refracts it. |
 | `thickness` | 0 to 1000 metres | How far light travels inside. 0 is a thin sheet that does not bend the view. |
 | `ior` | 1 to 2.5 | Index of refraction. It bends transmitted light and sets the reflectance at normal incidence, 4 percent at 1.5. |
+| `dispersion` | 0 to 10 | Colour fringes through glass, 20 over the Abbe number (diamond 0.36), as in `KHR_materials_dispersion`. The path tracer renders it; the rasterizer ignores it. |
 | `attenuationColor`, `attenuationDistance` | colour 0 to 1, distance above 0 | The colour light keeps after that many metres inside. Leave the distance out for no absorption. |
 | `sheenColor`, `sheenRoughness` | colour 0 to 1, 0 to 1 | A soft glow at grazing angles for cloth. Black is off. |
 | `specular`, `specularColor` | 0 to 4, colour 0 to 1000 | Strength and tint of the non-metal reflection. |

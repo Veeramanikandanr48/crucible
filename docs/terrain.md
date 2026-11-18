@@ -88,7 +88,7 @@ Memory: three `TEXTURE_2D_ARRAY`s on units 11 to 13 (sRGB colour, normal, roughn
 
 `createTerrain({ holes: [{ center: [x, z], radius }] })` (up to 64 circles, radius in metres) leaves no surface where a cell centre falls inside a circle, so a cave mouth or a shaft opens through the ground. `terrain.isHole(x, z)` tells whether a point is inside one. `heightAt` and `normalAt` ignore holes and still return the surface that would be there, so check `isHole` before standing something on it. A coarser level of detail cuts a coarser hole (its cells are bigger), so give a hole a radius of a few finest cells at least. A hole that covers a whole chunk gives that chunk empty geometry. Without `holes` the meshes are byte-identical to before (a test keeps a digest).
 
-In a recipe, the same ground is the `terrain` geometry (`size`, `resolution`, `seed`, `amplitude`, `holes`): see [agent-scene](agent-scene.md).
+In a recipe, the same ground is the `terrain` geometry (`size`, `resolution`, `seed`, `amplitude`, `holes`): see [agent-scene](agent-scene.md). There, holes that remove every cell are refused with an error on `geometries[i].holes` (lower a radius or move a center), and a hole that removes no cell, because it does not reach a cell centre, returns a `terrain-hole-removes-no-cell` warning with the cell size (`size / resolution`) and the smallest radius that removes one. `scene_export_glb` names the node whose mesh has no triangles.
 
 ## Terrain near water
 

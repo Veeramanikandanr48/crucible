@@ -1,1 +1,0 @@
-- `scene.apply` of a pose edit at 961 parts drops from about 20 ms to about 9 ms: no placeholder graph compile when every geometry is resident, no recipe copy for the undo snapshot, and only the touched nodes cloned (#1219)

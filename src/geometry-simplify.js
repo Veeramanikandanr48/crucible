@@ -61,6 +61,9 @@ function validateGeometry(geometry) {
     throw new TypeError('simplifyGeometry needs a geometry with Float32Array positions and Uint16Array or Uint32Array indices.');
   }
   if (geometry.indices.length % 3 !== 0) throw new RangeError('simplifyGeometry needs indices that hold whole triangles.');
+  if (geometry.positions.length % 3 !== 0) {
+    throw new RangeError(`simplifyGeometry needs positions with three numbers per vertex, got a length of ${geometry.positions.length}: pass x, y, z for every vertex.`);
+  }
   const triangleCount = geometry.indices.length / 3;
   const vertexCount = geometry.positions.length / 3;
   if (triangleCount > MAXIMUM_SIMPLIFY_TRIANGLES || vertexCount > MAXIMUM_SIMPLIFY_VERTICES) {
@@ -68,6 +71,15 @@ function validateGeometry(geometry) {
   }
   for (const field of ['joints', 'weights', 'morphTargets']) {
     if (geometry[field]) throw new RangeError(`simplifyGeometry cannot reduce skinned or morphed geometry (${field}); its per-vertex weights would break.`);
+  }
+  validateIndexValues(geometry.indices, vertexCount);
+}
+
+function validateIndexValues(indices, vertexCount) {
+  for (let position = 0; position < indices.length; position++) {
+    if (indices[position] >= vertexCount) {
+      throw new RangeError(`simplifyGeometry found index ${indices[position]} at indices[${position}] but the geometry has ${vertexCount} vertices: every index must be below the vertex count.`);
+    }
   }
 }
 
@@ -305,7 +317,8 @@ class Collapser {
  * geometry's units, that those collapses moved the surface (an estimate that grows from level to level). A level
  * may keep more triangles than asked when the border vertices and the shape leave no safe collapse.
  */
-export function simplifyGeometry(geometry, { ratios = [0.25, 0.0625] } = {}) {
+export function simplifyGeometry(geometry, options) {
+  const { ratios = [0.25, 0.0625] } = options ?? {};
   validateGeometry(geometry);
   validateRatios(ratios);
   const collapser = new Collapser(geometry);

@@ -1,1 +1,0 @@
-- A render job's deadline counts render time only, its queue wait is bounded apart, and `scene_create` starts a fresh runtime after a failed one without a server restart (#1256)

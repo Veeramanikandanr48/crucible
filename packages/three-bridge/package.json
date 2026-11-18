@@ -1,7 +1,7 @@
 {
   "name": "@codepawlhq/crucible-three-bridge",
   "version": "0.1.0",
-  "description": "Optional addon that imports a three.js object tree as Crucible parts and builds three.js meshes from Crucible parts. Imports neither three nor Crucible. Not part of the core archive.",
+  "description": "Companion package that imports a three.js object tree as Crucible parts and builds three.js meshes from Crucible parts. Imports neither three nor Crucible. Not part of the core archive.",
   "type": "module",
   "main": "./index.mjs",
   "exports": {
@@ -12,7 +12,6 @@
     "README.md"
   ],
   "keywords": [
-    "crucible-addon",
     "three",
     "threejs",
     "gltf"

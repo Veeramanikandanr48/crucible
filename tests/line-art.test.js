@@ -138,3 +138,52 @@ test('the addon finds the toon uniforms after the main program is rebuilt', () =
   assert.equal(renderer.uniforms.materialToon, 'materialToon');
   assert.ok(located.includes('rebuilt:toonDefault'));
 });
+
+const THREE_STEP_COLORS = [[0.2, 0.5, 0.55], [0.6, 0.8, 0.75], [1, 0.92, 0.95]];
+
+test('toonColors needs one colour per toon step, and says what to pass', () => {
+  const recipe = { ...BASE_RECIPE, materials: [{ id: 'gray', toon: 3, toonColors: THREE_STEP_COLORS }] };
+  assert.deepEqual(createAgentScene(recipe).parts[0].material.toonColors, THREE_STEP_COLORS);
+  const withColors = overrides => ({ ...BASE_RECIPE, materials: [{ id: 'gray', ...overrides }] });
+  assert.throws(() => createAgentScene(withColors({ toon: 2, toonColors: THREE_STEP_COLORS })), /toonColors must be an array of 2 colours.*change toon to 3/);
+  assert.throws(() => createAgentScene(withColors({ toonColors: THREE_STEP_COLORS })), /toonColors needs toon above 0.*Set toon to 3/);
+  assert.throws(() => createAgentScene(withColors({ toon: 1, toonColors: [[0, 0, 9]] })), /toonColors\[0\] must be three linear RGB numbers between 0 and 4/);
+  assert.throws(() => createAgentScene(withColors({ toon: 1, toonColors: [[0, 0]] })), /toonColors\[0\].*expected an array of 3 numbers/);
+});
+
+test('toon step colours show in the batching state and only when set', () => {
+  const plain = materialLayerState({ tag: 'surface', toon: 3 });
+  const coloured = materialLayerState({ tag: 'surface', toon: 3, toonColors: THREE_STEP_COLORS });
+  assert.equal(plain[MATERIAL_LAYER_STATE_LENGTH - 1], '');
+  assert.deepEqual(JSON.parse(coloured[MATERIAL_LAYER_STATE_LENGTH - 1]), THREE_STEP_COLORS);
+  assert.deepEqual(plain.slice(0, -1), coloured.slice(0, -1));
+});
+
+test('the toon shader tints by step only behind the colour uniform, and keeps the grey path', () => {
+  const toonShader = createFragmentShader(['toon']);
+  assert.match(toonShader, /uniform vec3 materialToonColors\[8\];/);
+  assert.match(toonShader, /radiance \*= toonStepColor\(normalLight\);/);
+  assert.match(toonShader, /normalLight = toonLight\(normalLight\);/);
+  assert.doesNotMatch(createFragmentShader([]), /toonStepColor/);
+});
+
+test('the batch bind uploads the step colours padded to eight, and switches them off when absent', async () => {
+  const { layerTextureSupport } = await import('../src/shader-registry.js');
+  const calls = [];
+  const renderer = {
+    program: 'main', uniforms: {}, shaderFeatures: new Set(['toon']),
+    context: {
+      getUniformLocation: (program, name) => name,
+      uniform1f: (name, value) => calls.push([name, value]),
+      uniform3fv: (name, values) => calls.push([name, Array.from(values)]),
+    },
+  };
+  const coloured = materialLayerState({ tag: 'surface', toon: 3, toonColors: THREE_STEP_COLORS });
+  layerTextureSupport.bind(renderer, [], coloured, {});
+  assert.deepEqual(calls[0], ['materialToonColored', 1]);
+  assert.equal(calls[1][1].length, 24);
+  assert.deepEqual(calls[1][1].slice(0, 3).map(value => Math.fround(value)), THREE_STEP_COLORS[0].map(value => Math.fround(value)));
+  calls.length = 0;
+  layerTextureSupport.bind(renderer, [], materialLayerState({ tag: 'surface', toon: 3 }), {});
+  assert.deepEqual(calls, [['materialToonColored', 0]]);
+});

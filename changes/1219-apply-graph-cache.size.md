@@ -1,5 +1,0 @@
-- entry:core: 112 bytes gzip for `replaceLocalMatrices`, the scene graph method that moves nodes in place; it removes the graph rebuild (about 2.5 ms of 4.9 ms) from every pose edit at 961 parts.
-- entry:core+lazy: the same 112 bytes, no other module grew.
-- scene:agent-scene: 564 bytes gzip buy a pose edit at 961 parts of about 2 ms instead of about 5 ms (graph moved in place, checked nodes not checked again, reflection key compared as numbers), which leaves a 60 fps game frame most of its 16.7 ms.
-- scene:agent-scene+lazy: the same growth, 658 bytes with the reflection stage.
-- goal:agent-scene: the growth is a per-frame cost cut (pose edit at 961 parts from about 5 ms to about 2 ms), the same case the earlier #1219 size notes accepted; the scene is over its goal for other reasons.

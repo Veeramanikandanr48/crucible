@@ -4,6 +4,8 @@ import { createSplatSorter } from './gaussian-splat-sort.js';
 import { runInChunks } from './gaussian-splat-chunks.js';
 import { GAUSSIAN_SPLAT_HARD_COUNT_LIMIT, GAUSSIAN_SPLAT_LIMITS, parseGaussianSplatPly, parseGaussianSplatPlyAsync } from './gaussian-splat-ply.js';
 import { parseGaussianSplatSpz, parseGaussianSplatSpzAsync } from './gaussian-splat-spz.js';
+import { buildPaletteFragmentSource, resolveSplatPalette } from './splat-palette.js';
+import { buildOutlineVertexSource, OUTLINE_FRAGMENT_SOURCE, resolveSplatOutline } from './splat-outline.js';
 
 export { GAUSSIAN_SPLAT_HARD_COUNT_LIMIT, GAUSSIAN_SPLAT_LIMITS, parseGaussianSplatPly, parseGaussianSplatPlyAsync, parseGaussianSplatSpz, parseGaussianSplatSpzAsync };
 
@@ -98,7 +100,27 @@ void main() {
   outputColor = vec4(color * alpha, alpha);
 }`;
 
-const UNIFORM_NAMES = ['splatData', 'modelView', 'projection', 'focal', 'viewport', 'hdrEnabled', 'exposure'];
+// The opaque variant (alphaCut): a fragment whose gaussian alpha is under the cut is discarded, every other one writes its
+// colour at full strength. With depth write on, the nearest one wins and the order of the splats no longer matters.
+const OPAQUE_FRAGMENT_SOURCE = `#version 300 es
+precision highp float;
+uniform float hdrEnabled;
+uniform float exposure;
+uniform float alphaCut;
+in vec4 vertexColor;
+in vec2 vertexOffset;
+out vec4 outputColor;
+void main() {
+  float falloff = -dot(vertexOffset, vertexOffset);
+  if (falloff < -4.0) discard;
+  float alpha = exp(falloff) * vertexColor.a;
+  if (alpha < max(alphaCut, 1.0 / 255.0)) discard;
+  vec3 color = hdrEnabled > 0.5 ? pow(vertexColor.rgb, vec3(2.2)) * exposure : vertexColor.rgb;
+  outputColor = vec4(color, 1.0);
+}`;
+
+const UNIFORM_NAMES = ['splatData', 'modelView', 'projection', 'focal', 'viewport', 'hdrEnabled', 'exposure', 'alphaCut'];
+export const GAUSSIAN_SPLAT_SHADER_SOURCES = Object.freeze({ vertex: VERTEX_SOURCE, fragment: FRAGMENT_SOURCE, opaqueFragment: OPAQUE_FRAGMENT_SOURCE });
 
 function covarianceOf(scales, rotations, index) {
   const [w, x, y, z] = rotations.subarray(index * 4, index * 4 + 4);
@@ -134,34 +156,99 @@ function createSplatPacker(data) {
   return { packRange, packed: { words, rows } };
 }
 
-function checkSplatInput(data, matrix, maximumCount, caller) {
+// Per-splat arrays the packer reads: how many values each splat takes and which typed arrays are accepted. colors are read
+// as one 32-bit word per splat, so they must be bytes (red, green, blue, opacity).
+const SPLAT_ARRAYS = [
+  { field: 'positions', stride: 3, types: [Float32Array, Float64Array], meaning: 'x, y, z per splat' },
+  { field: 'scales', stride: 3, types: [Float32Array, Float64Array], meaning: 'three axis lengths per splat' },
+  { field: 'rotations', stride: 4, types: [Float32Array, Float64Array], meaning: 'quaternion w, x, y, z per splat' },
+  { field: 'colors', stride: 4, types: [Uint8Array, Uint8ClampedArray], meaning: 'red, green, blue, opacity bytes per splat' },
+];
+
+function checkSplatArray(data, { field, stride, types, meaning }, caller) {
+  const values = data[field];
+  const expectedLength = data.count * stride;
+  const typeNames = types.map(type => type.name).join(' or ');
+  if (!types.some(type => values instanceof type)) {
+    throw new TypeError(`${caller} needs data.${field} as a ${typeNames} of ${expectedLength} values (${data.count} splats x ${stride}: ${meaning}), got ${values === null ? 'null' : typeof values === 'object' ? values.constructor?.name ?? 'an object' : typeof values}`);
+  }
+  if (values.length < expectedLength) {
+    throw new RangeError(`${caller} needs data.${field} to hold ${expectedLength} values (${data.count} splats x ${stride}: ${meaning}), got ${values.length}. Pass ${field} with ${stride} values for every splat, or lower data.count to ${Math.floor(values.length / stride)}`);
+  }
+  if (field === 'colors' && values.byteOffset % 4 !== 0) {
+    throw new RangeError(`${caller} needs data.colors to start on a 4-byte boundary of its buffer (byteOffset ${values.byteOffset}). Pass a copy made with colors.slice()`);
+  }
+}
+
+function resolveSplatOptions(options, caller) {
+  if (options === undefined) return {};
+  if (options === null || typeof options !== 'object') {
+    throw new TypeError(`${caller} options must be an object such as { matrix, maximumCount, alphaCut, palette, dither, outline } or left out, got ${options === null ? 'null' : typeof options}`);
+  }
+  return options;
+}
+
+function resolveMatrix(matrix, caller) {
+  if (matrix === undefined) return mat4.create();
+  if (!(Array.isArray(matrix) || ArrayBuffer.isView(matrix)) || matrix.length !== 16 || !Array.from(matrix).every(Number.isFinite)) {
+    throw new TypeError(`${caller} matrix must be 16 finite numbers (a column-major 4x4 array) or left out for identity, got ${matrix === null ? 'null' : Array.isArray(matrix) || ArrayBuffer.isView(matrix) ? `${matrix.length} values` : typeof matrix}`);
+  }
+  return matrix;
+}
+
+function checkSplatInput(data, maximumCount, caller) {
   if (!(typeof maximumCount === 'number' && maximumCount > 0)) {
     throw new RangeError(`maximumCount must be a positive number (it is capped at ${MAXIMUM_SPLAT_COUNT}), got ${String(maximumCount)}`);
   }
   const limit = Math.min(maximumCount, MAXIMUM_SPLAT_COUNT);
   if (!(data?.count > 0)) throw new Error(`${caller} needs parsed splat data with at least one splat`);
+  if (!Number.isInteger(data.count)) throw new RangeError(`${caller} needs data.count to be a whole number of splats, got ${data.count}`);
   if (data.count > limit) throw new RangeError(`Gaussian splat scene holds ${data.count} splats, over the limit of ${limit}`);
-  if (matrix.length !== 16 || !Array.from(matrix).every(Number.isFinite)) throw new TypeError('matrix must be 16 finite numbers');
+  for (const description of SPLAT_ARRAYS) checkSplatArray(data, description, caller);
 }
 
-function buildSplats(data, matrix, packed) {
+function resolveAlphaCut(alphaCut, caller) {
+  if (alphaCut === undefined || alphaCut === null) return null;
+  if (!(typeof alphaCut === 'number' && alphaCut >= 0 && alphaCut <= 1)) {
+    throw new RangeError(`${caller} alphaCut must be a number from 0 to 1 (a splat pixel whose alpha is below it is dropped, the rest are drawn opaque), or left out for soft blending, got ${String(alphaCut)}`);
+  }
+  return alphaCut;
+}
+
+function resolveSplatLook(options, caller) {
+  const alphaCut = resolveAlphaCut(options.alphaCut, caller);
+  return { alphaCut, palette: resolveSplatPalette(options.palette, options.dither, alphaCut, caller), outline: resolveSplatOutline(options.outline, alphaCut, caller) };
+}
+
+function buildSplats(data, matrix, packed, { alphaCut, palette, outline }) {
   const sorter = createSplatSorter(data.positions, data.count, data.bounds);
   const statistics = { count: data.count, visibleCount: 0, sortMilliseconds: 0, gpuBytes: 0, cpuBytes: data.positions.byteLength + data.count * 8 };
-  return { count: data.count, matrix: mat4.clone(matrix), bounds: data.bounds, statistics, packed, sorter };
+  return { count: data.count, matrix: mat4.clone(matrix), bounds: data.bounds, statistics, packed, sorter, alphaCut, palette, outline };
 }
 
 /**
  * Splat data ready to draw, from `parseGaussianSplatPly`. `matrix` (a 16-number column-major array, default identity) places
  * the splat scene in the world; it may rotate, translate and scale uniformly. Many captures are y-down, so a flip is
  * usual. Throws a RangeError when `data.count` is over `maximumCount` (default 2,000,000, at most 4,000,000).
+ * `alphaCut` (a number from 0 to 1, default off) turns the blended look into hard opaque discs: a pixel whose gaussian alpha
+ * (falloff times the splat's opacity) is below it is dropped and every other pixel is written opaque, with depth, so
+ * neighbouring splats no longer mix their colours. These splats draw before the soft ones.
+ * `palette` (2 to 256 colours, hex strings or [r, g, b] from 0 to 1; needs `alphaCut`) snaps every opaque pixel to its nearest
+ * palette colour, and `dither` (`'none'` default, `'bayer4'`, `'bayer8'`) adds an ordered dither first. Both are off by default.
+ * `outline` (`{ color, width }`, width 1 to 4 pixels, color a hex string or [r, g, b], default near black; needs `alphaCut`)
+ * draws a dark outline round the outer silhouette of the hard discs. Off by default.
  * The returned object has `count`, `matrix`, `bounds` and `statistics` (`count`, `visibleCount`, `sortMilliseconds`,
  * `gpuBytes`, `cpuBytes`).
  */
-export function createGaussianSplats(data, { matrix = mat4.create(), maximumCount = GAUSSIAN_SPLAT_LIMITS.maximumCount } = {}) {
-  checkSplatInput(data, matrix, maximumCount, 'createGaussianSplats');
+export function createGaussianSplats(data, options) {
+  const resolvedOptions = resolveSplatOptions(options, 'createGaussianSplats');
+  const { maximumCount = GAUSSIAN_SPLAT_LIMITS.maximumCount } = resolvedOptions;
+  checkSplatInput(data, maximumCount, 'createGaussianSplats');
+  const matrix = resolveMatrix(resolvedOptions.matrix, 'createGaussianSplats');
+  const look = resolveSplatLook(resolvedOptions, 'createGaussianSplats');
   const { packRange, packed } = createSplatPacker(data);
   packRange(0, data.count);
-  return buildSplats(data, matrix, packed);
+  return buildSplats(data, matrix, packed, look);
 }
 
 /**
@@ -169,12 +256,15 @@ export function createGaussianSplats(data, { matrix = mat4.create(), maximumCoun
  * macrotask between slices. `onProgress(fraction)` rises to exactly 1 and an aborted `signal` rejects with an error named
  * `AbortError`. Input checks run first and reject before any splat is packed.
  */
-export async function createGaussianSplatsAsync(data, options = {}) {
-  const { matrix = mat4.create(), maximumCount = GAUSSIAN_SPLAT_LIMITS.maximumCount } = options;
-  checkSplatInput(data, matrix, maximumCount, 'createGaussianSplatsAsync');
+export async function createGaussianSplatsAsync(data, rawOptions) {
+  const options = resolveSplatOptions(rawOptions, 'createGaussianSplatsAsync');
+  const { maximumCount = GAUSSIAN_SPLAT_LIMITS.maximumCount } = options;
+  checkSplatInput(data, maximumCount, 'createGaussianSplatsAsync');
+  const matrix = resolveMatrix(options.matrix, 'createGaussianSplatsAsync');
+  const look = resolveSplatLook(options, 'createGaussianSplatsAsync');
   const { packRange, packed } = createSplatPacker(data);
   await runInChunks(data.count, options, 'createGaussianSplatsAsync', packRange);
-  return buildSplats(data, matrix, packed);
+  return buildSplats(data, matrix, packed, look);
 }
 
 function createGpuResources(context, splats) {
@@ -201,11 +291,15 @@ function createGpuResources(context, splats) {
 
 const attachments = new WeakMap();
 
+function createProgramInfo(context, fragmentSource, extraUniformNames = [], vertexSource = VERTEX_SOURCE) {
+  const program = compileProgram(context, vertexSource, fragmentSource);
+  const uniforms = Object.fromEntries([...UNIFORM_NAMES, ...extraUniformNames].map(name => [name, context.getUniformLocation(program, name)]));
+  return { program, uniforms };
+}
+
 function createAttachment(renderer) {
   const context = renderer.context;
-  const program = compileProgram(context, VERTEX_SOURCE, FRAGMENT_SOURCE);
-  const uniforms = Object.fromEntries(UNIFORM_NAMES.map(name => [name, context.getUniformLocation(program, name)]));
-  const attachment = { program, uniforms, entries: new Set(), modelView: mat4.create(), original: null, disposeOriginal: null };
+  const attachment = { blended: createProgramInfo(context, FRAGMENT_SOURCE), opaque: null, palettePrograms: new Map(), outline: null, entries: new Set(), modelView: mat4.create(), original: null, disposeOriginal: null };
   attachment.original = renderer.drawBlendBatches;
   attachment.disposeOriginal = renderer.dispose;
   renderer.drawBlendBatches = function drawBlendBatchesAndSplats(frame) {
@@ -228,31 +322,73 @@ function releaseEntry(context, entry) {
 function releaseAttachment(renderer, attachment) {
   for (const entry of attachment.entries) releaseEntry(renderer.context, entry);
   attachment.entries.clear();
-  renderer.context.deleteProgram(attachment.program);
+  renderer.context.deleteProgram(attachment.blended.program);
+  if (attachment.opaque) renderer.context.deleteProgram(attachment.opaque.program);
+  if (attachment.outline) renderer.context.deleteProgram(attachment.outline.program);
+  for (const programInfo of attachment.palettePrograms.values()) renderer.context.deleteProgram(programInfo.program);
   renderer.drawBlendBatches = attachment.original;
   renderer.dispose = attachment.disposeOriginal;
   attachments.delete(renderer);
 }
 
-function prepareState(renderer, attachment, frame) {
+function prepareFrameState(renderer) {
+  const context = renderer.context;
+  context.bindFramebuffer(context.FRAMEBUFFER, renderer.multisampleFramebuffer);
+  context.viewport(0, 0, renderer.canvas.width, renderer.canvas.height);
+  context.enable(context.DEPTH_TEST);
+  context.disable(context.CULL_FACE);
+}
+
+function useProgram(renderer, programInfo, frame) {
   const context = renderer.context;
   const width = renderer.canvas.width;
   const height = renderer.canvas.height;
-  context.bindFramebuffer(context.FRAMEBUFFER, renderer.multisampleFramebuffer);
-  context.viewport(0, 0, width, height);
-  context.enable(context.DEPTH_TEST);
-  context.depthMask(false);
-  context.disable(context.CULL_FACE);
-  context.enable(context.BLEND);
-  context.blendFuncSeparate(context.ONE, context.ONE_MINUS_SRC_ALPHA, context.ONE, context.ONE_MINUS_SRC_ALPHA);
-  context.useProgram(attachment.program);
-  const { uniforms } = attachment;
+  context.useProgram(programInfo.program);
+  const { uniforms } = programInfo;
   context.uniformMatrix4fv(uniforms.projection, false, renderer.rasterProjection ?? renderer.projection);
   context.uniform2f(uniforms.focal, renderer.projection[0] * width * 0.5, renderer.projection[5] * height * 0.5);
   context.uniform2f(uniforms.viewport, width, height);
   context.uniform1f(uniforms.hdrEnabled, renderer.hdr ? 1 : 0);
   context.uniform1f(uniforms.exposure, frame.exposure ?? 1);
   context.uniform1i(uniforms.splatData, DATA_TEXTURE_UNIT);
+}
+
+function prepareBlendedState(renderer, attachment, frame) {
+  const context = renderer.context;
+  context.depthMask(false);
+  context.enable(context.BLEND);
+  context.blendFuncSeparate(context.ONE, context.ONE_MINUS_SRC_ALPHA, context.ONE, context.ONE_MINUS_SRC_ALPHA);
+  useProgram(renderer, attachment.blended, frame);
+}
+
+function prepareOpaqueState(renderer, attachment, frame) {
+  const context = renderer.context;
+  attachment.opaque ??= createProgramInfo(context, OPAQUE_FRAGMENT_SOURCE);
+  context.depthMask(true);
+  context.disable(context.BLEND);
+  useProgram(renderer, attachment.opaque, frame);
+}
+
+function paletteProgramFor(renderer, attachment, palette) {
+  const key = `${palette.count}:${palette.dither}`;
+  if (!attachment.palettePrograms.has(key)) {
+    attachment.palettePrograms.set(key, createProgramInfo(renderer.context, buildPaletteFragmentSource(palette.count, palette.dither), ['paletteColors']));
+  }
+  return attachment.palettePrograms.get(key);
+}
+
+function drawOutlines(renderer, attachment, outlineEntries, frame) {
+  const context = renderer.context;
+  attachment.outline ??= createProgramInfo(context, OUTLINE_FRAGMENT_SOURCE, ['outlineWidth', 'outlineColor'], buildOutlineVertexSource(VERTEX_SOURCE));
+  context.depthMask(false);
+  context.disable(context.BLEND);
+  for (const entry of outlineEntries) {
+    const { color, width } = entry.splats.outline;
+    useProgram(renderer, attachment.outline, frame);
+    context.uniform1f(attachment.outline.uniforms.outlineWidth, width);
+    context.uniform3fv(attachment.outline.uniforms.outlineColor, color);
+    drawEntry(renderer, attachment, entry, attachment.outline);
+  }
 }
 
 function restoreState(renderer) {
@@ -264,7 +400,7 @@ function restoreState(renderer) {
   context.activeTexture(context.TEXTURE0);
 }
 
-function drawEntry(renderer, attachment, entry) {
+function drawEntry(renderer, attachment, entry, programInfo) {
   const context = renderer.context;
   const { splats } = entry;
   mat4.multiply(attachment.modelView, renderer.view, splats.matrix);
@@ -277,7 +413,9 @@ function drawEntry(renderer, attachment, entry) {
   }
   splats.statistics.visibleCount = visibleCount;
   if (visibleCount === 0) return;
-  context.uniformMatrix4fv(attachment.uniforms.modelView, false, attachment.modelView);
+  context.uniformMatrix4fv(programInfo.uniforms.modelView, false, attachment.modelView);
+  if (splats.alphaCut !== null) context.uniform1f(programInfo.uniforms.alphaCut, splats.alphaCut);
+  if (splats.palette && programInfo.uniforms.paletteColors !== undefined) context.uniform3fv(programInfo.uniforms.paletteColors, splats.palette.colors);
   context.activeTexture(context.TEXTURE0 + DATA_TEXTURE_UNIT);
   context.bindTexture(context.TEXTURE_2D, entry.texture);
   context.bindVertexArray(entry.vertexArray);
@@ -287,9 +425,28 @@ function drawEntry(renderer, attachment, entry) {
 
 function drawEntries(renderer, attachment, frame) {
   if (attachment.entries.size === 0) return;
-  prepareState(renderer, attachment, frame);
-  const farToNear = [...attachment.entries].map(entry => ({ entry, distance: distanceToEye(entry.splats, frame.eye) })).sort((first, second) => second.distance - first.distance);
-  for (const { entry } of farToNear) drawEntry(renderer, attachment, entry);
+  prepareFrameState(renderer);
+  const entries = [...attachment.entries];
+  const opaqueEntries = entries.filter(entry => entry.splats.alphaCut !== null && !entry.splats.palette);
+  const paletteEntries = entries.filter(entry => entry.splats.palette);
+  const blendedEntries = entries.filter(entry => entry.splats.alphaCut === null);
+  const outlineEntries = entries.filter(entry => entry.splats.outline);
+  if (outlineEntries.length > 0) drawOutlines(renderer, attachment, outlineEntries, frame);
+  if (opaqueEntries.length > 0) {
+    prepareOpaqueState(renderer, attachment, frame);
+    for (const entry of opaqueEntries) drawEntry(renderer, attachment, entry, attachment.opaque);
+  }
+  for (const entry of paletteEntries) {
+    prepareOpaqueState(renderer, attachment, frame);
+    const programInfo = paletteProgramFor(renderer, attachment, entry.splats.palette);
+    useProgram(renderer, programInfo, frame);
+    drawEntry(renderer, attachment, entry, programInfo);
+  }
+  if (blendedEntries.length > 0) {
+    prepareBlendedState(renderer, attachment, frame);
+    const farToNear = blendedEntries.map(entry => ({ entry, distance: distanceToEye(entry.splats, frame.eye) })).sort((first, second) => second.distance - first.distance);
+    for (const { entry } of farToNear) drawEntry(renderer, attachment, entry, attachment.blended);
+  }
   restoreState(renderer);
 }
 

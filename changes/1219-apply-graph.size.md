@@ -1,3 +1,0 @@
-- scene:agent-scene: 164 bytes gzip buy a pose edit at 961 parts that takes about 9 ms instead of about 20 ms (a whole-recipe clone, a validation compile and an undo copy fewer), which a per-frame game scene system needs.
-- scene:agent-scene+lazy: the same 164 bytes as the core scene, no other module grew.
-- goal:agent-scene: the growth is the shared-node field edit copy; the scene is over its goal for other reasons and this change moves a frame loop from 14 fps toward 60.

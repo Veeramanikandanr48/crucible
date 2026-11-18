@@ -168,7 +168,7 @@ test('unsupported features fail explicitly before loading resources', async () =
     [document => {
       const primitive = document.meshes[0].primitives[0];
       primitive.attributes.NORMAL = primitive.attributes.POSITION;
-      primitive.targets = [{ TANGENT: 0 }];
+      primitive.targets = [{ TEXCOORD_0: 0 }];
     }, /Unsupported morph/],
     [document => { document.meshes[0].primitives[0].attributes.COLOR_0 = 1; }, /COLOR_0/],
     [document => { document.meshes[0].primitives[0].mode = 5; }, /TRIANGLES/],

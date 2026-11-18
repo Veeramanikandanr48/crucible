@@ -11,6 +11,7 @@ import { applyWaterReflection, attachWaterReflection } from './water-reflection.
 // The mirror redraws every second lit frame while the camera moves: about 1.3 ms off the orbiting port frame
 // (issue #504), and An saw no stutter in a side-by-side. A still camera keeps its picture either way.
 const WATER_REFLECTION_OPTIONS = { updateEvery: 2 };
+import { renderCommunity } from './community-showcase.js';
 import { createDownloadMeter, downloadBlob, inWholeWorldOrder, readByteLength, readPartRanks } from './showcase-download.js';
 
 // Each scene lives in public/showcase/<id>/scene.json: its GLB, sky, camera, renderer and frame options, and credits.
@@ -332,7 +333,7 @@ async function selectScene(id) {
     applyLimits(description, asset.parts);
     Object.assign(homeView, { yaw: orbit.yaw, pitch: orbit.pitch, distance: orbit.distance, target: [...orbit.target] });
     currentId = id;
-    history.replaceState(null, '', `?scene=${id}`);
+    history.replaceState(null, '', `?scene=${id}${location.hash}`);
     title.textContent = description.title;
     blurb.textContent = description.blurb;
     showCredits(description.credits);
@@ -425,3 +426,5 @@ window.addEventListener('resize', () => {
 renderTabs();
 const requested = new URLSearchParams(location.search).get('scene');
 selectScene(SCENE_IDS.includes(requested) ? requested : SCENE_IDS[0]);
+
+renderCommunity({ grid: document.querySelector('#community-grid'), emailLink: document.querySelector('#community-email') });

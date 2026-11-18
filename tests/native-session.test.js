@@ -285,15 +285,15 @@ cookTest('planNativeSessionUpdate refuses a change of record counts and names it
   assert.throws(() => planNativeSessionUpdate(current, withExtraMaterial), { message: /`materialCount` changes from 2 to 3/ });
 });
 
-cookTest('planNativeSessionUpdate refuses other geometry, other textures and an instance that places another mesh', () => {
+cookTest('planNativeSessionUpdate sends moved triangles and refuses other textures and an instance that places another mesh', () => {
   const current = roomInput([0, 2.2, 6]);
   const bent = { ...current, triangles: new Uint8Array(current.triangles) };
   new DataView(bent.triangles.buffer).setFloat32(8, 0.5, true);
-  assert.throws(() => planNativeSessionUpdate(current, bent), { message: /`triangles` differs.*the geometry/ });
+  assert.deepEqual(Object.keys(planNativeSessionUpdate(current, bent)), ['triangles']);
   const otherMesh = roomInputWith((scene) => {
     scene.instances[0].geometry = { ...UNIT_QUAD, positions: new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0.5, -1, 1, 0]) };
   });
-  assert.throws(() => planNativeSessionUpdate(current, otherMesh), { message: /`triangleCount` changes from 2 to 4/ });
+  assert.ok('triangles' in planNativeSessionUpdate(current, otherMesh), 'a table of another length is a triangles update');
 
   const otherTexels = { ...current, textureTexels: new Uint32Array([1, 2, 3, 4]) };
   assert.throws(() => planNativeSessionUpdate({ ...current, textureTexels: new Uint32Array(4) }, otherTexels), { message: /`textureTexels` differs.*the textures/ });

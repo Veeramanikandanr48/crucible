@@ -65,6 +65,6 @@ test('a native job without the native tracer runs the cpu backend with the same 
     assert.equal(cpu.report.backendNote, undefined);
     assert.ok(native.png.equals(cpu.png), 'the fallback image is byte-identical to the cpu backend');
     for (const field of DETERMINISTIC_FIELDS) assert.deepEqual(native.report[field], cpu.report[field], field);
-    const reportKeys = report => Object.keys(report).filter(key => key !== 'backendNote').sort();
+    const reportKeys = report => Object.keys(report).filter(key => key !== 'backendNote' && key !== 'backendFallback').sort();
     assert.deepEqual(reportKeys(native.report), reportKeys(cpu.report));
   });

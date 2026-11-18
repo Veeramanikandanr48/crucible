@@ -1,6 +1,6 @@
 {
   "name": "@codepawlhq/crucible",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "private": false,
   "type": "module",
   "description": "3D engine that AI agents drive: a WebGL2 rasterizer, a path tracer on CPU and WebGL2 (Vulkan with an optional package, WebGPU opt-in), an MCP server, and PNG, MP4 and GLB export",
@@ -64,6 +64,7 @@
   "module": "./build/67.module.js",
   "bin": {
     "crucible-mcp": "./bin/crucible-mcp.mjs",
+    "crucible": "./bin/crucible.mjs",
     "crucible-addon-check": "./bin/crucible-addon-check.mjs",
     "67js-mcp": "./bin/67js-mcp.mjs",
     "67js-addon-check": "./bin/67js-addon-check.mjs"
@@ -102,6 +103,7 @@
     "./addons/grass": "./build/grass.js",
     "./addons/clutter": "./build/clutter.js",
     "./addons/light-bake": "./build/light-bake.js",
+    "./addons/crucible-scene": "./build/crucible-scene.js",
     "./addons/light-bake-gpu": "./build/light-bake-gpu.js",
     "./addons/ground-bounce": "./build/ground-bounce.js",
     "./addons/floor-sky-visibility": "./build/floor-sky-visibility.js",
@@ -127,6 +129,8 @@
     "./addons/world-material-shader": "./build/world-material-shader.js",
     "./addons/splat-shader": "./build/splat-shader.js",
     "./addons/subsurface-shader": "./build/subsurface-shader.js",
+    "./addons/retro-shader": "./build/retro-shader.js",
+    "./addons/glitter-shader": "./build/glitter-shader.js",
     "./addons/fog-shader": "./build/fog-shader.js",
     "./addons/linear-output-shader": "./build/linear-output-shader.js",
     "./addons/light-linking": "./build/light-linking.js",
@@ -205,6 +209,7 @@
     "smoke:agent-texture-sequence": "node scripts/smoke-agent-texture-sequence.mjs",
     "smoke:agent-texture-sequence-streamed": "node scripts/smoke-agent-texture-sequence-streamed.mjs",
     "smoke:render-passes": "node scripts/smoke-render-passes.mjs",
+    "smoke:pass-mattes": "node scripts/smoke-pass-mattes.mjs",
     "smoke:wireframe-pass": "node scripts/smoke-wireframe-pass.mjs",
     "smoke:object-motion-blur": "node scripts/smoke-object-motion-blur.mjs",
     "smoke:path-tracer": "node scripts/smoke-path-tracer.mjs",
@@ -237,6 +242,7 @@
     "smoke:agent-branches": "node scripts/smoke-agent-branches.mjs",
     "parity": "node scripts/parity-report.mjs",
     "bench:agent": "node bench/agent-modeling/bench.mjs",
+    "bench:scene-frames": "node bench/scene-frames/check-default-cameras.mjs",
     "reference": "node bench/reference/run.mjs",
     "reference:line-art": "node bench/reference/line-art.mjs",
     "size": "node scripts/measure-size.mjs",
@@ -287,7 +293,7 @@
   },
   "devDependencies": {
     "@codepawlhq/crucible-denoise-oidn": "file:packages/denoise-oidn",
-    "@codepawlhq/cook": "git+https://github.com/codepawl/cook.git#158384e4cb2046c71e84f0c9c540a1995d3db7b2",
+    "@codepawlhq/cook": "git+https://github.com/codepawl/cook.git#55f2448dbb5121d82a5b125c3564403b64798d03",
     "@dimforge/rapier3d-compat": "0.21.0",
     "@modelcontextprotocol/client": "2.4.0",
     "@modelcontextprotocol/server": "2.4.0",

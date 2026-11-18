@@ -1,3 +1,5 @@
+import { invalidField } from './field-error.js';
+
 const FULL_TURN = Math.PI * 2;
 const MAX_PRIMITIVE_VERTICES = 1_000_000;
 
@@ -210,14 +212,22 @@ export function circle(segments = 64, innerRadius = 0) {
   return { ...geometry(positions, normals, indices), uvs: new Float32Array(uvs) };
 }
 
-// The torus lies in XY, facing +Z. Partial arcs are useful for interrupted armor rings.
-export function torus(tubeRadius = 0.08, segments = 96, sides = 24, arc = FULL_TURN, start = 0) {
+// The torus checks that name the field, so a scene recipe reports them as geometries[i].tubeRadius or geometries[i].arc.
+export function checkTorusShape(tubeRadius = 0.08, arc = FULL_TURN) {
   finiteFloat(tubeRadius, 'tubeRadius');
   finiteFloat(arc, 'arc');
-  finiteFloat(start, 'start');
-  if (Math.fround(tubeRadius) <= 0 || Math.fround(arc) <= 0 || arc > FULL_TURN) {
-    throw new RangeError('tubeRadius must remain positive at Float32 precision and arc must be within (0, 2PI].');
+  if (Math.fround(tubeRadius) <= 0) {
+    throw invalidField('tubeRadius', tubeRadius, 'a positive number that is still above 0 as a Float32, such as 0.08');
   }
+  if (Math.fround(arc) <= 0 || arc > FULL_TURN) {
+    throw invalidField('arc', arc, `a number above 0 and at most ${FULL_TURN} (2 * Math.PI, a full turn), such as ${Math.PI}`);
+  }
+}
+
+// The torus lies in XY, facing +Z. Partial arcs are useful for interrupted armor rings.
+export function torus(tubeRadius = 0.08, segments = 96, sides = 24, arc = FULL_TURN, start = 0) {
+  checkTorusShape(tubeRadius, arc);
+  finiteFloat(start, 'start');
   integer(segments, 3, 2048, 'segments');
   integer(sides, 3, 128, 'sides');
   primitiveBudget((segments + 1) * (sides + 1) + (arc === FULL_TURN ? 0 : 2 * (sides + 2)));

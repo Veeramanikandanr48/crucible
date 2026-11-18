@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mat4 } from 'gl-matrix';
 import { box, sphere } from '../src/geometry.js';
 import { CrucibleRenderer } from '../src/renderer.js';
+import { WebGL2GlazeBackend } from '../src/glaze-backend-webgl2.js';
 import '../src/replace-textured-parts.js';
 
 function part(name, geometry) {
@@ -46,6 +47,7 @@ function allocationRenderer() {
       return error;
     },
   };
+  renderer.backend = new WebGL2GlazeBackend(renderer.context);
   renderer.canvas = { width: 64, height: 64 };
   renderer.multisampleSamples = 0;
   renderer.memoryBudgetMiB = 64;

@@ -1,1 +1,0 @@
-- scene:agent-scene+lazy: a scene with only grid volumes, or only box and sphere volumes, builds the program of that kind alone, about half the shader build of the combined program, with the same pixels

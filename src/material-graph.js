@@ -609,7 +609,45 @@ function splitEmissionFresnel(node) {
   return { base: operands[1 - fresnelSlot], ior: readFresnelIor(operands[fresnelSlot]) };
 }
 
+// A vertex group is mesh data, which a graph baked from u and v does not have. The host rasterizes each group a graph
+// names into a weight map in UV space for one mesh (material-vertex-group-map.js) and bakes the graph with those maps, so
+// the node reads its weight at the texel's own u and v. Validating a graph needs no mesh, so without maps only the name
+// is checked; a pattern with the node must use uv mapping, since box mapping has no u and v to match.
+const VERTEX_GROUP_COST = 2;
+const VERTEX_GROUP_NAME_LIMIT = 128;
+
+function readVertexGroupName(node) {
+  const settings = textureSettings(node, 'vertexGroup', ['name']);
+  const { name } = settings;
+  if (typeof name !== 'string' || name === '' || name.length > VERTEX_GROUP_NAME_LIMIT) {
+    throw graphError('vertexGroup needs the name of a vertex group of the mesh, such as {"vertexGroup":{"name":"edge"}}; make the group with a vertex_group mesh edit.');
+  }
+  return name;
+}
+
+function compileVertexGroup(node, state) {
+  const name = readVertexGroupName(node);
+  state.cost += VERTEX_GROUP_COST;
+  if (!state.groups) return scalarValue(() => 0);
+  const map = state.groups.get(name);
+  if (!map) throw graphError(`vertexGroup ${describeKey(name)} was not rasterized for this mesh. Bake the material through a part whose mesh has the group.`);
+  return scalarValue((u, v) => sampleImageChannel(map, u, v, 0, byte => byte / 255));
+}
+
+/** The vertex group names a graph reads with `vertexGroup` nodes, in the order they first appear. */
+export function graphVertexGroupNames(graph) {
+  const names = new Set();
+  const visit = (value, depth) => {
+    if (!value || typeof value !== 'object' || depth > MATERIAL_GRAPH_LIMITS.maxDepth * 3) return;
+    if (!Array.isArray(value) && isPlainObject(value.vertexGroup) && typeof value.vertexGroup.name === 'string') names.add(value.vertexGroup.name);
+    for (const child of Array.isArray(value) ? value : Object.values(value)) visit(child, depth + 1);
+  };
+  visit(graph, 0);
+  return [...names];
+}
+
 const TEXTURE_COMPILERS = new Map([
+  ['vertexGroup', compileVertexGroup],
   ['image', compileImage], ['noise', compileNoise], ['whiteNoise', compileWhiteNoise], ['brick', compileBrick], ['voronoi', compileVoronoi], ['wave', compileWave], ['checker', compileChecker], ['gradient', compileGradient],
 ]);
 
@@ -651,12 +689,12 @@ const SCALAR_OUTPUTS = ['roughness', 'metallic', 'height', 'opacity', 'clearcoat
  * Check a graph and compile each output. `size` is the metres one texture tile covers, which object and world coordinates report. Limits on nodes, depth and work per pixel are enforced here, before any
  * pixel is evaluated. Returns { outputs: { name: compiled }, emissionFresnel (an IOR, or undefined), nodeCount, cost }.
  */
-export function compileMaterialGraph(graph, { size = 1, images } = {}) {
+export function compileMaterialGraph(graph, { size = 1, images, groups } = {}) {
   if (!isPlainObject(graph)) throw graphError(`graph must be an object with outputs: ${MATERIAL_GRAPH_OUTPUTS.join(', ')}.`);
   onlyKeys(graph, MATERIAL_GRAPH_OUTPUTS, 'graph');
   const names = Object.keys(graph);
   if (names.length === 0) throw graphError(`graph needs at least one output: ${MATERIAL_GRAPH_OUTPUTS.join(', ')}.`);
-  const state = { nodeCount: 0, cost: 0, size, images };
+  const state = { nodeCount: 0, cost: 0, size, images, groups };
   const outputs = Object.create(null);
   let emissionFresnel;
   for (const name of MATERIAL_GRAPH_OUTPUTS) {
@@ -731,8 +769,8 @@ export function graphImageData(graph, pool) {
 }
 
 /** Bake a normalized graph into texture descriptors, one for each output the graph has. Deterministic. */
-export function bakeMaterialGraph(graph, { resolution, bump, size = 1 }, images) {
-  const compiled = compileMaterialGraph(graph, { size, images: imagePoolMap(images) });
+export function bakeMaterialGraph(graph, { resolution, bump, size = 1 }, images, groups) {
+  const compiled = compileMaterialGraph(graph, { size, images: imagePoolMap(images), groups: groups ? imagePoolMap(groups) : undefined });
   checkMaterialGraphWork(compiled, resolution);
   const { color, roughness, metallic, emission, height, opacity, clearcoat, transmission, aov } = compiled.outputs;
   const pixelCount = resolution * resolution;

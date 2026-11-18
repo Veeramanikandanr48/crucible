@@ -74,6 +74,28 @@ function checkColor(field, value) {
   }
 }
 
+/** Each toon step colour is a linear RGB weight on that step's light; above 1 brightens it. */
+export const TOON_COLOR_MAXIMUM = 4;
+
+function checkToonColors(material) {
+  const colors = material.toonColors;
+  if (colors === undefined) return;
+  const steps = material.toon ?? 0;
+  if (!(steps > 0)) {
+    throw new RangeError(`toonColors needs toon above 0 (the step count), got toon ${steps}. Set toon to ${Array.isArray(colors) ? colors.length : 3} or remove toonColors.`);
+  }
+  if (!Array.isArray(colors) || colors.length !== steps) {
+    throw new RangeError(`toonColors must be an array of ${steps} colours, one per toon step from darkest to lightest, got ${Array.isArray(colors) ? colors.length : colors}. Pass ${steps} [red, green, blue] triples, or change toon to ${Array.isArray(colors) ? colors.length : 3}.`);
+  }
+  colors.forEach((color, index) => {
+    const isLinearColor = Array.isArray(color) && color.length === 3 &&
+      color.every(component => typeof component === 'number' && Number.isFinite(component) && component >= 0 && component <= TOON_COLOR_MAXIMUM);
+    if (!isLinearColor) {
+      throw new RangeError(`toonColors[${index}] must be three linear RGB numbers between 0 and ${TOON_COLOR_MAXIMUM}. Pass [red, green, blue].`);
+    }
+  });
+}
+
 function checkAttenuationDistance(value) {
   const isPositive = typeof value === 'number' && value > 0 && Number.isFinite(value);
   if (!isPositive) {
@@ -89,6 +111,7 @@ export function validateMaterialLayers(material) {
   for (const field of Object.keys(MATERIAL_LAYER_COLOR_RANGES)) {
     if (material[field] !== undefined) checkColor(field, material[field]);
   }
+  checkToonColors(material);
   if (material.attenuationDistance !== undefined && material.attenuationDistance !== Infinity) {
     checkAttenuationDistance(material.attenuationDistance);
   }
@@ -128,7 +151,7 @@ export function dielectricReflectance(material) {
 
 /**
  * Plain values the renderer batches by: dielectric F0 (3), coat (2), sheen (4), transmission (4), attenuation colour (3),
- * anisotropy strength and rotation (2), iridescence factor, film IOR and film thickness in nanometres (3), light mask (1), toon bands (1), and the subsurface block as JSON, or '' (1; subsurface-limits.js and the addon read it), emission fresnel (1) and the emission mask: axis index or -1, from, to (3).
+ * anisotropy strength and rotation (2), iridescence factor, film IOR and film thickness in nanometres (3), light mask (1), toon bands (1), and the subsurface block as JSON, or '' (1; subsurface-limits.js and the addon read it), emission fresnel (1), the emission mask: axis index or -1, from, to (3) and the toon step colours as JSON, or '' (1; toon-shader.js reads it).
  */
 export function materialLayerState(material) {
   validateMaterialLayers(material);
@@ -155,7 +178,8 @@ export function materialLayerState(material) {
     'xyz'.indexOf(material.emissionMask?.axis),
     material.emissionMask?.from ?? 0,
     material.emissionMask?.to ?? 1,
+    material.toonColors ? JSON.stringify(material.toonColors) : '',
   ];
 }
 
-export const MATERIAL_LAYER_STATE_LENGTH = 28;
+export const MATERIAL_LAYER_STATE_LENGTH = 29;

@@ -9,7 +9,7 @@ import { graphImageAssets } from './material-graph.js';
 
 const ASSET_ID = /^[a-f0-9]{64}$/;
 const MAP_FIELDS = ['sequence'];
-const SEQUENCE_FIELDS = ['frames', 'fps', 'loop'];
+const SEQUENCE_FIELDS = ['frames', 'catalog', 'fps', 'loop'];
 
 function knownKeys(value, allowed, path) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -27,6 +27,9 @@ export function normalizeMapSequence(value) {
   const sequence = value.sequence;
   knownKeys(sequence, SEQUENCE_FIELDS, 'map.sequence');
   const { frames, fps, loop = true } = sequence;
+  if (frames === undefined && sequence.catalog !== undefined) {
+    throw invalidField('map.sequence.catalog', sequence.catalog, 'frames, a list of catalog image asset IDs: the MCP server turns a catalog sequence name into its frame IDs before the scene is built, so a library caller passes the IDs', TypeError);
+  }
   if (!Array.isArray(frames) || frames.length < 2 || frames.length > TEXTURE_SEQUENCE_LIMITS.maxFrames) {
     throw invalidField('map.sequence.frames', Array.isArray(frames) ? `${frames.length} frames` : frames, `a list of 2 to ${TEXTURE_SEQUENCE_LIMITS.maxFrames} catalog image asset IDs, such as [<asset id>, <asset id>]; for a longer film, split it into several sequences or lower the frame rate`);
   }

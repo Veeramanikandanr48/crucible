@@ -1,10 +1,11 @@
 import './site.css';
 import './brand.js';
 import './marketplace.css';
-import { npmManifestPath } from './marketplace-npm.js';
+import { firstPartyPackages, npmManifestPath } from './marketplace-npm.js';
 
 const NPM_SEARCH_URL = 'https://registry.npmjs.org/-/v1/search?text=keywords:crucible-addon&size=50';
 const NPM_MANIFEST_URL = 'https://registry.npmjs.org/';
+const FIRST_PARTY_SEARCH_URL = 'https://registry.npmjs.org/-/v1/search?text=@codepawlhq&size=50';
 const MAXIMUM_RANGE_LOOKUPS = 20;
 const CONCURRENT_RANGE_LOOKUPS = 5;
 const ADDONS_DOC_URL = 'https://github.com/codepawl/crucible/blob/main/docs/addons.md';
@@ -200,8 +201,46 @@ async function loadAddons(container) {
   }
 }
 
+function packageCard(entry) {
+  const card = element('article', 'market-card addon-card');
+  const title = element('h3');
+  title.append(link(entry.name, npmUrl(entry.name)), element('span', 'market-version', entry.version));
+  const body = element('div', 'addon-body');
+  body.append(title);
+  if (entry.description) body.append(element('p', 'market-description', entry.description));
+  const command = `npm install ${entry.name}`;
+  const row = element('div', 'command-row');
+  row.append(element('code', '', command), copyButton(command));
+  body.append(row);
+  const npm = link('npm', npmUrl(entry.name), 'market-button market-button-quiet');
+  const logo = element('span', 'package-logo package-logo-npm');
+  logo.setAttribute('aria-hidden', 'true');
+  npm.prepend(logo);
+  npm.setAttribute('aria-label', `${entry.name} on npm`);
+  card.append(body, npm);
+  return card;
+}
+
+async function loadFirstPartyPackages(container) {
+  showState(container, 'loading', 'Searching npm for packages');
+  try {
+    const response = await fetch(FIRST_PARTY_SEARCH_URL);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const { objects } = await response.json();
+    const packages = firstPartyPackages(objects);
+    if (packages.length === 0) {
+      showState(container, 'empty', 'No companion packages are published yet.');
+      return;
+    }
+    container.replaceChildren(...packages.map(packageCard));
+  } catch {
+    showState(container, 'error', 'npm did not answer, so the package list is missing.', link('Open the npm search', 'https://www.npmjs.com/search?q=%40codepawlhq%2Fcrucible-'));
+  }
+}
+
 document.querySelectorAll('[data-copy]').forEach(button => {
   button.addEventListener('click', () => copyText(button, button.dataset.copy));
 });
 loadPacks(document.querySelector('#pack-list'));
 loadAddons(document.querySelector('#addon-list'));
+loadFirstPartyPackages(document.querySelector('#package-list'));

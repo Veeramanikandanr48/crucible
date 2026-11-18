@@ -245,7 +245,7 @@ function comparePhysics(inventory) {
 
 function compareRender(inventory) {
   const colour = inventory.color_management;
-  const viewTransformMap = { 'Khronos PBR Neutral': ['done', 'neutral'], 'AgX': ['done', 'agx'], 'ACES 2.0': ['partial', 'aces (ACES 1.3 style fit)'], 'ACES 1.3': ['partial', 'aces'] };
+  const viewTransformMap = { 'Khronos PBR Neutral': ['done', 'neutral'], 'AgX': ['done', 'agx'], 'Standard': ['done', 'standard'], 'ACES 2.0': ['partial', 'aces (ACES 1.3 style fit)'], 'ACES 1.3': ['partial', 'aces'] };
   const engineMap = { CYCLES: ['partial', 'CPU path tracer, addons/path-tracer'], BLENDER_EEVEE: ['partial', 'WebGL2 rasterizer'], BLENDER_WORKBENCH: ['out of scope', 'Workbench is a viewport engine'] };
   const lightMap = { POINT: ['done', 'pointLights (16)'], SUN: ['done', 'directional key light'], SPOT: ['done', 'spotLights (8)'], AREA: ['partial', 'areaLights (7), no shadow'] };
   const probeMap = { SPHERE: ['partial', 'bake.probes, specular only'], PLANE: ['missing', ''], VOLUME: ['missing', 'irradiance grid in progress, issue #543'] };
@@ -254,7 +254,7 @@ function compareRender(inventory) {
     engines: mapEnum(inventory.render.engines.map(engine => engine.identifier), engineMap),
     lights: mapEnum(inventory.lights_cameras_world.light_types.map(item => item.identifier), lightMap),
     probes: mapEnum(inventory.lights_cameras_world.light_probe_types.map(item => item.identifier), probeMap),
-    viewTransforms: colour.view_transforms.map(name => ({ name, status: viewTransformMap[name]?.[0] ?? 'missing', note: viewTransformMap[name]?.[1] ?? 'Not offered; Crucible has aces, agx, neutral' })),
+    viewTransforms: colour.view_transforms.map(name => ({ name, status: viewTransformMap[name]?.[0] ?? 'missing', note: viewTransformMap[name]?.[1] ?? 'Not offered; Crucible has aces, agx, neutral, standard' })),
     lookCounts,
     displayDevices: colour.display_devices,
     settingGroups: Object.entries(inventory.render.engine_settings).map(([name, properties]) => ({ name, count: properties.length })),

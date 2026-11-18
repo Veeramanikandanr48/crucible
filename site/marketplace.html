@@ -13,7 +13,7 @@
     <header class="navigation">
       <a class="brand" href="/" aria-label="Crucible home">Crucible</a>
       <nav aria-label="Library">
-        <a href="/docs.html">Docs</a><a href="/marketplace.html" aria-current="page">Marketplace</a><a href="/changelog.html">Changelog</a>
+        <a href="/docs.html">Docs</a><a href="/recipes.html">Recipes</a><a href="/marketplace.html" aria-current="page">Marketplace</a><a href="/changelog.html">Changelog</a>
       </nav>
       <a class="site-nav-cta" href="https://github.com/codepawl/crucible" aria-label="GitHub"><span class="package-logo package-logo-github" aria-hidden="true"></span><span class="site-nav-cta-label">GitHub</span></a>
     </header>
@@ -53,6 +53,12 @@
           <span>An addon runs with the full rights of your page or Node process. Install only addons you trust and read what they do first. The MCP server loads only the addons you name when you start it, with <code>--addons</code> and <code>--allow-addon</code>, never one a tool call asks for.</span>
         </p>
         <div id="addon-list" class="market-list" aria-live="polite"></div>
+      </section>
+      <section id="packages" aria-labelledby="packages-title">
+        <div class="section-heading">
+          <h2 id="packages-title">Packages by CodePawl</h2>
+        </div>
+        <div id="package-list" class="market-list" aria-live="polite"></div>
       </section>
     </main>
     <footer class="site-footer" aria-label="Site footer">

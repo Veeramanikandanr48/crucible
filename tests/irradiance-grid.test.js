@@ -4,7 +4,7 @@ import test from 'node:test';
 import { box } from '../src/geometry.js';
 import { createAgentScene } from '../src/agent-scene.js';
 import { normalizeAgentBake } from '../src/agent-bake.js';
-import { IRRADIANCE_GRID_TEXTURE_UNIT, evaluateIrradianceGrid, normalizeIrradianceGrid, placeIrradianceGrid, traceIrradianceGrid } from '../src/irradiance-grid.js';
+import { IRRADIANCE_GRID_LIMITS, IRRADIANCE_GRID_TEXTURE_UNIT, gridLayout, evaluateIrradianceGrid, normalizeIrradianceGrid, placeIrradianceGrid, traceIrradianceGrid } from '../src/irradiance-grid.js';
 import { createFragmentShader } from '../src/shaders.js';
 
 const cube = box(0, 1);
@@ -155,4 +155,21 @@ test('a grid resolution under 2 or samples under 1 is refused before nodes land 
   for (const samples of [0, -1, 1.5]) {
     assert.throws(() => traceIrradianceGrid(parts, sun, { resolution: 8, samples, bounces: 1 }), /samples/, `samples ${samples}`);
   }
+});
+
+test('every node count the recipe accepts fits the node cap on a cubic, a flat and a long scene (#1218)', () => {
+  const [minimum, maximum] = IRRADIANCE_GRID_LIMITS.resolution;
+  const scenes = {
+    cubic: [placed('block', [0, 0, 0], [10, 10, 10], [0.5, 0.5, 0.5])],
+    flat: [placed('plate', [0, 0, 0], [30, 0.2, 30], [0.5, 0.5, 0.5])],
+    long: [placed('hall', [0, 0, 0], [80, 3, 6], [0.5, 0.5, 0.5])],
+  };
+  for (const [name, parts] of Object.entries(scenes)) {
+    for (let resolution = minimum; resolution <= maximum; resolution++) {
+      const nodes = gridLayout(parts, resolution).size.reduce((product, count) => product * count, 1);
+      assert.ok(nodes <= IRRADIANCE_GRID_LIMITS.maxNodes, `${name} at ${resolution}: ${nodes} nodes`);
+    }
+  }
+  assert.equal(gridLayout(scenes.cubic, maximum).size.join('x'), '40x40x40');
+  assert.throws(() => normalizeAgentBake({ irradianceGrid: maximum + 1 }), /bake\.irradianceGrid must be true or an integer node count from 8 to 40/);
 });

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { CrucibleRenderer } from '../src/renderer.js';
+import { WebGL2GlazeBackend } from '../src/glaze-backend-webgl2.js';
 
 const LINEAR = 'LINEAR';
 const LINEAR_MIPMAP_LINEAR = 'LINEAR_MIPMAP_LINEAR';
@@ -33,6 +34,7 @@ test('stages and bloom never read a texture left on a mipmapped filter by the pr
   let filterSeenByStage = null;
   const renderer = {
     context,
+    backend: new WebGL2GlazeBackend(context),
     canvas: { width: 4, height: 4 },
     depth: true,
     frameTexture,

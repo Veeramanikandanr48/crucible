@@ -28,3 +28,44 @@ export function resolveAssetPlacementNames(value, resolveName) {
     delete placement.name;
   });
 }
+
+// A texture sequence by catalog name: `map: { sequence: { catalog: "frame_####.png", fps } }` stands for the frames of a long
+// numbered folder. The host swaps it for the frame IDs, so the scene, its snapshots and its render jobs only hold the pinned hashes.
+
+function visitMapSequences(value, visit, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 8) return;
+  if (Array.isArray(value)) {
+    for (const item of value) visitMapSequences(item, visit, depth + 1);
+    return;
+  }
+  const sequence = value.map?.sequence;
+  if (sequence && typeof sequence === 'object' && !Array.isArray(sequence)) visit(sequence);
+  for (const child of Object.values(value)) visitMapSequences(child, visit, depth + 1);
+}
+
+/** Whether a recipe or edit list has a `map.sequence` that names a catalog sequence instead of listing frames. */
+export function namesCatalogSequences(value) {
+  let found = false;
+  visitMapSequences(value, sequence => {
+    if (sequence.catalog !== undefined) found = true;
+  });
+  return found;
+}
+
+/**
+ * Replaces `map.sequence.catalog` with `frames` (the asset IDs in frame order), in place. `resolveSequence` maps a catalog
+ * sequence pattern to its frame IDs or throws.
+ */
+export async function resolveCatalogSequenceNames(value, resolveSequence) {
+  const sequences = [];
+  visitMapSequences(value, sequence => {
+    if (sequence.catalog !== undefined) sequences.push(sequence);
+  });
+  for (const sequence of sequences) {
+    if (sequence.frames !== undefined) {
+      throw invalidField('map.sequence', 'both frames and catalog', 'exactly one of frames (asset IDs) or catalog (the pattern of a catalog sequence), such as { "catalog": "frame_####.png", "fps": 24 }', TypeError);
+    }
+    sequence.frames = await resolveSequence(sequence.catalog);
+    delete sequence.catalog;
+  }
+}

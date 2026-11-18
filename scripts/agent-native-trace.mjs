@@ -6,6 +6,8 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { clampLimitsByEngine, requireRenderEngine } from './render-engine.mjs';
 import { estimateRelativeNoise } from '../src/path-tracer-denoise.js';
+import { readBlobBytes } from './cdp-blob-read.mjs';
+import { applyExportDelta } from './native-export-delta.js';
 import { requireExportFitsCapacity } from './native-capacity.mjs';
 import { mapLookToCookPost } from './native-post-look.mjs';
 import { encodeOpaquePng } from './native-png.mjs';
@@ -60,6 +62,14 @@ function checkNativePackage(imported) {
     return { reason: `renderer.backend "native" cannot find the binary of ${NATIVE_PACKAGE}: ${error.message}` };
   }
   if (!addonPath) return { reason: `renderer.backend "native" needs the built binary of ${NATIVE_PACKAGE} (npm run build in that package, or COOK_ADDON_PATH for a build elsewhere).` };
+  // A package newer than the pinned one checks the addon's build info on load; its message (stale addon, wrong platform) is the reason as written.
+  if (typeof imported.module.loadNativeAddon === 'function') {
+    try {
+      imported.module.loadNativeAddon();
+    } catch (error) {
+      return { reason: error.message };
+    }
+  }
   const limits = clampLimitsByEngine(DEFAULT_ENGINE_LIMITS, checked.description.limits);
   return { tracer: checked.engine, description: checked.description, limits };
 }
@@ -98,7 +108,7 @@ export async function chooseTraceBackend({ requested, runtimeBackend, locator })
   const found = await locator.find();
   if (found.tracer) return { backend: 'native', tracer: found.tracer };
   const fallback = runtimeBackend === 'cpu' ? 'cpu' : 'gpu';
-  return { backend: fallback, note: `${found.reason} The ${fallback} backend ran instead.` };
+  return { backend: fallback, reason: found.reason, note: `${found.reason} The ${fallback} backend ran instead.` };
 }
 
 const V2_TABLE_TYPES = { Uint8Array, Uint32Array, Int32Array, Float32Array };
@@ -113,46 +123,92 @@ function tableBytesFrom(table) {
   return copy;
 }
 
-/**
- * Reads every table of a chunked export (the `manifest` of splitExportForChunks) and returns the export with its `tables` as
- * bytes, which traceFrameNative takes like the base64 of a one-message export. `readChunk(name, offset)` resolves with the
- * base64 of one chunk. No single string holds a whole table, so the scene is bounded by memory, not by a message.
- */
-export async function collectExportChunks(manifest, readChunk, { capacity } = {}) {
+// The manifest of a chunked export, and the capacity use of a scene that fits the adapter. A scene that cannot fit fails here,
+// before any table is read from the page.
+function readChunkedManifest(manifest, capacity, caller) {
   const { chunks, ...exported } = manifest;
   if (!chunks || !(chunks.chunkBytes > 0)) {
-    throw new TypeError('collectExportChunks: the export carries no `chunks` manifest. Export the scene with transport "chunks".');
+    throw new TypeError(`${caller}: the export carries no \`chunks\` manifest. Export the scene with transport "chunks".`);
   }
-  // With the adapter capacity, a scene that cannot fit fails here, before any table is read from the page.
-  const capacityUse = capacity ? requireExportFitsCapacity(manifest, capacity) : undefined;
+  return { chunks, exported, capacityUse: capacity ? requireExportFitsCapacity(manifest, capacity) : undefined };
+}
+
+/**
+ * Reads every table of a chunked export (the `manifest` of splitExportForChunks) from a page that holds them as one Blob, back to
+ * back in manifest order, and returns the export with its `tables` as bytes, which traceFrameNative takes like the base64 of a
+ * one-message export. `readBlob(byteLength)` resolves with all of its bytes; each table is copied out into a buffer of its own.
+ * No single string holds a table, so the scene is bounded by memory, not by a message. A manifest with `chunks.delta` sends only the
+ * ranges that changed since the export `baseline` (`{ id, tables }`) holds; the tables come back patched, byte for byte what a full
+ * export gives, and `sentBytes` says how many bytes crossed.
+ */
+export async function collectExportBlob(manifest, readBlob, { capacity, baseline } = {}) {
+  const { chunks, exported, capacityUse } = readChunkedManifest(manifest, capacity, 'collectExportBlob');
+  const { delta } = chunks;
+  if (delta && baseline?.id !== delta.base) {
+    throw new RangeError(`The native scene export is a delta against ${JSON.stringify(delta.base)}, and the baseline held here is ${JSON.stringify(baseline?.id)}. Export the scene again without a baseline.`);
+  }
+  const totalBytes = delta
+    ? Object.values(delta.ranges).reduce((total, list) => total + list.reduce((sum, [, length]) => sum + length, 0), 0)
+    : Object.values(chunks.tables).reduce((total, byteLength) => total + byteLength, 0);
+  const blob = await readBlob(totalBytes);
+  if (blob.length !== totalBytes) {
+    throw new RangeError(`The native scene export sent ${blob.length} bytes, expected ${totalBytes}. The page changed the export while it was read.`);
+  }
+  if (delta) {
+    const tables = applyExportDelta({ previous: baseline.tables, lengths: chunks.tables, ranges: delta.ranges, sent: blob });
+    return { ...exported, tables, ...(capacityUse ? { capacityUse } : {}), sentBytes: totalBytes };
+  }
   const tables = {};
+  let offset = 0;
   for (const [name, byteLength] of Object.entries(chunks.tables)) {
-    const bytes = new Uint8Array(byteLength);
-    for (let offset = 0; offset < byteLength; offset += chunks.chunkBytes) {
-      const chunk = Buffer.from(await readChunk(name, offset), 'base64');
-      const expectedLength = Math.min(chunks.chunkBytes, byteLength - offset);
-      if (chunk.length !== expectedLength) {
-        throw new RangeError(`The native scene export sent ${chunk.length} bytes of table "${name}" at offset ${offset}, expected ${expectedLength}. The page changed the export while it was read.`);
-      }
-      bytes.set(chunk, offset);
-    }
-    tables[name] = bytes;
+    tables[name] = blob.slice(offset, offset + byteLength);
+    offset += byteLength;
   }
   return { ...exported, tables, ...(capacityUse ? { capacityUse } : {}) };
 }
 
 /**
- * Exports the scene of a render job from its page in chunks and returns it with byte tables. `input` is what the page's
- * `exportNativeScene` takes. The page lets go of its copy when the read ends, whether it succeeded or not. `capacity` (from
- * readNativeCapacity) makes a scene the adapter cannot hold fail before its tables are read.
+ * Exports the scene of a render job from its page and returns it with byte tables. `input` is what the page's
+ * `exportNativeScene` takes. The page holds the tables as one Blob and the job runner reads it over the DevTools stream of
+ * `session` (the CDP session of the page; one is made and detached here when none is passed). The page lets go of its copy
+ * when the read ends, whether it succeeded or not. `capacity` (from readNativeCapacity) makes a scene the adapter cannot hold
+ * fail before its tables are read. `baseline` is an object the caller keeps for the frames of one job: each frame after the first
+ * reads only the table ranges that changed since the one before, unless JS67_NATIVE_EXPORT_DELTA=off. A frame that cannot use it
+ * (the page lost its copy) reads every table, and the tables are the same bytes either way.
  */
-export async function fetchNativeExport(page, input, { capacity } = {}) {
+export async function fetchNativeExport(page, input, { capacity, session, baseline } = {}) {
   const maximumTriangles = chunkedTriangleBound(capacity?.maxUniqueTriangles);
-  const manifest = await page.evaluate(request => window.__agentPreview.exportNativeScene(request), { ...input, chunked: true, maximumTriangles });
+  const keepBaseline = baseline !== undefined && process.env.JS67_NATIVE_EXPORT_DELTA !== 'off';
+  const request = { ...input, chunked: true, maximumTriangles, ...(keepBaseline ? { keepBaseline, ...(baseline.id === undefined ? {} : { deltaBase: baseline.id }) } : {}) };
+  const manifest = await page.evaluate(exportRequest => window.__agentPreview.exportNativeScene(exportRequest), request);
+  const { exportId } = manifest;
+  const exported = await readHeldNativeExport(page, manifest, {
+    blobExpression: 'window.__agentPreview.nativeExportBlob()',
+    release: () => window.__agentPreview.releaseNativeExport(),
+    capacity,
+    session,
+    baseline,
+  });
+  if (baseline !== undefined) {
+    baseline.id = keepBaseline ? exportId : undefined;
+    baseline.tables = keepBaseline && exportId !== undefined ? exported.tables : undefined;
+  }
+  return exported;
+}
+
+/**
+ * Reads the chunked export a page holds, given the `manifest` it answered with (fetchNativeExport and the render-file CLI both
+ * end here). `blobExpression` evaluates to the Blob of the tables in the page and `release` runs there when the read ends,
+ * whether it succeeded or not. The Blob comes over the DevTools stream of `session` (made and detached here when none is
+ * passed); `capacity` fails a scene the adapter cannot hold before any byte is read.
+ */
+export async function readHeldNativeExport(page, manifest, { blobExpression, release, capacity, session: givenSession, baseline }) {
+  const session = givenSession ?? await page.context().newCDPSession(page);
   try {
-    return await collectExportChunks(manifest, (name, offset) => page.evaluate(request => window.__agentPreview.readNativeExportChunk(request), { name, offset }), { capacity });
+    return await collectExportBlob(manifest, byteLength => readBlobBytes(session, blobExpression, byteLength), { capacity, baseline });
   } finally {
-    await page.evaluate(() => window.__agentPreview.releaseNativeExport()).catch(() => {});
+    await page.evaluate(release).catch(() => {});
+    if (!givenSession) await session.detach().catch(() => {});
   }
 }
 
@@ -311,6 +367,18 @@ export function yieldToEventLoop() {
   return new Promise(resolve => setImmediate(resolve));
 }
 
+/** A kernel compile shorter than this is not worth a sentence in the report. */
+const NOTEWORTHY_COMPILE_SECONDS = 1;
+
+/**
+ * The sentence for a frame that spent seconds compiling its kernel, or undefined when it did not. Cook compiles one kernel per
+ * scene variant (a scene with no emitter is a different variant from a lit one), and the first trace of a variant pays for it.
+ */
+export function describeKernelCompile({ compileSeconds }) {
+  if (!(compileSeconds >= NOTEWORTHY_COMPILE_SECONDS)) return undefined;
+  return `This frame spent ${compileSeconds.toFixed(1)} s compiling the kernel variant its scene needs, which is not trace time. Later frames of this job reuse it.`;
+}
+
 /**
  * Traces one frame the page exported and returns the PNG (base64) with the job report. `denoise` is "none", "wavelet",
  * "atrous" (the tracer's GPU filter, which is also where a missing or failing OIDN lands) or "oidn"; `denoiser` is the
@@ -369,13 +437,16 @@ async function traceOneFrameNative({ tracer, exported, width, height, samples, b
   normalizeNormals(features.normal);
   const averageSamples = traced.averageSamples ?? samples;
   const estimatedNoise = estimateRelativeNoise({ color: features.color, variance: features.variance, averageSamples });
+  const kernelCompileNote = describeKernelCompile({ compileSeconds: traced.compileSeconds });
   const report = { width, height, samples, bounces, seed, denoised: false, denoiser: 'none', threads: 1, backend: 'native',
     gpu: traced.adapter, nativeBackend: traced.backend, nativeFeatures: traced.features, setupSeconds: traced.setupSeconds, compileSeconds: traced.compileSeconds,
     uploadSeconds: traced.uploadSeconds, accelerationBuildSeconds: traced.accelerationBuildSeconds,
+    ...(traced.tracedSeconds === undefined ? {} : { gpuTraceSeconds: traced.tracedSeconds }),
+    ...(kernelCompileNote ? { kernelCompileNote } : {}),
     kernel, averageSamples, noiseThreshold, ...(estimatedNoise === null ? {} : { estimatedNoise }), triangles: exported.triangles, inputBytes: tableBytes(tables), ...(exported.instances === undefined ? {} : { instances: exported.instances }),
     ...(exported.instancing === undefined ? {} : { instancing: exported.instancing, instancingReason: exported.instancingReason }),
     ...(exported.materialsReason === undefined ? {} : { materialsReason: exported.materialsReason }), tracedSeconds, ignored: exported.ignored,
-    ...(route ? { nativeSession: route } : {}), ...(exported.capacityUse ? { nativeCapacity: exported.capacityUse } : {}) };
+    ...(route ? { nativeSession: route } : {}), ...(exported.capacityUse ? { nativeCapacity: exported.capacityUse } : {}), ...(exported.sentBytes === undefined ? {} : { exportSentBytes: exported.sentBytes }) };
   const rawLinear = features.color;
   let linear = features.color;
   const denoiseStarted = performance.now();

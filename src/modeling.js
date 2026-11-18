@@ -1,6 +1,8 @@
+import { invalidField } from './field-error.js';
 import { buildLathe, buildExtrusion, buildTube } from './modeling-shapes.js';
 import { sweepSamples } from './modeling-bezier.js';
 import { KNOT_MODES, NURBS_DEFAULT_ORDER, NURBS_MAX_ORDER, resampleSamples, sampleCountOf, sampleSpline, shapeToSpline, trimSamples } from './modeling-splines.js';
+import { cloudMesh } from './cloud-geometry.js';
 import { planSdf, sdfGeometry as buildSdf } from './modeling-sdf.js';
 
 const MAX_INPUT_POINTS = 4096;
@@ -23,7 +25,11 @@ function pointsFrom(input, size, minimum, name) {
     return Array.from(point, value => finite(value, name));
   });
   for (let index = 1; index < points.length; index++) {
-    if (points[index].every((value, axis) => value === points[index - 1][axis])) throw new RangeError(`${name} cannot contain consecutive duplicate points.`);
+    const previous = points[index - 1];
+    if (points[index].every((value, axis) => value === previous[axis])) {
+      const moved = previous.map((value, axis) => axis === 0 ? value + 1 : value);
+      throw invalidField(`${name}[${index}]`, points[index], `a point different from ${name}[${index - 1}], since consecutive duplicate points are not allowed and both are ${JSON.stringify(previous)}; move or remove one, such as ${JSON.stringify(moved)}`);
+    }
   }
   return points;
 }
@@ -92,6 +98,15 @@ function meshFrom(source, maximum) {
   return { positions, normals, uvs, indices };
 }
 
+/** Check a lathe profile of [radius, height] points and return it as numbers. Errors name the field, so a scene recipe adds geometries[i]. */
+export function checkLatheProfile(profile) {
+  const points = pointsFrom(profile, 2, 2, 'profile');
+  if (points.some(point => point[0] < 0) || !points.some(point => point[0] > 0)) {
+    throw invalidField('profile', profile, 'points whose radii (the first number of each) are 0 or more, with at least one radius above 0, such as [[0, 0], [0.5, 1]]');
+  }
+  return points;
+}
+
 /** Revolve a radius/height profile around Y. */
 export function lathe(profile, { segments = 64, startAngle = 0, sweep = Math.PI * 2, maxVertices = DEFAULT_VERTEX_LIMIT } = {}) {
   integer(segments, 3, 2048, 'segments');
@@ -99,8 +114,7 @@ export function lathe(profile, { segments = 64, startAngle = 0, sweep = Math.PI 
   startAngle %= Math.PI * 2;
   finite(sweep, 'sweep');
   if (sweep <= 0 || sweep > Math.PI * 2) throw new RangeError('sweep must be greater than zero and at most one full turn.');
-  const points = pointsFrom(profile, 2, 2, 'profile');
-  if (points.some(point => point[0] < 0) || !points.some(point => point[0] > 0)) throw new RangeError('Profile radii must be nonnegative, with at least one positive radius.');
+  const points = checkLatheProfile(profile);
   checkBudget((segments + 1) * points.length, maxVertices);
   return meshFrom(buildLathe(points, segments, startAngle, sweep), maxVertices);
 }
@@ -134,7 +148,9 @@ function ringFrom(input, name) {
     for (let other = index + 1; other < points.length; other++) {
       const otherNext = (other + 1) % points.length;
       if (other === next || otherNext === index) continue;
-      if (intersects(points[index], points[next], points[other], points[otherNext])) throw new RangeError(`${name} cannot intersect or touch itself.`);
+      if (intersects(points[index], points[next], points[other], points[otherNext])) {
+        throw invalidField(name, `segments ${index} and ${other} cross or touch`, `a contour whose edges never intersect or touch, where segment ${index} runs from ${name}[${index}] to ${name}[${next}] and segment ${other} from ${name}[${other}] to ${name}[${otherNext}]; move one of those points, such as [[0, 0], [1, 0], [1, 1], [0, 1]]`);
+      }
     }
   }
   if (area === 0) throw new RangeError(`${name} must enclose a nonzero area.`);
@@ -243,6 +259,14 @@ function closeTJunctions(geometry) {
   };
 }
 
+/** Check the contour and hole rings of an extrusion. Errors name the field (contour, holes[0]), so a scene recipe adds geometries[i]. */
+export function checkExtrudeRings(contour, holes = []) {
+  return {
+    outer: ringFrom(contour, 'contour'),
+    inner: holes.map((hole, index) => ringFrom(hole, `holes[${index}]`)),
+  };
+}
+
 /** Extrude a simple XY contour and disjoint enclosed holes along positive Z. */
 export function extrude(contour, {
   holes = [], depth = 1, steps = 1, bevel = 0, bevelThickness = bevel,
@@ -257,8 +281,7 @@ export function extrude(contour, {
   if (!Array.isArray(holes) || holes.length > 128) throw new RangeError('holes must be an array with at most 128 rings.');
   const inputPoints = (contour?.length ?? 0) + holes.reduce((count, hole) => count + (hole?.length ?? 0), 0);
   if (inputPoints > MAX_INPUT_POINTS + holes.length + 1) throw new RangeError(`Contours and holes must contain at most ${MAX_INPUT_POINTS} total points.`);
-  const outer = ringFrom(contour, 'contour');
-  const inner = holes.map((hole, index) => ringFrom(hole, `hole ${index}`));
+  const { outer, inner } = checkExtrudeRings(contour, holes);
   const totalPoints = outer.length + inner.reduce((count, ring) => count + ring.length, 0);
   if (totalPoints > MAX_INPUT_POINTS) throw new RangeError(`Contours and holes must contain at most ${MAX_INPUT_POINTS} total points.`);
   const beveled = bevel > 0 || bevelThickness > 0;
@@ -333,6 +356,17 @@ function nurbsBasisFrom(input, count, closed, label) {
   return { order, knots: knots && [...knots], knotMode };
 }
 
+/** Check a curve's closed flag. A single curve (label points) names the field closed, a spline in a list names splines[i].closed. */
+export function checkClosedFlag(closed, label = 'points') {
+  const field = label === 'points' ? 'closed' : `${label}.closed`;
+  if (typeof closed !== 'boolean') throw invalidField(field, closed, 'true or false, such as false', TypeError);
+}
+
+/** Check a curve's tube radius. Errors name the field, so a scene recipe adds geometries[i]. */
+export function checkCurveRadius(radius) {
+  if (!(radius > 0)) throw invalidField('radius', radius, 'a number above 0, such as 0.05');
+}
+
 // One spline: points or a primitive shape, a type (bezier, poly, nurbs), closed, NURBS weights and a trim.
 function splineFrom(input, label) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new TypeError(`${label} must be an object with points or shape.`);
@@ -345,7 +379,7 @@ function splineFrom(input, label) {
     if (input.closed !== undefined || input.kind !== undefined) throw new TypeError(`${label}.closed and ${label}.kind come from shape. Remove them.`);
     ({ points, closed, type: kind } = shapeToSpline(input.shape));
   }
-  if (typeof closed !== 'boolean') throw new RangeError('radius must be positive and closed must be boolean.');
+  checkClosedFlag(closed, label);
   if (!SPLINE_TYPES.includes(kind)) throw new RangeError(`${label}.kind must be one of ${SPLINE_TYPES.join(', ')}.`);
   if (!Array.isArray(points) || points.length < (closed ? 3 : 2) || points.length > MAX_CURVE_POINTS) {
     throw new RangeError(`${label === 'points' ? 'points' : `${label}.points`} needs ${closed ? 3 : 2} to ${MAX_CURVE_POINTS} entries.`);
@@ -415,7 +449,7 @@ function planCurveSet(splines, {
   radius = 0.05, taper, profile, resolution = 12, radialSegments = 8,
 }, labelFirst, growing = false) {
   radius = finite(radius, 'radius');
-  if (radius <= 0) throw new RangeError('radius must be positive and closed must be boolean.');
+  checkCurveRadius(radius);
   integer(resolution, 1, 64, 'resolution');
   integer(radialSegments, 3, 128, 'radialSegments');
   if (!Array.isArray(splines) || splines.length < 1 || splines.length > MAX_SPLINES) throw new RangeError(`splines needs 1 to ${MAX_SPLINES} entries.`);
@@ -540,18 +574,27 @@ export function curve(points, {
   return curveSet([{ points, closed, kind, weights, order, knots, knotMode, trim }], { radius, taper, profile, resolution, radialSegments, maxVertices }, 'points');
 }
 
+/** Check the radius, closed flag and path of a tube and return the path points. Errors name the field, so a scene recipe adds geometries[i]. */
+export function checkTubeInputs(path, radius, closed) {
+  if (!(radius > 0)) throw invalidField('radius', radius, 'a number above 0, such as 0.1');
+  if (typeof closed !== 'boolean') throw invalidField('closed', closed, 'true or false, such as false', TypeError);
+  const points = pointsFrom(path, 3, closed ? 3 : 2, 'path');
+  if (closed && points[0].every((value, axis) => value === points.at(-1)[axis])) points.pop();
+  if (points.length < (closed ? 3 : 2)) {
+    throw invalidField('path', path, `a path with at least ${closed ? 3 : 2} different points once the repeated end point of a closed path is dropped, such as [[0, 0, 0], [1, 0, 0], [1, 1, 0]]`);
+  }
+  return points;
+}
+
 /** Sweep a circular tube along a centripetal Catmull-Rom curve. */
 export function tube(path, {
   radius = 0.1, segments = 64, radialSegments = 12, closed = false,
   maxVertices = DEFAULT_VERTEX_LIMIT,
 } = {}) {
   radius = finite(radius, 'radius');
-  if (radius <= 0 || typeof closed !== 'boolean') throw new RangeError('radius must be positive and closed must be boolean.');
   integer(segments, 3, 2048, 'segments');
   integer(radialSegments, 3, 128, 'radialSegments');
-  const points = pointsFrom(path, 3, closed ? 3 : 2, 'path');
-  if (closed && points[0].every((value, axis) => value === points.at(-1)[axis])) points.pop();
-  if (points.length < (closed ? 3 : 2)) throw new RangeError('The path has too few distinct points.');
+  const points = checkTubeInputs(path, radius, closed);
   checkBudget((segments + 1) * (radialSegments + 1), maxVertices);
   return meshFrom(buildTube(points, closed, radius, segments, radialSegments), maxVertices);
 }
@@ -561,6 +604,14 @@ export function sdfGeometry(value, maxVertices = DEFAULT_VERTEX_LIMIT) {
   planSdf(value);
   return meshFrom(buildSdf(value), maxVertices);
 }
+
+/** The cloud scene geometry: a seeded cluster of puffs as one closed, smooth surface. See docs/modeling.md. */
+export function cloudGeometry(value, maxVertices = DEFAULT_VERTEX_LIMIT) {
+  return meshFrom(cloudMesh(value), maxVertices);
+}
+
+/** The vertex count reserved for a cloud geometry, validated like cloudGeometry. */
+export { cloudVertexEstimate } from './cloud-geometry.js';
 
 /** The vertex count reserved for an sdf geometry, validated like sdfGeometry. */
 export { sdfVertexEstimate } from './modeling-sdf.js';

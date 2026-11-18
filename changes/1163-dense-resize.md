@@ -1,1 +1,0 @@
-- `denseSamples` is judged again on every `resize()`, so a canvas that grows or shrinks across one triangle per pixel changes its MSAA sample count (and render targets); a test pins that every part counts toward the density.

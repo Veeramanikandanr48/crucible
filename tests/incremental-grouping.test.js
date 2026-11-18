@@ -191,3 +191,38 @@ test('parts that differ in one key value never share a batch', () => {
   const grouped = groupPartsIncrementally(null, [shadowing, shadowless, otherMaterial]);
   assert.equal(grouped.batches.length, 3);
 });
+
+// Counts how often the grouper reads a part's material: the grouper reads it for each part it keys or validates.
+function makeCountedParts(parts, readCounter) {
+  return parts.map(part => ({
+    ...part,
+    get material() {
+      readCounter.reads += 1;
+      return part.material;
+    },
+  }));
+}
+
+test('growing a world by slices does work only for the appended parts, not for the prefix again', () => {
+  const sliceSize = 5;
+  const readCounter = { reads: 0 };
+  const countedParts = makeCountedParts(worldParts, readCounter);
+  const readsPerCall = [];
+  let state = null;
+  for (let end = sliceSize; end <= countedParts.length; end += sliceSize) {
+    const readsBefore = readCounter.reads;
+    const grouped = groupPartsIncrementally(state, countedParts.slice(0, end));
+    state = grouped.state;
+    readsPerCall.push(readCounter.reads - readsBefore);
+    const incrementalNames = grouped.batches.map(batch => batch.map(part => part.name));
+    const fullNames = groupParts(worldParts.slice(0, end)).map(batch => batch.map(part => part.name));
+    assert.deepEqual(incrementalNames, fullNames, `prefix of ${end} parts groups as one full grouping`);
+  }
+  const readsBeforeFullRegroup = readCounter.reads;
+  groupParts(countedParts);
+  const readsForFullRegroup = readCounter.reads - readsBeforeFullRegroup;
+
+  assert.ok(readsPerCall[0] > 0, 'the counter must see the grouper read part materials');
+  assert.ok(readsPerCall.every(reads => reads <= readsPerCall[0]), `reads per call never grow with the prefix: ${readsPerCall}`);
+  assert.ok(readsPerCall.at(-1) * 3 <= readsForFullRegroup, `the last slice costs a fraction of a full regroup (${readsPerCall.at(-1)} against ${readsForFullRegroup})`);
+});

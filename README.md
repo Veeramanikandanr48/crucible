@@ -7,7 +7,7 @@
   </a>
 </p>
 
-<h3 align="center">The 3D engine your AI agent drives</h3>
+<h3 align="center">Realtime 3D for the web, shaped by designers and AI agents</h3>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@codepawlhq/crucible"><img alt="npm version" src="https://img.shields.io/npm/v/@codepawlhq/crucible?style=flat-square&label=npm&color=4f4e5a&labelColor=2a282d"></a>
@@ -31,19 +31,36 @@
   <sub>Classroom by Christophe Seux, CC0, from the Blender demo files, path traced in Crucible with Cook</sub>
 </p>
 
-Crucible is a 3D engine for JavaScript with an MCP server for AI agents. It makes 3D easy to understand and easy to do.
+<p align="center">
+  <img src="https://crucible.codepawl.com/previews/feature-clockwork.webp" alt="A gold and steel gyroscope with a glowing teal core, turning, rendered by Crucible" width="32%">
+  <img src="https://crucible.codepawl.com/previews/feature-flicker-fixed.webp" alt="A low camera pan over a warehouse floor with yellow lines and racks, drawn without flicker" width="32%">
+  <img src="https://crucible.codepawl.com/previews/feature-cook-dof.webp" alt="The native path tracer focusing from a red sphere in front to a gold and a purple sphere behind it" width="32%">
+</p>
+
+Crucible is a fast, lightweight realtime 3D engine for the web, with an MCP server for AI agents. It makes high-quality 3D easy to understand and easy to shape.
 
 > **67js → Crucible.** 67js is the old name. The `@codepawlhq/67js` package is deprecated: install `@codepawlhq/crucible` instead. Old 67js.codepawl.com links redirect here.
 
-The agent knows every part of Crucible and carries the heavy steps. It builds the scene, lights it, checks the preview and renders the result. You keep the creative choices and stay in the loop, because the agent shows previews and asks when a matter of taste is open.
+AI agents carry the heavy technical setup: geometry, modifiers, lighting, checks and exports. Designers keep creative control of framing, form, lighting and materials on the same scene recipe, delivering fast web embeds within strict byte and memory budgets.
 
 Scenes built with Crucible open live in the browser on the [showcase](https://crucible.codepawl.com/showcase.html).
 
+## Gallery
+
+<p align="center">
+  <a href="https://crucible.codepawl.com/showcase.html?scene=airport"><img src="https://crucible.codepawl.com/previews/showcase-airport.webp" alt="Airport ramp, rendered by Crucible" width="49%"></a>
+  <a href="https://crucible.codepawl.com/showcase.html?scene=port"><img src="https://crucible.codepawl.com/previews/showcase-port.webp" alt="Container port, rendered by Crucible" width="49%"></a>
+  <a href="https://crucible.codepawl.com/showcase.html"><img src="https://crucible.codepawl.com/previews/cook-monk.webp" alt="A monastery courtyard with a stone well, seen from a desk with an open book, path traced by Cook" width="49%"></a>
+  <a href="https://crucible.codepawl.com/object.html"><img src="https://crucible.codepawl.com/previews/wall-e.webp" alt="A robot model in the object studio, rendered by Crucible" width="49%"></a>
+</p>
+
+Made something with Crucible? [Post it in Show and tell](https://github.com/codepawl/crucible/discussions/new?category=show-and-tell). We feature picked work on the [showcase](https://crucible.codepawl.com/showcase.html#community), with credit.
+
 ## What it is
 
-Crucible is a 3D engine for AI agents and for pages. It has a real-time rasterizer, a path tracer, addons for terrain, vegetation, characters, liquid, vehicles and media export, and an MCP server. A scene is plain data: each part has a geometry, a matrix and a material.
+Crucible is a realtime 3D engine for designers, web pages and AI agents. It has a fast WebGL2 rasterizer, a path tracer, addons for terrain, vegetation, characters, liquid, vehicles and media export, and an MCP server. A scene is plain data: each part has a geometry, a matrix and a material.
 
-An agent builds and changes a scene through the MCP server, looks at PNG previews and renders stills or MP4 video. The goal is to be as capable as Blender and as light as three.js. [docs/goal.md](https://github.com/codepawl/crucible/blob/main/docs/goal.md) defines each part.
+Designers shape composition, lighting and materials directly alongside agents building through the MCP server. Exported scenes stay lightweight on the web and keep strict runtime budgets. [docs/goal.md](https://github.com/codepawl/crucible/blob/main/docs/goal.md) defines each part.
 See the [documentation](https://crucible.codepawl.com/docs.html), the [guide for agents](https://crucible.codepawl.com/llms.txt) and the [FAQ](https://crucible.codepawl.com/docs.html#faq).
 
 ## Install
@@ -256,7 +273,7 @@ They compare matching scenes on the same hardware. They do not show a general sp
 
 Read [CONTRIBUTING.md](https://github.com/codepawl/crucible/blob/main/CONTRIBUTING.md) before you open a pull request. It covers setup, checks, code style and the release flow.
 Coding agents start with [AGENTS.md](https://github.com/codepawl/crucible/blob/main/AGENTS.md), and `npm run preflight` runs the pull request checks locally.
-Questions, ideas and what you made go in [Discussions](https://github.com/codepawl/crucible/discussions). Bug reports: [SUPPORT.md](https://github.com/codepawl/crucible/blob/main/.github/SUPPORT.md).
+Questions and ideas go in [Discussions](https://github.com/codepawl/crucible/discussions), and what you made goes in [Show and tell](https://github.com/codepawl/crucible/discussions/new?category=show-and-tell). Bug reports: [SUPPORT.md](https://github.com/codepawl/crucible/blob/main/.github/SUPPORT.md).
 
 ## Sponsors
 

@@ -318,12 +318,20 @@ export async function decodeGltf({ document, glbBinary, resourceBytes, decoders,
         const decoded = dracoGeometry.getAttribute(name);
         if (!decoded) throw new Error(`Draco geometry is missing ${semantic}.`);
         attributes[name] = decodedAttribute(decoded, document.accessors[accessorIndex]?.normalized === true);
+        reader.applySparseToDecoded(accessorIndex, attributes[name]);
       } else {
         attributes[name] = await reader.readAccessorInSlices(accessorIndex, checkpoint);
       }
     }
     let index = null;
-    if (primitive.indices !== undefined) index = dracoGeometry ? decodedAttribute(dracoGeometry.getIndex()) : await reader.readAccessorInSlices(primitive.indices, checkpoint);
+    if (primitive.indices !== undefined) {
+      if (dracoGeometry) {
+        index = decodedAttribute(dracoGeometry.getIndex());
+        reader.applySparseToDecoded(primitive.indices, index);
+      } else {
+        index = await reader.readAccessorInSlices(primitive.indices, checkpoint);
+      }
+    }
     const targets = primitive.targets ?? [];
     source.attributes = attributes;
     source.index = index;

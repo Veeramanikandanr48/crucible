@@ -6,6 +6,8 @@ export const MAX_MESH_VERTICES = 4_000_000;
 export const MAX_MESH_CORNERS = 16_000_000;
 export const TAG_PREFIX = 'tag:';
 export const GROUP_PREFIX = 'group:';
+/** Point attributes "vector:<name>" of three floats per vertex, such as the ocean's spray velocity; they reach the render geometry as `vertexVectors`. */
+export const VECTOR_PREFIX = 'vector:';
 const RESERVED_ATTRIBUTE_NAMES = new Set(['__proto__', 'constructor', 'prototype']);
 
 const ATTRIBUTE_TYPES = new Map([

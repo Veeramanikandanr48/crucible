@@ -397,14 +397,44 @@ function resolveInstanceLimit(options) {
   return { native: true, count: requested };
 }
 
-function flattenedLimitMessage(limits, triangleCount) {
+/**
+ * How many parts reuse a geometry another part also uses, and the triangles left when each shared geometry counts once.
+ * A flattened trace copies every instance into one triangle buffer, so the limit sees the first number's expansion.
+ */
+export function measureInstanceExpansion(parts, geometries) {
+  const useCounts = new Map();
+  parts.forEach((part, index) => {
+    if (sharesAuthoredGeometry(part, geometries[index])) useCounts.set(geometries[index], (useCounts.get(geometries[index]) ?? 0) + 1);
+  });
+  let instancedNodes = 0;
+  let uniqueTriangles = 0;
+  const counted = new Set();
+  parts.forEach((part, index) => {
+    const geometry = geometries[index];
+    const triangles = geometry.indices.length / 3;
+    const shared = useCounts.get(geometry) > 1;
+    if (shared) instancedNodes++;
+    if (shared && counted.has(geometry)) return;
+    counted.add(geometry);
+    uniqueTriangles += triangles;
+  });
+  return { instancedNodes, uniqueTriangles };
+}
+
+function instancingNote(triangleCount, expansion) {
+  if (!expansion || expansion.instancedNodes < 1) return '';
+  return ` That is ${triangleCount} triangles after expanding ${expansion.instancedNodes} instanced nodes (${expansion.uniqueTriangles} unique): this backend copies every instance into one triangle buffer. Use fewer copies, a simpler GLB, or the Glaze renderer.`;
+}
+
+function flattenedLimitMessage(limits, triangleCount, expansion) {
+  const note = instancingNote(triangleCount, expansion);
   if (limits.native) {
-    return `A native path trace takes at most ${limits.unique} triangles in total, got ${triangleCount}, ${triangleCount - limits.unique} too many. Share geometry between copies (they stay instances) or simplify the meshes.`;
+    return `A native path trace takes at most ${limits.unique} triangles in total, got ${triangleCount}, ${triangleCount - limits.unique} too many. Share geometry between copies (they stay instances) or simplify the meshes.${note}`;
   }
   if (limits.gpu) {
-    return `This GPU path trace takes at most ${limits.unique} triangles in total (what the device's texture or buffer limits hold, up to ${MAX_GPU_TRACE_TRIANGLES}), got ${triangleCount}. Simplify or drop meshes (a crowd can use a lower detail level for the avatars far from the camera), or render the frame with the native Cook backend.`;
+    return `This GPU path trace takes at most ${limits.unique} triangles in total (what the device's texture or buffer limits hold, up to ${MAX_GPU_TRACE_TRIANGLES}), got ${triangleCount}. Simplify or drop meshes (a crowd can use a lower detail level for the avatars far from the camera), or render the frame with the native Cook backend.${note}`;
   }
-  return `A path trace takes at most ${MAX_TRACE_TRIANGLES} triangles in total, got ${triangleCount}. Simplify or drop meshes, or trace on the GPU backend, which holds more when the device allows it.`;
+  return `A path trace takes at most ${MAX_TRACE_TRIANGLES} triangles in total, got ${triangleCount}. Simplify or drop meshes, or trace on the GPU backend, which holds more when the device allows it.${note}`;
 }
 
 function flattenParts(parts, geometries = parts.map(traceGeometry), limits = resolveTriangleLimits()) {
@@ -416,7 +446,7 @@ function flattenParts(parts, geometries = parts.map(traceGeometry), limits = res
     indexTotal += geometry.indices.length;
   }
   if (indexTotal / 3 > limits.unique) {
-    throw new RangeError(flattenedLimitMessage(limits, indexTotal / 3));
+    throw new RangeError(flattenedLimitMessage(limits, indexTotal / 3, measureInstanceExpansion(parts, geometries)));
   }
   const world = allocateWorld(vertexTotal, indexTotal, geometries.some(geometry => geometry.lightUvs));
   let vertexOffset = 0;
@@ -593,7 +623,7 @@ export function attachTracer(scene) {
 /** Local volumes are traced by the CPU path tracer and, for boxes and spheres, the WebGPU final tracer. Every other tracer entry point calls this so none drops them silently. */
 export function refuseLocalVolumes(scene, tracerName) {
   if (!scene.localVolumes) return;
-  throw new RangeError(`environment.localVolumes is traced by the CPU path tracer only; ${tracerName} cannot draw them. Use backend "cpu" (backend "webgpu" draws box and sphere volumes) or remove the volumes.`);
+  throw new RangeError(`environment.localVolumes is traced by the CPU path tracer only; ${tracerName} cannot draw them. Use backend "cpu" (backend "webgpu" draws box, sphere, mesh and grid volumes) or remove the volumes.`);
 }
 
 // The rasterizer's own test (renderer.js `isHidden`): a part hides by `visible: false` or by the `visibility.visible` that a posed scene keys.
@@ -701,6 +731,34 @@ function flattenedRayVisibility(parts) {
  */
 function sharesAuthoredGeometry(part, traced) {
   return traced === part.geometry && !traced.triangleMaterial;
+}
+
+// A matrix tilts a normal map differently from the unit-normal bake unless it is a rotation, mirror and uniform scale (#1844).
+const NON_CONFORMAL_TOLERANCE = 1e-4;
+
+function hasNonConformalMatrix(matrix) {
+  if (!matrix) return false;
+  const columns = [0, 4, 8].map(offset => [matrix[offset], matrix[offset + 1], matrix[offset + 2]]);
+  const dot = (first, second) => first[0] * second[0] + first[1] * second[1] + first[2] * second[2];
+  const squaredLengths = columns.map(column => dot(column, column));
+  const scale = Math.max(...squaredLengths);
+  if (!(scale > 0)) return false;
+  const tolerance = NON_CONFORMAL_TOLERANCE * scale;
+  if (Math.max(...squaredLengths) - Math.min(...squaredLengths) > tolerance) return true;
+  return [[0, 1], [0, 2], [1, 2]].some(([first, second]) => Math.abs(dot(columns[first], columns[second])) > tolerance);
+}
+
+function hasNormalMap(material) {
+  return Boolean(material?.normalMap || material?.layerMaps?.clearcoatNormalTexture);
+}
+
+/**
+ * True when flattening would lose the exact normal-map tilt: the part has a base or coat normal map, a matrix that is not a
+ * uniform scale, and the geometry it was authored with (a baked copy has no matrix left to keep). Cook rebuilds the tilt
+ * from the instance matrix like Cycles; a flattened pack only holds world positions and unit normals.
+ */
+function needsInstanceForNormalMap(part, geometry) {
+  return hasNormalMap(part.material) && hasNonConformalMatrix(part.matrix) && sharesAuthoredGeometry(part, geometry);
 }
 
 function countSharedGeometries(parts, geometries) {
@@ -827,6 +885,8 @@ function buildInstancedTraceScene(parts, geometries, environment, localVolumes, 
     instances,
     materials,
     traceMaterials,
+    // The GPU tracers read this per part flag from the material table; the native kernel reads the instance visibility instead.
+    ...(parts.some(part => part.shadowOnly === true) ? { shadowOnlyParts: Uint8Array.from(parts, part => (part.shadowOnly === true ? 1 : 0)) } : {}),
     lights: resolveLights(environment, limits.lights, parts),
     environment: resolveEnvironment(environment.map, environment.cameraIntensity),
     volume: resolveTraceVolume(environment.volumeFog),
@@ -834,6 +894,19 @@ function buildInstancedTraceScene(parts, geometries, environment, localVolumes, 
     surfaceOffset: extent * 1e-5,
     farDistance: extent * 1e4,
   };
+}
+
+/** True for a trace scene that keeps copies of one mesh as instances instead of flattened triangles. */
+export function isInstancedScene(scene) {
+  return Array.isArray(scene.instances);
+}
+
+/** The triangles a scene holds once per distinct mesh: what the GPU tables carry, and what the triangle limit counts. */
+export function uniqueTriangleCount(scene) {
+  if (!isInstancedScene(scene)) return scene.indices.length / 3;
+  let total = 0;
+  for (const geometry of new Set(scene.instances.map(instance => instance.geometry))) total += geometry.indices.length / 3;
+  return total;
 }
 
 /**
@@ -849,7 +922,9 @@ export async function buildTraceSceneForDevice(allParts, environment, gpuModule)
   } catch {
     deviceLimit = undefined;
   }
-  return buildTraceScene(allParts, environment, deviceLimit === undefined ? {} : { gpuTriangleLimit: deviceLimit });
+  const options = deviceLimit === undefined ? {} : { gpuTriangleLimit: deviceLimit };
+  if (gpuModule.supportsInstancing === true) options.instancing = true;
+  return buildTraceScene(allParts, environment, options);
 }
 
 /**
@@ -869,9 +944,11 @@ export function buildTraceScene(allParts, environment = {}, options = {}) {
   const shownParts = boundsOnlyParts.length ? allParts.filter(part => !boundsOnlyParts.includes(part)) : allParts;
   // A frame where every part is hidden traces the sky or background alone, like the rasterizer (#1806). The BVH and the native kernel need one triangle.
   const parts = Array.isArray(allParts) && allParts.length > 0 && shownParts.length === 0 ? [UNHITTABLE_PLACEHOLDER_PART] : shownParts;
-  const tryInstancing = options.instancing === true && Array.isArray(parts) && parts.length > 0;
+  const tryInstancing = (options.instancing === true || options.instanceNormalMappedParts === true) && Array.isArray(parts) && parts.length > 0;
   const geometries = tryInstancing ? parts.map(traceGeometry) : undefined;
-  if (tryInstancing && countSharedGeometries(parts, geometries) > 0) return buildInstancedTraceScene(parts, geometries, environment, localVolumes, limits);
+  const instancesWanted = options.instancing === true && countSharedGeometries(parts, geometries) > 0;
+  const tiltNeedsInstances = tryInstancing && options.instanceNormalMappedParts === true && parts.some((part, index) => needsInstanceForNormalMap(part, geometries[index]));
+  if (instancesWanted || tiltNeedsInstances) return buildInstancedTraceScene(parts, geometries, environment, localVolumes, limits);
   if (!Array.isArray(parts) || parts.length < 1 || parts.length > limits.parts.count) {
     if (!Array.isArray(parts) || parts.length < 1) {
       if (limits.parts.native) throw new RangeError(`A native path trace takes 1 to ${limits.parts.count} parts, got ${Array.isArray(parts) ? 0 : parts}. Pass at least one part with geometry.`);

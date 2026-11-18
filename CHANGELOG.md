@@ -1,5 +1,323 @@
 # Changelog
 
+## 0.21.0
+
+- Breaking: `bake.irradianceGrid` takes 8 to 40 nodes, so a value that passes validation always fits the 65,536 node cap; 41 to 48 is no longer accepted (use `true`, which still reaches 48 along the longest side). The recipe bake also honours the sun link `environment.keyAffects` (#1218)
+- Breaking: an HDRI (a file, `environment.hdri`, a bundled look) now faces as in three.js and Cycles, a quarter turn from before; add `Math.PI / 2` to `environmentRotation` to get an old scene's look back (#1371)
+- Breaking: a grid volume's `blackbodyIntensity` now gives the physical brightness and Planck colour of Blender's Principled Volume, so existing grid fires render 3 to 4 times dimmer; raise `blackbodyIntensity` or the exposure to get the old look back (#1733)
+- A local volume that emits now feeds bloom in the rasterizer: the volumes are drawn before bloom extraction for a frame with bloom on (#1046).
+- A local volume takes `emissionRamp`, a blackbody (`kelvin`) or a colour ramp (`stops`) read by density, so one fireball grades from a white core to an orange edge in the rasterizer and the CPU path tracer (#1046)
+- A local volume with `lightsScene: true` adds a point light at its emission, so a fireball lights the floor and props around it in the rasterizer (#1046).
+- A scattering local volume takes `scatterOctaves` from 1 to 4, the octave sum of `volumeFog` for the key light, in the rasterizer and the CPU path tracer; 1 draws as before (#1047).
+- A box or sphere local volume can shade the opaque surfaces under it from the key light, in the rasterizer and the CPU path tracer, when `castShadow: true` is set; it is off by default so the default frame does not change (#1047).
+- A scattering box or sphere volume with `shadowDetail: true` shades itself by its own noisy density along the sun, in the rasterizer and the CPU path tracer (#1047).
+- `backend: "webgpu"` draws box and sphere `environment.localVolumes` (smoke, glow, fire) at the same look as the CPU tracer, 23 times faster at 480 by 300 and 13 times at 1080p (#1048)
+- `scene_apply` `add-explosion` writes a whole blast into plain recipe sections from one call: a gas-sim fireball and smoke volume with a white-hot core that lights the floor, sparks, flash, shock ring, dust, rubble, scorch, camera shake and optional fractured debris; particle systems take a `delay`, and exported recipes and render jobs need no extra files (#1050)
+- A scene node takes `rayVisibility` in `scene_create` and `scene_apply`, with `'glass'` as a shorthand that lets shadow rays through a window pane so the path tracer samples sun and sky through it; emitters hidden from bounce rays stay refused, with the reason in `docs/path-tracer.md` (#1081)
+- The showcase page shows three Cook path-traced stills with their credits (#1083)
+- Cook reads a tangent-space normal map as Cycles' Normal Map node does, so a normal-mapped mesh on a non-uniformly scaled object no longer renders brighter or darker than in Cycles, and `render-cycles.py` builds a Normal Map node for parity scenes (#1111)
+- Native film frames get their 8-bit picture from Cook's GPU post stage and a faster PNG encoder, taking a 1080p frame from traced film to PNG in 22 ms instead of 276 ms (#1123)
+- Ambient occlusion no longer draws vertical bands on flat walls seen at a slant (#1126)
+  ![The corner scene with ambient occlusion 0.5: the walls are smooth, with darkening only at the crates, the sphere and the wall corner.](https://raw.githubusercontent.com/codepawl/crucible/evidence-pr-1239/after.png)
+- Guides tag fields newer than the last npm release with {since X.Y.Z}, a test fails when one is left untagged, and an MCP refusal of an unknown field names the installed version (#1131)
+- `parseGaussianSplatSpz` and `parseGaussianSplatSpzAsync` read gzip SPZ splat files (versions 2 and 3, as written by Niantic tools and World Labs Atlas) into the same data as the PLY parser, with the same limits (#1140)
+- `parseGaussianSplatPlyAsync` and `createGaussianSplatsAsync` load large splat files in slices with progress and abort, so the page keeps responding (#1142)
+- The WebGPU path tracer samples the sky through light portals (areaLights with portal: true) with the same density as the CPU tracer and Cook; only the WebGL tracer still ignores them (#1144).
+- The CPU path tracer samples the sky through light portals (areaLights with portal: true), so a room lit through a window converges faster at the same mean; the WebGL and WebGPU tracers still ignore them (#1144).
+- The Blender add-on and the Cycles parity bridge now multiply a light's energy by its Emission node's constant Strength and its colour by a constant colour or a constant-temperature Blackbody, and report other light node setups as not reproduced with the light name (#1153).
+- A chunked native trace packs up to the unique triangles the adapter reports (`maxUniqueTriangles`, 4.79 million on a 12 GB RTX 3060) instead of a fixed 4,000,000, up to a ceiling of 16,000,000, and a scene over the bound is refused with the count, the limit and how many triangles too many (#1158)
+- A native render job and `render:file-cook` check a scene against the adapter capacity before exporting it, fail with one error naming the count, the limit and what to drop, and report the capacity used (#1158)
+- A native trace of zero parts is refused with a message that says to pass a part, and the docs name the tracers that still keep 1,024 parts (#1158)
+- A native trace takes `maximumParts` (up to 1,000,000) instead of 1,024 parts or distinct geometries, so scenes of thousands of separate meshes export without merging, and a scene past it is refused with the count and what to do (#1158)
+- The native `cycles` tracer now starts camera rays at `camera.clipStart`, so a wall between the eye and the clip start is not drawn, and `report.ignored` no longer lists it (#1159).
+- Add `camera.clipStart` to the CPU and WebGPU path tracers, so camera rays start that far along the view axis and a wall between the eye and the clip start is not drawn; the WebGL tracer and native kernel name it in `report.ignored` (#1159).
+- MCP render jobs, scene_create and scene_apply draw grid volumes (`.67vg` files in the grid folder, still or a sequence): the server hands the grid bytes to the preview page by name (#1161)
+- `generateGeometryLods` keeps uvs, colours and normals, so a textured part with levels draws, and `addLodsToDenseParts(parts, { pixels })` gives levels to the big parts of a scene with more than one triangle per pixel (#1163)
+- `denseSamples` is judged on the same part list at construction, on resize and after `replaceParts` (a scene near the threshold no longer flips on its first resize because the ground was counted, and a scene that gains or loses triangles is re-judged) (#1163).
+- `denseSamples` renders scenes with more than one triangle per pixel with fewer MSAA samples (default off), which took a 1.6 million triangle frame from about 3.7 to 3.0 ms at 2 samples (#1163).
+- The colour shader computes the sun shadow coordinate from the world position instead of carrying it as a varying, which cuts about 15 percent of the opaque pass on scans with about one triangle per pixel (#1163)
+- The Cook path tracer matches Cycles more closely: bokeh corners sit at Cycles' blade rotation, metals and glass mixes keep their energy, and soft shadows from many lights clean up faster (#1172)
+- A glTF with its base color map on `TEXCOORD_1` beside maps on `TEXCOORD_0` keeps its base color: the base color map, layer maps and shadow alpha pass now read the second UV set when the map asks for it (#1175)
+- A glTF map whose `texCoord` is above 1 (a normal map on a third UV set, for example) is dropped with a warning naming the material instead of refusing the whole file; a normal map on `TEXCOORD_1` already loads (#1177)
+- Flat water that transmits light (glTF `KHR_materials_transmission` with an `ior` near 1.33) now shows the water reflection of the scene around it (#1178)
+- A glTF file with lights no longer gets the renderer's studio key and fill lights on top of its own: on a test scene mean luma went from 224 to 204, within 1 level of three.js with the same ACES curve (#1178)
+- The home page hero says "67js is now Crucible" under the hero buttons, with the new package name and a link to the changelog (#1183)
+- Native render jobs get 640 MiB of fixed memory allowance instead of 256, sized from measured native + OIDN video jobs, so a 960 x 540 film no longer runs within 50 MiB of the guard (#1186)
+- A native render job on a software Vulkan adapter (lavapipe on a Linux runner without a GPU) gets 2304 MiB more memory allowance, so the first 960 x 540 job no longer fails the memory guard (#1186)
+- Native path traced video jobs with OIDN get a memory allowance of 256 MiB plus 1 KiB a pixel, capped at 2 GiB, and the memory guard error names the limit and the observed and allowed MiB (#1186)
+- The browser GPU path tracer (WebGL2 and WebGPU) takes as many triangles as the device's texture or buffer limits hold, up to 2,000,000, so a skinned crowd over 400,000 triangles can be traced; a scene past the limit is refused with its triangle count, the limit and what to do (#1188).
+- The agent skills match the code again: path traced `stills` and `video` jobs, the 1920x1080 pixel cap, all pass names, and the mesh and walkmap tools (#1191).
+- `scene_capabilities` reports `jobs.maximumFps` as 60 and `jobs.maximumFrames` from the same constants the render job validator uses, instead of a stale 30 (#1193)
+- Fixed render jobs with passes (`depth`, `normal`, `albedo`, `objectId`, `emission`) failing with WebGL error 1282 on a scene with a smooth metal part: the reflection probe now looks up its uniforms again when a pass links a new shader program (#1196).
+- `exportGlb` and `scene_export_glb` keep the JPEG, PNG or WebP bytes of an imported texture instead of re-encoding it as an uncompressed PNG, so an imported 1.8 MB catalog asset no longer exports at about 6.5 times its size (#1197)
+- `scene_look` steps a busy PNG down by 0.75 until it fits the 1 MiB budget and reports the size it returned, and `closed-room-without-bake` no longer fires on a lone object whose bounds centre is inside it (#1197)
+- The site wears the Crucible brand: the pot mark and Plus Jakarta Sans Bold wordmark, Paper and charcoal themes with a light and dark switch, and the shared brand fonts (#1199)
+  ![The Crucible mark over a container port rendered by Crucible](/og.jpg)
+- A render job with `passes` no longer fails with GL error 1282 on a scene that has a baked irradiance grid: the grid looks its uniforms up again for the program a pass links (#1204).
+- glTF accessors are now decoded one primitive at a time during conversion and released after their last use, and `maxDecodedBytes` sets the decoded-bytes budget (#1210)
+- A native film or stills job waits one event-loop turn after each frame, so the addon's frame planes are freed and the Node process no longer grows about 9 to 13 MB per frame (#1211).
+- A big thin ground box beside dense props no longer fails `scene_create` with "Set maximum size exceeded": the flush search stops at its tested-pair limit and reports the part as unchecked, and a 2 cm slab is no longer flagged `collapsed-node` (#1216)
+- A placed asset material override (and a recipe material) takes an `emissionMask` ramp along an object axis, so a part glows only at one end while its texture and shading stay (#1217)
+- A placed asset's `asset.materials[]` override can take an `id` that `motion` material tracks drive, so `emission` and `emissiveColor` fade a heat glow without rebuilding the scene (#1217).
+- A `scene_apply` whose rebake cannot run (part cap, path work limit) now keeps the edit, drops the old bake and returns a `bake-skipped` warning with how to fit, and the irradiance grid and probe part errors say they trace on the CPU (#1218)
+- A pose edit through `scene.apply` at 961 parts now takes about 2 ms instead of about 60 ms, and a game frame that sends the same poses as the last one skips `scene.apply` (#1219)
+- A render job whose frame is cut to fit the render budget now names the budget the full frame needs and the `--memory` value to restart with, instead of only the smaller size (#1221)
+- Line art can be set per node: `environment.lines.nodes` takes `{ "<node id>": { lines: false | silhouetteOnly, color } }`, and the `objectId` pass metrics carry `objectNodes` (#1223)
+- The WebGL2 GPU path tracer draws every part again: on ANGLE D3D11 it drew only the first part of a scene, because a nested texel fetch read every later material as shadow-only (#1228)
+- An `image` render job takes up to 3840x2160 pixels instead of 1920x1080, and an image frame the `--memory` budget would shrink is refused with the `--memory` it needs; stills and video keep 1920x1080 (#1241)
+- The WebGPU real-time tracer and the GPU light bake bound their scene by the device's triangle limit, up to 2,000,000, like the still render, instead of 400,000 (#1242).
+- The path tracers, native Cook included, read a map on `TEXCOORD_1` with the second UV set, so a glTF base color on `TEXCOORD_1` beside a `TEXCOORD_0` normal map no longer samples UV (0, 0); a part with a map on `uvChannel` 1 and no `geometry.lightUvs` is refused with what to set (#1243)
+- `crucible-mcp` stops at startup with the real message for a bad `--packs`, `--assets`, `--audio`, `--ffmpeg`, `--browser` or `--branches`/`--relations`/`--findings` value, `scene_restore` rejects two targets, and terrain and geometry-budget errors name the range, id and numbers (#1244)
+- Docs and llms.txt now say the `quality` render setting ships, the checkpoint limit is 16, and the tool-cost total points to `scripts/measure-tool-cost.mjs` instead of a stale number; a test keeps the limit in step (#1245).
+- A failed job release, status write or browser launch no longer breaks the MCP runtime: a retry finishes the release, `close` always frees the store lock, and a recipe over the 64 MiB asset limit is refused before any file is read (#1246)
+- Scene builders refuse bad input when it is set: text outside printable ASCII names the character and font, motion tracks are checked for out-of-range values, and a terrain `seed` must be a whole number from 0 to 2147483647 (#1247)
+- glTF import names the field and index of a `null` or non-object entry in `nodes`, `meshes`, `accessors` and the other arrays instead of a "Cannot read properties" TypeError (#1248)
+- glTF import and export reject more bad files by name: dangling indices name their field, meshopt buffer views count against `maxDecodedBytes`, and `exportGlb` throws when a light map or `uvChannel: 1` map has no `geometry.lightUvs` (#1248)
+- The site build now publishes every guide that `llms.txt` and the other guides link to, the install guide no longer links a release the site dropped, the docs say the three optional packages are source-checkout only, and the addon check accepts release candidate versions (#1249)
+- A render job's deadline counts render time only, its queue wait is bounded apart, and `scene_create` starts a fresh runtime after a failed one without a server restart (#1256)
+- A render job that hits its elapsed deadline under a shared GPU now gives the scene page 120 seconds to come back, and its failure says to submit the job again (#1256, #1224).
+- `crucible-mcp` takes `--gpu-queue` and `--gpu-queue-wait`: an optional queue command that looks, reviews, bakes and render jobs wait for before they take the GPU, so the server can share a card queue (#1258)
+- The path tracer export keeps an area light aimed along `up` as a rectangle, reads texture `wrapS` and `wrapT` per axis on every tracer, and turns skinned normals correctly (#1259)
+- A client or authority restarted on the same peer id now resyncs on its own instead of staying silent (#1262)
+- `startGame` no longer moves a player or NPC under a translated parent on the first frame, and the `restart` rule action, the R key and the new `game.restart()` put the game back at its start, so a won or lost exported game can be played again (#1263)
+- Render jobs count frames without float noise, `render-media` refuses audio shorter than the video, and a tiny `audio.offset` reaches ffmpeg as a plain decimal (#1264)
+- `crucible-addon-check` resolves the entry like the server, rejects unsatisfiable peer ranges, accepts `--version=X` and has `--help`; `crucible-mcp --help` lists every flag (#1265)
+- Disposing a renderer made with `deferProgramLink` now frees the programs still linking, and `resize()` on a lost context returns instead of throwing (#1266)
+- A looping clip retargeted with `retargetClip` or exported from an authored rig now ends on its end pose instead of the first pose, and `createCrowd` throws a `RangeError` for bad `columns` and `size` (#1267)
+- Volume fog detail fields, the volume fog density motion track (now 0 to 10), a mesh volume's missing part and a second grid volume fail when the scene or an edit is built, with the render-time messages (#1268)
+- Mesh `bevel` caps `profile` at 0.99 and shrinks the overlap clamp for concave profiles, `inset_region` clamps thickness at the face limit and reports it, and `lintMesh` with `geometry: true` flags `folded-face` (#1269).
+- The games runtime calls `onEvent` for every event and caps only the stored log, a rules part starts as hidden as the scene node it is named after unless it sets `visible`, and `reportContact` is ignored after the game is won or lost (#1281).
+- Asset loading counts a textured pack GLB at its embedded size, and the PLY splat loader skips elements before `vertex`, accepts CRLF headers, and rejects non-finite scales and a non-positive `maximumCount` with a clear error (#1282).
+- `remesh` no longer returns an inflated or non-manifold shell for a cube, `remesh` and `boolean` reject an inside-out mesh and name `flip_normals`, and `subdivide` no longer fails on a loose vertex (#1283)
+- `render-media` keeps the audio on the browser-encoded H.264 path and ends PCM and AAC audio with the picture, fails a video that lost its audio, writes 8 distinct stills as `frame-0` to `frame-7`, and rounds a derived video size to even (#1284)
+- `remesh` no longer returns an edge shared by four quads on thin, bumpy surfaces; when it cannot separate the sheets, it throws and names a different `voxelSize` (#1291)
+- The WebGL and WebGPU path tracers read each map of a material with its own UV set, so a floor with a `TEXCOORD_0` base colour and a `TEXCOORD_1` emissive map matches the CPU tracer; a device with limited texture or buffer size now holds about 10 percent fewer triangles (#1300)
+- An `sdf` geometry now splits saddle cell vertices the way `remesh` does, so every edge joins exactly two quads when parts touch along an edge; a saddle it cannot separate throws an error that names the fix (#1302).
+- A placed asset takes `flatten: { color?, unlit? }`, which sets one flat colour or unlit on every material of that asset in one call and leaves the rest of the scene unchanged (#1303)
+- The smokes `film-timeline`, `object-motion-blur` and `path-tracer` ask `scene_render_result` for the detailed answer, and the render docs and skill say file digests come with `response_format: "detailed"` (#1304).
+- `scene_create` and `set-environment` accept everything `scene_export_recipe` writes, including all joint fields and motion track `extrapolation`, and a malformed motion track names its bad field and the allowed ones (#1311)
+- The shipped guides and the build-crucible-scene skill now import only public subpaths, and new addon entries `crucible/addons/reflection-probes`, `fracture`, `morph` and `skinning` back the examples that had none (#1312)
+- Memory and size limits now agree with their messages: an `.hdr` over 8 MiB is refused like a `.cube` over 4 MiB, and `scene_asset_catalog` skips an oversized `.hdr`, `.cube` or image with a reason in `skipped` instead of failing the listing (#1313)
+- Pack zips and the `sha256` in `/packs/index.json` no longer change with the checkout's line endings: `.gitattributes` pins text files to LF, and `createZip` turns CRLF into LF in text entries, so a Windows checkout and CI publish the same archive hash for the same SHA (#1314).
+- An image whose size cannot be read from its header is refused before decoding with an error that names the file and the frame limits, and a JPEG with a restart marker before its frame header can no longer slip past the size limit (#1319)
+- MCP errors name what to change: a review camera lists the fields it rejects, a stale revision gives the current one, a path traced job far over the 400000 triangle cap of the cpu tracer is refused at `scene_render_submit` with the count, and an unknown `scene_capabilities` topic suggests the nearest one (#1325)
+- The docs and the render jobs skill now say `npm install @codepawlhq/crucible-denoise-oidn` instead of "not on npm yet", and the guides document `jobs.maximumFps`, `jobs.maximumFrames`, `emissionFresnel` and the adaptive resolution `raiseBelow` option (#1327)
+- `@codepawlhq/crucible-denoise-oidn` is now published to npm beside Crucible, so OIDN installs with an npm install of Crucible (#1327)
+- The website matches codepawl.com: light by default with a dark mode on the header button, a plain header bar, captions under the showcase pictures, 8 px controls and the pot's metal as the only orange (#1333)
+- A closed room's walls, ceiling and props now get the sky they can see traced into their vertices, so a sealed room renders near black like the path tracer instead of as bright as a room with a window (#1334).
+- The wavelet denoiser leaves far less blotchy grain on flat walls at 256 samples: its luminance guide ignores a lone noisy pixel (#1335)
+- A recipe path such as `environment.lightDirection` written as a motion track (`target`, `keys`) now fails with an error that names the `sun` track (`direction`, `color`, `intensity`) that moves the key light under any sky; the docs say so (#1342).
+- The flush-face search keeps its triangles in flat arrays instead of one object each, so a 200k triangle GLB peaks at about half the browser heap while a scene loads, and `scripts/measure-glb-heap.mjs` measures it (#1343)
+- `loadGltf` keeps a `KHR_materials_ior` above 2.5 (exporters write 1000) at 2.5 with a warning instead of refusing the file (#1347)
+- The WebGPU path tracer megakernel now compiles with FXC, so the bundled Chromium on Windows can run the GPU tests, and the render stays byte for byte the same on DXC (#1350).
+- A camera `clipStart` at or past `far` is refused with a message that says what to pass; the MCP preview's native export and both real-time tracers now report that they ignore `clipStart` (#1351)
+- A recipe scene that leaves `shadow` out and is wider than the default 7 m view now gets a sun shadow view fitted to its bounds (three automatic cascades past 40 m), so a sealed room stops leaking sun; a recipe that sets `shadow` is unchanged (#1359)
+- Look change: the light an HDRI gives a surface is now an exact cosine convolution of the map, so shade next to a strong sun no longer comes out up to 50 percent off and matches three.js within 5 percent (#1374)
+- The site header gives Marketplace an icon, live-example code sits on a tinted surface, and the sliders in docs examples show their value with brand colours and focus states (#1375)
+- Glass that transmits light now reflects the reflection probe placed on it, and a blended part keeps its specular at full strength when its opacity drops, so a glass wall and a faint blend glass show the room and the sky instead of fading with alpha (#1385)
+- A rules input trigger on an action the game does not bind (anything but jump or run) is now refused by set-game with the actions to use, instead of crashing startGame on its first step (#1387)
+- Game rules arithmetic whose result overflows or is not a number now gives 0 instead of leaving a variable at Infinity or NaN (#1388)
+- Live physics fixedUpdate rejects a NaN step, and raycast, shapeCast and overlap give the query options error for null, both naming what to pass (#1389)
+- A film timeline frame that lands on a shot cut now shows the later shot even when shot lengths such as 0.1 s and 0.2 s sum with float error (#1393)
+- A particle emitter from a scaled mesh now emits from vertices at the stated `normalSpeed` and orients instances with unit normals (#1396)
+- A sound with `pitchVariance` no longer throws a range error from `play` at low pitches (#1397)
+- `motionBlur.objects` now rejects negative, NaN and text values instead of ignoring them (#1398)
+- A curve through a repeated point, with a duplicated end control point or with repeated trailing points (poly and NURBS) now builds instead of throwing "Cannot read properties of null"; the direction there comes from the nearest distinct point (#1399)
+- A glTF accessor or sparse block with a negative or fractional byteOffset now fails with an error naming byteOffset instead of reading the wrong bytes (#1400).
+- A glTF accessor that sets normalized on floats or 32-bit integers now keeps its values instead of decoding to NaN (#1401).
+- Library calls `bevelEdges`, `subdivideMesh`, `loopCut`, `bisectPlane`, `resampleCurve`, `resampleSamples` and `filletCurve` refuse NaN, missing and unbounded inputs with an error that names the parameter, the value and the allowed range, and share their limits with the recipe layer (#1405)
+- Make `fitOrthographicHeight` throw for a view whose up is parallel to the view direction, whose eye equals its target or whose vectors are not finite, instead of returning 0 or a meaningless height (#1406)
+- Make `createCameraSampler` reject empty frames, a non-positive fps, malformed frames and a non-finite sample time with errors that say what to pass (#1407)
+- A glTF node with a `matrix`, `translation`, `rotation` or `scale` of the wrong shape, or a zero quaternion, is refused with the field named instead of reported as a singular node (#1409)
+- A glTF data URI accepts a capitalised `;BASE64` marker, and a bad payload says to use standard base64 instead of throwing a bare decoder message (#1410)
+- A glTF TRIANGLE_STRIP, TRIANGLE_FAN or unknown primitive mode is refused with its name, mesh and primitive and the fix (#1411)
+- Editing an imported mesh keeps the UVs of a face that has a real corner at UV 0,0 and rebuilds only faces with no UVs (#1416).
+- `scatterVegetation`, `createGrassClump` and `createFlowerPatch` check their options and throw a RangeError with a valid example instead of crashing, hanging or running out of memory (#1417).
+- The MCP catalog decode refuses an external glTF buffer or image uri instead of fetching it, with an error that names the uri (#1418).
+- Fix the material snapshot so a fast-path update with a changed `emissionFresnel` or `emissionMask` throws instead of being ignored (#1419).
+- Terrain ground normals on the outer border now use the real span between samples, `height` accepts plain and Float64 arrays and rejects other non-object values, and `update` rejects a non-finite eye position (#1420)
+- GLB export now rejects lightUvs of the wrong length and empty, non-finite or unsorted animation keyframes with errors that name the fix, and writes a Float32Array light map tint as a JSON array (#1425, #1426, #1428).
+- Navmesh and crowd bake refuse a reversed obstacle footprint, non-finite or out-of-range geometry (#1427, #1429) and a palette of more than 7200 frames (#1430), instead of building a silently wrong or oversized result.
+- Cloth `step` takes zero time as a no-op and rejects a negative, NaN or over one second `deltaSeconds`, `bakeCloth` rejects a bad `frameCount` or `framesPerSecond`, `sampleClothFrames` rejects a NaN time, and `wakeTrail` no longer returns NaN points for a zero lifetime or a missing speed (#1431)
+- Pose solvers refuse a zero aim `forward` or two-bone `bendToward`, and a morph-only layer refuses a non-finite `reference`, instead of silently doing nothing or writing NaN weights (#1436, #1437, #1438)
+- GLB export no longer crashes on a skinned part without a matrix, folds an emission below 1 into emissiveFactor instead of an invalid emissiveStrength, and keeps the negative scale of an animated mirrored node (#1441, #1442, #1443).
+- A scene query now hits a part after its world matrix moves in place, `raycast` throws on a NaN or non-number `maxDistance` instead of reporting a miss, and a rig with a zero-scale `rootMatrix` throws instead of filling the pose with NaN (#1444, #1445, #1446).
+- Fix `trianglesIntersect` for a zero-area first triangle, `floatToHalf` rounding of subnormal halves, and make `RenderTargetLedger.record` throw on an unknown format or bad size instead of reporting NaN bytes (#1450, #1448, #1449).
+- A light linked to a group node is now reported as an unknown name instead of lighting nothing (#1453)
+- Kernel offload no longer reuses another call's cached result for look-alike inputs, no longer hangs when a worker answer cannot be read, and runs a self-referencing input inline (#1455, #1456, #1457).
+- Fix three silent faults in the fog and local volume code: a moved fog box leaks its old sky texture, the shadow ambient cache ignores the measure it is given, and packing accepts a grid volume that was never bound (#1463)
+- `scene_apply` fracture-node on a node that already has a physics body now names `node` and says to drop that body with set-physics first, instead of blaming `physics.bodies[n].node` after the node was replaced (#1466).
+- A path-traced scene with a negative, fractional or missing index, or a NaN in uvs or colors, and a real-time tracer with a bad `historyLimit`, `filterIterations`, `cacheCellSize` or `resolutionDivisor`, now stop with a message that names the part or option (#1467, #1461, #1462)
+- A pack JSON string that a browser reads as a remote address, such as a backslash form or a scheme with a tab inside, is now refused (#1468)
+- An addon file in a folder whose name starts with two dots is no longer refused as outside its package (#1469)
+- The pack index build refuses an `--out` folder that overlaps `--packs` instead of deleting the packs (#1470)
+- A `.cube` look with a bad DOMAIN line or a malformed row is refused, and a NaN or infinite channel gives a finite display colour instead of a NaN pixel (#1476, #1475).
+- A zero-size fog box no longer gets NaN sky grid cells, tree sky matching no longer writes NaN when leaf coverage is zero, and an empty crown says what to pass (#1477, #1478, #1479).
+- Closed-mesh check for `softBody.pressure` now rejects a triangle wound the wrong way, and liquid optics keep the default for an undefined field and reject an unknown field (#1483)
+- Compressed textures with a zero, negative or fractional base size or a mip chain whose levels do not halve, and texture sequences given a NaN or infinite time, now throw an error that says what to pass instead of failing later (#1489, #1490).
+- Name the track and keyframe in motion validation errors for a non-array value, repeated times and an empty or malformed keyframe list (#1492, #1493, #1494).
+- Object reflections are traced again when only `environment.sky` changes (#1495)
+- A `meshEdits` entry that is not an object is reported as that entry instead of a character index (#1496)
+- `lintMesh` with `geometry: true` no longer reports a false self-intersection on a prism over a concave outline, and the `occlusion` measure of `vertex_group` skips zero-area faces instead of throwing (#1497, #1498)
+- A drive wheel that gives both `node` and `nodes` is rejected with a field error instead of silently ignoring `node` (#1502)
+- `exportGlb` throws on texture sampler wrap or filter values that are not glTF enums and on a `boxMapAxis` outside 0, 1 and 2, and `exportObj` throws when `geometry.uvs` or `geometry.normals` does not match the vertex count, instead of writing an invalid file or dropping the data (#1503, #1505)
+- A part that the flush pass ranks and that carries baked `lightUvs`, `skyVisibility` or `surfaceMasks` no longer reaches the path tracer with NaN lightmap coordinates (the demo room window-top had 507 of them), and the path tracer now refuses non-finite `lightUvs` (#1504)
+- A mesh particle emitter no longer emits from a triangle or edge outside its vertex group when the random draw is exactly 0 (#1511)
+- `maximumInstances` and `maximumVoices` must be whole numbers; a fractional limit used to let one more voice play (#1512)
+- `markersCrossed` and `emitMarkers` throw for a NaN or missing clip time instead of firing no cues (#1513)
+- A looping clip or a repeating cycles modifier sampled on a cycle start at a fractional frame rate, such as frame 9 of 30 fps on a 0.1 s clip, now shows the first pose instead of the last (#1514, #1515)
+- An animated vehicle player now defaults to the speed drive and refuses an intentSpeed drive at set-game, instead of crashing on the first step (#1517); a physics listener that disposes the system no longer lets later listeners run on the freed world (#1518).
+- `createTerrain` rejects a non-positive or non-finite `lodDistance`, and `scatterVegetation` rejects a bad `scale` maximum or an infinite `mix` weight, instead of silently building empty terrain or NaN instances (#1519, #1520, #1521).
+- `crucible-addon-check` now fails a `package.json` that is not a JSON object, refuses a repeated `--version`, and fails an entry that is a folder (#1524, #1525, #1526).
+- A shadow casting light with a range of 0.05 or less no longer writes a NaN or flipped shadow matrix, and cascaded shadows keep their splits ordered when `maximumDistance` is nearer than the camera near plane (#1530, #1531).
+- Calling `createNetcode(...).init` twice without `dispose` no longer leaves the first transport subscription live, so messages are not handled twice (#1532).
+- A `game.restart()` whose physics rebuild fails now sets `game.physicsError` and makes the physics step throw the cause, instead of leaving a silent dead world (#1533).
+- A camera with an `fStop` now focuses the raster depth of field at `camera.focusDistance` when it is set (the path tracer and Blender already did), and a non-positive `fStop` throws (#1536)
+- The real-time path tracer refuses a `width` or `height` that is not a whole number of pixels, and names `width` and `resolutionDivisor` when the traced size leaves 16 to 4096 (#1538)
+- `edgeAngle` reads 0 next to a zero-area face, mesh volumes measure the positions and indices a part holds now, and empty or NaN positions get a clear error (#1539, #1540, #1541)
+- A cached modifier stack result is checked against the current vertex and face limits, and realized instance geometry keeps one geometry record per distinct content, so the same scene builds to the same recipe (#1545, #1546).
+- `knife_project` no longer fails on a line along existing edges, `grid_fill` handles long loops within a vertex budget, and `fill_holes` stops reporting an Infinity limit (#1547, #1548, #1549)
+- `meshFromGeometry` refuses uvs or colors of the wrong length, a face tag with values above 1 now combines correctly in `selectFaces`, and a sculpt edit with non-array strokes names the field (#1552, #1553, #1554)
+- The splat PLY loader drops a splat with any non-finite field (a scale that overflows included, which used to throw) and reports `skipped: { count, fields }`, throwing only when no splat is usable; createGaussianSplats refuses a covariance that overflows 32-bit floats, naming the splat (#1558)
+- A glTF sparse accessor with a fractional, negative, missing or too large count, or without indices or values, now fails with an error naming sparse.count, sparse.indices or sparse.values instead of a typed array error or a silent skip (#1563).
+- Light profiles with a near zero axis value, IES headers with a fractional angle count and GPU bakes of spot cones narrower than cosine precision no longer give Infinity, a wrong error or a NaN edge (#1566, #1567, #1568).
+- An animation graph state with `loop: false` over a looping clip now holds the clip's last frame instead of snapping back to its first frame (#1569)
+- glTF import normalizes the direction of a scaled spot or directional light, skips one scaled to a zero direction with a warning that names the node, and ignores a non-numeric light range with a warning (#1573)
+- createCameraSampler rejects a frame whose eye equals its target and an fps that makes the duration infinite (#1574)
+- A kernel worker request with an unregistered name (including `toString` or `constructor`) now answers an unknown kernel error, `encodeVolumeGrid` refuses channel names and sizes that `decodeVolumeGrid` rejects, and a grid header that is not a JSON object says so (#1575, #1576, #1577).
+- Vegetation scatter errors and clearings are exact: an area off the ground names `vegetation.scatter.area`, a node exclusion follows the node's world position, and vertex group errors in particles, cloth and exclusions name their list index (#1579, #1580, #1581)
+- A motion track on the environment kind with keyIntensity, keyColor or keyDirection now says the key light is the sun kind and names the sun track to use (#1585)
+- Refuse mismatched OIDN buffers, release the OrbitControls listeners on dispose and refuse short or out-of-range geometry in toThreeObject (#1586, #1587, #1588).
+- The Blender add-on keeps a Roughness, Metallic or Alpha constant when its image has no pixels instead of exporting an empty texture, and notes an anamorphic aperture ratio it cannot render (#1589, #1591).
+- Terrain hole errors and `scene_inspect` path query errors now name the exact field (`terrain.holes[1].radius`, `path.from`, `path.avoid[1]`) instead of a bare message or a generic `id` (#1592)
+- glTF import clamps negative skin weights to 0 and renormalises each vertex (an all-negative vertex binds to joint 0), with one warning per primitive that counts them, instead of refusing the file (#1595)
+- Grass and clutter fields refuse an area that needs over 262144 tiles, `filletCurve` rejects an arc segment count of 0, a fraction or over 64, and field `div` and `mod` give 0 for a divisor so small the result overflows (#1596, #1597, #1598)
+- three-compat sums several DirectionalLights, honours every rotation.order and rejects a torus radius of 0; three-bridge clamps an InstancedMesh count to its matrix array with a warning (#1599)
+- A vegetation exclusion that mixes min/max with center, radius or node, a hair `swayRate` without `sway`, and a `radius` on a box particle emitter are now refused with an error that names the fix instead of being ignored (#1603, #1604, #1605).
+- The Blender add-on exports the camera's own clip end, says so when every mesh has no triangles, expands `//` paths for the tracer folder, and refuses a NaN or infinite environment cap (#1608, #1609, #1610, #1611).
+- `triangulate`, `createStreaming`, `createInput` and the crowd `setTimes` refuse bad input with a named error, `crowdFrameBlend` shows the first frame for a non-finite time, and input `dispose` finishes every source before rethrowing (#1617, #1618, #1619, #1620)
+- Physics collider limit errors name the node by its list index, `nodes[1].geometry`, instead of putting the node ID in the brackets (#1622)
+- A crowd `farDistance` is measured in the space of the crowd instances, so a crowd under a moved parent switches to the far rate by its real distance from the camera (#1623)
+- The live runtime retries a system whose init threw, keeps time finite after one NaN clock reading, and an arc shape refuses a span wider than half a turn (#1625, #1626, #1627).
+- Look up a part's matrix by the part before its name in the closed-room, sky openness, ground bounce and sun bounce tests, so glTF parts that share a name keep their own matrix (#1628)
+- Crowd `farDistance` follows a parent group that has a motion track: the camera distance is measured from where the parent is at that time, not where it was when the scene was built (#1629)
+- Mesh normals: weighted_normal falls back to the face normal, then +Z, for a zero-area face instead of writing a zero normal (#1631), and cornerNormals refuses a NaN, negative or oversized sharpAngle (#1632).
+- A ragdoll rig with a later parent, a repeated bone id or a bone that is its own parent is refused when built, camera rigs ignore a time step that is not above zero, and `buildSprayGeometry` refuses a bad `maxPoints` or `radius` (#1633, #1634, #1636)
+- `projectUv`, `packUvIslands`, `unwrapUv` and `bisectPlane` refuse an unknown mode or axis, a margin outside 0 to 0.2 and a bad distance with an error that names the field (#1638, #1640, #1641).
+- Fix three edge cases from a bug hunt: the render target ledger refuses negative sizes, assembly layouts ignore inherited object keys, and a clutter mask returning NaN places nothing (#1642, #1643, #1644).
+- A sealed room whose glTF parts share one name is now recognised as a closed room by the floor sky trace, and object motion blur gives each part of a shared name its own motion (#1645, #1646)
+- Radiance .hdr files in the original format, where a 1,1,1 pixel repeats the previous pixel, now load instead of reading wrong or failing as truncated (#1650)
+- `createClutter` refuses a seed that is not a finite number, as grass and terrain already do, instead of scattering one fixed layout or joining a string seed into its hashes (#1652).
+- Refuse a NaN, Infinity or non-number seed in `createGrass` and `createTerrain` (noise height), and a non-finite budget in `createSlicer`, with errors that name the field; fractional seeds still truncate (#1652)
+- Fix unsubdivide losing every face tag, and boolean cutterFaces counting faces of earlier booleans when a cutTag is reused (#1653)
+- Spume whitewater skips points with NaN or infinite values and `partsForFrame` clamps an out-of-range frame instead of throwing (#1655).
+- Hair roots stay finite when a surface vertex has a NaN or infinite position or normal (#1656).
+- Game setup no longer hangs on scene nodes whose parents form a cycle, the NPC path follower system skips the loop's zero-length first frame, and `createLookAt` and `createFootPlacement` ignore a non-finite pose time instead of staying NaN (#1660, #1661, #1662)
+- `uploadTextureInSlices` refuses short RGBA data and a zero size before any GL call, and `effectsWithFStop` accepts a camera without a target like the renderer does (#1664, #1663)
+- Refuse a NaN or out-of-range `minVertices` and `angle` in `triangulateFaces` and `splitSharpEdges` when called directly, instead of returning an unchanged mesh (#1666)
+- Fixed three agent-facing bugs: a branch snapshot now copies the forked recipe instead of sharing it, a tail light with a non-numeric `off` or `on` emission is refused instead of driving NaN, and an image sequence time that overflows frame arithmetic is refused instead of picking frame NaN (#1669)
+- Refuse an irradiance grid resolution under 2 or samples under 1, an odd probe map width and an unreachable adaptive `raiseBelow`, instead of writing NaN grids, dropping probe rows or pinning the resolution at its minimum (#1672)
+- A non-finite look-at target or foot groundOffset no longer throws each frame: it keeps the last good value and warns once per controller (#1675)
+- `flatten` without a normal now refuses a closed mesh instead of squashing it onto a random plane (#1679)
+- `buildWithKernels` no longer hangs when its kernel worker goes silent: a new `kernelTimeoutMilliseconds` option (default 60000, above 0, at most 3600000) ends the worker and finishes the build inline (#1681).
+- Fix three LOD input bugs: `generateMeshLods` gives `relativeError` 0 instead of NaN for a zero-extent mesh (#1682), `addLodsToDenseParts` checks `ratios` on a sparse scene too (#1683), and `generateAssetLods` names a part that has no geometry (#1685).
+- split_edges and delete_loose (and the other edits that rebuild from polygons) now keep vertex groups and other point attributes: a split vertex copies its source vertex's values and removed vertices drop theirs (#1684)
+- `box()` now refuses a bevel too small to move its core instead of returning NaN normals, and `text()` draws a glyph whose overlapping contours start inside each other instead of throwing a TypeError (#1686, #1687)
+- A world renderer with no `shadowBounds` target or extent fits the sun shadow view to its shadow casters, so the shadow bias stays thinner than 0.2 m walls and a closed room no longer shows sun lines along its seams (#1695).
+- The MCP server decodes Draco-compressed GLBs in the asset catalog and packs with the optional `draco3d` package, so an agent can place a Sketchfab or NASA download as it is (#1698)
+- `subdivide` and `loop_cut` keep point attributes such as vertex groups: new points blend their sources, and integer values take the first one (#1704)
+- The MCP server transcodes KTX2 textures of catalog GLBs to PNG with the optional `three` package, so an agent can place an optimised download as it is (#1709)
+- Add focusDistance (metres, with fStop) to the recipe camera so an agent can focus on a subject without moving the camera target (#1711)
+- Dispersive glass keeps signed spectral weights as Cycles does, so prism fringes match its saturation, and negative pixels are clamped before OIDN and the display transform (#1714)
+- Glass can fringe into colour: a material `dispersion` from 0 to 10 reaches the native path tracer, and glTF `KHR_materials_dispersion` is read instead of ignored (#1714)
+- Two soft volumes that overlap are marched together, so a soft edge no longer shows a hard slab where the other volume starts (#1722)
+- `scene_look` no longer fails on a mesh local volume that names a node added by `scene_apply`: the renderer now keeps its part list after a topology change, which also keeps volume shadow ambient and irradiance grid fog current after an edit (#1723).
+- Local volumes take `noiseOctaves` (1 to 5, default 1): finer octaves of noise on top of the large lumps give smoke and fire a ragged edge, in the rasterizer and the CPU path tracer (#1725)
+- Native video jobs that blend frames over time trace natively again: the temporal blend accepted only a 320-byte kernel parameter block, but Cook sends 336 since its anamorphic aperture ratio, so every such job fell back to another backend on its first frame (#1729).
+- `bakeGasSim` takes `detail` (0 to 1, default 0): a noise upres of each frame's smoke density, so a coarse sim breaks into puffs and gaps below its cell size; 0 keeps the bytes of every existing bake (#1735)
+- The gas-sim bake keeps smoke and fuel mass constant between sources and sinks: advection no longer swells the plume (a 3 s blast used to roughly double its smoke) (#1735).
+- `bakeGasSim` bakes an explosion from a grid gas simulation (advection, pressure projection, vorticity, fuel burning into flame and heat) into grid volume frames, in `src/gas-sim.js` (#1735)
+- add-explosion fireball emission is 9.5 instead of 14 at the reference size, so the core no longer clips to white and the edge falloff reaches 0.79 of the Cycles frame on a flat background, with the RMSE against it down from 0.030 to 0.020 (#1736)
+- add-explosion bakes with turbulence 1 and vorticity 40, so the fireball outline breaks up more (silhouette roughness 5.4 to 6.1 and edge falloff 0.74 to 0.82 against a Cycles reference 10.1 and 1.06); `scripts/measure-explosion-breakup.mjs` scores a blast against it (#1736)
+- `vdb-to-grid.py` reads Blosc compressed VDBs, openvdb's default, when run with `uv run --no-project --with blosc` (#1742)
+- `createGaussianSplats` takes `palette` (2 to 256 colours) and `dither` (`bayer4` or `bayer8`) to snap `alphaCut` splats to a palette for a pixel-art look (#1744)
+- `createGaussianSplats` takes `alphaCut` to draw opaque, unblended discs and `parseGaussianSplatPly` takes `upAxis: 'z'` to load Z-up files such as Blender splats upright (#1744)
+- A grid volume with `castShadow: true` now shades the surfaces under it from the sun, so an explosion no longer floats over a lit floor (#1748)
+- `render()` takes `linearOutput: true` with a float `outputFramebuffer` to write linear scene radiance after fog and volumes, with no view transform or clamp, and `compare-volume-render.mjs` reads it as a `.f32` candidate (#1749)
+- Grid fires no longer show vertical streaks, cross lines between voxels or a hard flat bottom edge in Glaze and the CPU path tracer (#1752)
+- An agent can place a part by its top, bottom or centre face with a new `level` node relation (`{ "kind": "level", "at": "top", "y": 0.5 }`), so it no longer adds half the thickness by hand. Existing recipes are unchanged. (#1755)
+- Particle systems of `type: "sparks"` throw emissive streaks that cool along the blackbody curve with gravity and drag, and `preset: "explosion"` makes a blast (#1758)
+- A grid volume blurs along the gas velocity when the scene's motion blur shutter is on: bake with `velocity: true` and a fireball or smoke smears along its expansion in Glaze and the CPU path tracer, as in Cycles (#1759)
+- The shadow a grid volume casts on surfaces blurs along the gas velocity when the motion blur shutter is on, so a blurred blast no longer casts a sharp shadow (#1763)
+- A render job or still no longer draws its first frame with the fallback post program while the driver builds the real one, so a cold first frame matches a warm one (#1767)
+- The fireball bake that every explosion scene sends with `scene_create` runs about a third to a half faster (72 frames at 32 cubed, same bytes): the gas solver locates each traced position once per step instead of once per field (#1768)
+- The MCP server keeps baked add-explosion frames in a cache folder, so a second process that needs the same blast loads it instead of simulating for about 5 seconds (#1768)
+- A `scene_create` whose recipe has a grid volume may run 60 s instead of 30 s, the same limit `add-explosion` already had, because the first draw compiles its shader in the graphics driver (#1768)
+- The MCP server keeps Chrome's compiled GPU shaders between runs, so the first volume `scene_create` of a new server process takes about 0.8 s instead of 4.9 s; `CRUCIBLE_SHADER_CACHE=0` turns it off (#1768)
+- A scene with only grid volumes, or only box and sphere volumes, builds the shader of that kind alone, about half the shader build of the combined program, with the same pixels (#1768)
+- A glowing or shadow-casting grid volume no longer stalls the first draw: its shader builds in about 8 s instead of 45 s on ANGLE d3d11, and a cold `scene_create` fits well inside the 30 s preview limit (#1768)
+- Environment variables now take the `CRUCIBLE_` name first (`CRUCIBLE_NO_UPDATE_CHECK`, `CRUCIBLE_MCP_LOG`); the `SIXTYSEVENJS_` names keep working as aliases (#1770)
+- `scene_apply` refuses an add-node that would take the scene's unique assets past the 64 MiB combined limit, with a clear message, instead of letting the later render job crash the page ('Target page closed') (#1771)
+- `add-explosion` takes `sparks` and `motionBlur` options, on by default: spark streaks and a velocity motion blur of the fireball (#1775)
+- `crucible-mcp --memory` goes up to half of the machine RAM (at most 4096 MiB) and the render job memory guard and the native tracer allowance follow it, so 1080p and native path trace jobs of heavier scenes finish (#1776, #1696)
+- Particle emitter systems take `start` (the same field as `delay`) and `stop` in seconds, so a system with a `rate` can begin partway through a film and stop before it ends; nothing is born at or after `stop`, and systems without them are unchanged (#1777)
+- The WebGPU path tracer now draws local volumes with `emissionRamp` and `noiseOctaves`, matching the CPU tracer; before, backend "webgpu" threw for both (#1785).
+- The WebGPU path tracer now draws grid volumes (the #1735 blast, smoke and fire baked to a grid): density, flame, baked blackbody and, with `volumeShutter`, the motion blur along the velocity, matching the CPU tracer; before, backend "webgpu" threw and named "cpu" (#1785).
+- Native sequence jobs keep one Cook session through moving geometry such as particles: new triangles rebuild only the changed meshes, and each frame's route reports `changedMeshes` (#1786)
+- `backend: "native"` path traces a grid volume with Cook, and the Cook pin has grid volumes (#1789)
+- The CPU tracer no longer traces a hidden part as a wall in a scene with local volumes, so a soft volume next to an idle hidden part is not cut by a hard edge any more (#1793)
+- The CPU path tracer never traces a part marked `visible: false` any more, so a hidden box casts no shadow and is not drawn, as in Glaze, while a mesh volume that names a hidden part still takes its shape from it (#1806)
+- `scripts/render-file-native.mjs` serves a GLB above 32 MiB over a local HTTP server instead of a Playwright route, so a single-mesh GLB of 4.8 million triangles (about 82 MiB) no longer closes the loader tab and reaches the native trace's triangle-count error (#1811).
+- A light list over its cap now throws an error that names the cap, says it comes from the 32 bit light-linking mask (1 sun, 16 point, 8 spot, 7 area) and points to merging lights, an HDRI or emissive parts, or `backend: native` (#1812)
+- Materials take `retro: { vertexSnap: [width, height], affineUV: true }` for the PS1 look in the raster renderer: vertices snap to a screen grid and UVs interpolate without perspective correction. Materials without it render as before.
+- Blender export reports a light's max bounces below the scene's as not reproduced (Cook has one global bounce limit, no per-light field) (#1825)
+- The path tracer lights a scene with `environment.keyIntensity` (a scene with no sun, sky or lamp traces black) and applies `effects.exposure` to the traced picture, as the rasterizer does (#1833)
+- A post pass or material fragment is measured at 4096 bytes of code: comments and extra white space no longer count, and the error gives both sizes (#1834).
+- A post pass reads its `time` from the motion time when the frame has one (a still at `motion.start: 6.5` gets 6.5, as the video frame does), instead of the renderer time, which stayed 0 in a still (#1835)
+- A recipe places a catalog GLB by file name, `asset: { "name": "sheep_body.glb" }`, in `scene_create`, `scene_apply` and (as `assetName`) `scene_create_asset`, so a re-exported file no longer breaks it; the scene keeps the resolved SHA-256 (#1843)
+- Native "cycles" exports keep a part with a base or coat normal map and a non-uniform matrix as an instance, so Cook tilts the normal map from the matrix like Cycles instead of from baked unit normals (#1844).
+- `scene_apply`, `scene_render_submit` and `scene_review` count the scene's grid (.67vg) files toward the 64 MiB combined cap, and a scene already over it fails with the cap message instead of crashing the page (#1848)
+- A folder of more than 256 consecutively numbered images is now one `sequences` entry in `scene_asset_catalog` (pattern, first, last, frames, size) instead of one entry per frame, and a material `map.sequence` can name it with `catalog` instead of listing the frame IDs; the frames are hashed when named, not at startup (#1852).
+- A material `map.sequence` may list up to 4096 frames of 2048 pixels: a sequence over 64 frames streams, decoding the frame of each time and keeping two, so a canvas that changes over a whole film can be textured (#1852)
+- A `stills` render job takes `stillCount` (2 to 300) and writes that many numbered PNGs, one per 1/fps s of the motion clock, so a transparent overlay comes from one job; `scene_capabilities` jobs also states the largest square frame (#1853).
+- A local volume with `noiseOctaves` above 1 takes its march steps from its finest noise cell (up to 96), so its edge no longer comes out wider than the real density field (#1855)
+- A native render job and `npm run render:file-cook` read the scene tables from the page as one Blob over the DevTools stream, which cuts the per-frame export of a dense scene with 1,000 particles from about 125 ms to about 64 ms (#1861)
+- `scene_capabilities` takes `topic` as a list of up to 8 names and answers each one in one call, keyed by name (#1872)
+- A native render that falls back because the installed Cook addon is stale now says so, with Cook's own fix (`npx cook fetch-addon`), instead of blaming a missing Vulkan ray query adapter (#1892)
+- Shape and grid volumes weight each march step's glow by the exact integral over the step, `(1 - exp(-tau)) / tau` per channel, in the rasterizer, the CPU path tracer and the WebGPU path tracer, so a dense glowing volume is dimmer and its edge narrower: the 1-octave sphere edge goes from 0.2926 to 0.2295 sphere radii against Cycles 0.2330 (#1894)
+- The shipped scene skill now matches the tools: the scene contract says up to seven area lights, `light.md` says an area light casts a shadow with `castShadow: true`, and `look.md` gives 8 MiB as the `.hdr` file limit (#1897)
+- `createGaussianSplats` and `createGaussianSplatsAsync` now refuse a fractional `count`, a missing or short `positions`, `scales`, `rotations` or `colors` array, and `matrix: null` or `options: null`, each with an error that names the field, the expected length and what to pass (#1899)
+- `simplifyGeometry` throws a `RangeError` that names the bad index, its place in `indices` and the vertex count (or the positions length when it is not a multiple of three) instead of crashing in the collapser, and treats `options: null` as the defaults (#1900)
+- A `scene_apply` or `scene_create` call with several distinct `add-explosion` operations is now refused at once when its grids pass the 64 MiB combined limit: the check counts each blast at its exact size before baking, instead of after minutes of synchronous baking (#1903).
+- `scene_capabilities` no longer answers names inherited from Object.prototype (`environment.constructor`, `parts.toString`) as fields or entries; a dotted suffix that is not an entry of a plain topic now fails with the list of entries (#1904)
+- `EXT_meshopt_compression` views are checked before decoding: a bad `byteStride`, `byteOffset`, `byteLength`, `count`, `mode` or `filter` now throws an error naming the buffer view, the field, the value and what to pass, instead of `Malformed buffer data: -1`.
+- A Draco GLB whose point or face count disagrees with its accessor `count`, or whose decoded buffer would pass the asset byte limit, is refused with an error naming the primitive, the attribute and both numbers before the decoder heap allocates it (#1913)
+- `readGlb` in the catalog scripts now refuses a GLB with a wrong header version or total length, an unaligned or past-the-end chunk length, a zero or second BIN chunk, and a bad JSON chunk, each with an error that names the chunk and the lengths (#1919).
+- A glTF primitive compressed with KHR_draco_mesh_compression now applies a sparse block on its accessors on top of the decoded data instead of ignoring it (#1921).
+- `scene_render_status` of a finished job now returns its record while a newer job runs, instead of failing with "The renderer is leased".
+- A render job with `animation` on a scene that has no clips now fails with an error that says to drop `animation` or add a clip, and a missing clips list counts as empty instead of a TypeError (#1928)
+- `scene_capabilities` with a topic list answers the valid topics and reports unknown names (at most 4) with suggestions in `unknown`, and an unknown op name suggests the dotted `meshEdit.<op>` form.
+- The shipped skills now cover review links with `reviewFile`, placing a GLB by file name, catalog image sequences, topic lists with `unknown`, `stillCount` stills jobs and the no-clips `animation` error (#1938)
+- The agent bench passes the skill prompt to `claude` as a file, so `--skill-mode references` runs on Windows instead of failing with `spawn ENAMETOOLONG` (#1939)
+- `detachedPartFlight` now settles a part with a `size` on its most stable face (the largest it can reach by falling or tipping with its landing energy) instead of the nearest face, so a bumper no longer ends standing on its narrow edge (#1971).
+- A finished path traced job reports `noise` (relative noise before denoising and a one-line verdict) in `scene_render_result` (#905).
+- `scene_look` and render jobs name the strongest lights, with the field to lower, in an `exposure-clipped` finding, so an over-exposed light can be fixed without opening the image (#905).
+- `scene_ask_user` can show its annotate view inline in chat apps that support MCP Apps, with the same marks as the browser flow (#923)
+- A scene can be exported as a phone review page (`scene_export_web` with `review: true`) whose saved marks `scene_ask_user` reads back with `reviewFile` (#924)
+- `hingedDoorSwing` in `crucible/addons/vehicle` swings a damaged door open on its hinge: a torque-driven, damped swing that stops at `maxAngle` with a small bounce and rests (#983)
+- `detachedPartFlight` in `crucible/addons/vehicle` gives a loose part torn off by a crash a seeded flight: launch from the impulse above its threshold, tumble, bounce and rest on the ground (#983)
+- `crucible/addons/vehicle` dents vehicle parts on impact, finds the moment a drive meets a wall and lists the parts that tear off, and recipes get a `dented` geometry (#983)
+- `scene_capabilities` answers `meshEdit` and `meshStack` with each op's arguments (`name:type`, `?` for optional) and the face, edge and vertex rules once, so one call is enough before editing a mesh (#1929)
+- The agent bench can answer `scene_ask_user` from a test-only fixture file (`CRUCIBLE_ASK_USER_FIXTURE`, set only by whoever starts the server), with a new `ask-user-pin` task, so tool schema changes to that tool can be benched (#1956)
+- `scene_ask_user`: a pin on a part whose material other parts also use returns `materialSharedWith` (and `materialSharedWithMore`) like a lasso part, so an agent gives the part its own material before recolouring it; the bench has a new task, `ask-user-pin-shared` (#1972).
+- Auto-framed camera and the preview ground of a skinned asset now use the drawn (skinned) bounds instead of the bind-pose bounds (#1976).
+- The render-crucible-media skill matches 0.21.0 again: quality tiers, estimate and budget, transparent `stillCount` sequences, grid volumes in Cook, streamed texture sequences, caches, new limits and error rows (#1979)
+- Audit the scene skill for 0.21.0: fix stale claims (motion duration range, emissiveColor tracks, ask-user wording), add explosion, retro, vehicle damage, pins and lasso, review page, splat palette and turntable how-tos in a new effects-and-feedback reference, and steer agents to the asset catalog, `scene_capabilities` and `scene_look` before guessing, boxing real objects or rendering (#1979).
+- The showcase page has a Made with Crucible section for picked community work, and Show and tell asks for the credit, the licence and permission to feature it (#1980)
+- `scene_ask_user`: the annotate page has a lasso tool; a lasso mark comes back with `kind` `"lasso"`, its `points` and the `parts` under the outline (most covered first, with `coverage`, `edge` below 0.15 and `materialSharedWith` for a material also used outside the mark), and the test-only answer fixture accepts `lasso` marks (#922).
+- `scene_ask_user` takes an optional `motionTime`: the person marks the scene at that moment of its authored motion, and the answer's `view.motionTime` names it (#922).
+- The marketplace lists the companion packages CodePawl publishes on npm (`@codepawlhq/crucible-*`) in their own section with an install command, and `@codepawlhq/crucible-three-bridge` drops the `crucible-addon` keyword because it is a library that registers nothing (#1988)
+
 ## 0.20.0
 
 - 67js is now Crucible: the package is `@codepawlhq/crucible` (addons `@codepawlhq/crucible-*`), the commands are `crucible-mcp` and `crucible-addon-check`, the renderer class is `CrucibleRenderer` and the skills are `build-crucible-scene` and `render-crucible-media`. `67js-mcp`, `67js-addon-check` and `Renderer67` keep working for one release and print a rename notice, and recipes, assets and packs saved with the old `67js.scene`, `67js.asset`, `67js.pack` and `67js-pack.json` names still load. (#1183)

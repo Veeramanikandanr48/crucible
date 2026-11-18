@@ -1,1 +1,0 @@
-- The site build now publishes every guide that `llms.txt` and the other guides link to, the install guide no longer links a release the site dropped, the docs say the three optional packages are source-checkout only, and the addon check accepts release candidate versions (#1249)

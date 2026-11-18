@@ -5,7 +5,7 @@
 // { id, peers(), send(peerId, message), receive(callback) }. This file ships an in-memory loopback for tests and a wrapper
 // for a socket-like object. Nothing here opens a connection or a timer. See docs/netcode.md.
 
-export const NETCODE_AUTHORITIES = Object.freeze(['server', 'host']);
+export const NETCODE_AUTHORITIES = Object.freeze(['server', 'host', 'peer']);
 export const NETCODE_ROLES = Object.freeze(['authority', 'client']);
 
 export const NETCODE_LIMITS = Object.freeze({
@@ -331,16 +331,16 @@ function sampleAt(samples, time, maximumExtrapolationSeconds) {
 function validateNetcodeOptions(options) {
   if (!isPlainObject(options)) throw new TypeError('createNetcode needs an options object like { role: "client", transport, serverId: "server" }.');
   validateTransport(options.transport, 'createNetcode');
-  const role = options.role ?? 'client';
-  if (!NETCODE_ROLES.includes(role)) {
-    throw new RangeError(`createNetcode role must be one of ${NETCODE_ROLES.join(', ')}, got ${String(role)}.`);
-  }
   const authority = options.authority ?? 'server';
-  if (authority === 'peer') {
-    throw new RangeError(`createNetcode authority "peer" (peer to peer) is not supported yet. Use one of ${NETCODE_AUTHORITIES.join(', ')}.`);
-  }
   if (!NETCODE_AUTHORITIES.includes(authority)) {
     throw new RangeError(`createNetcode authority must be one of ${NETCODE_AUTHORITIES.join(', ')}, got ${String(authority)}.`);
+  }
+  if (authority === 'peer' && options.role !== undefined && options.role !== 'peer') {
+    throw new RangeError(`createNetcode authority "peer" has no authority or client role: every peer owns its own entities. Leave role out, got ${String(options.role)}.`);
+  }
+  const role = authority === 'peer' ? 'peer' : (options.role ?? 'client');
+  if (role !== 'peer' && !NETCODE_ROLES.includes(role)) {
+    throw new RangeError(`createNetcode role must be one of ${NETCODE_ROLES.join(', ')}, got ${String(role)}.`);
   }
   if (role === 'client') requireName(options.serverId, 'createNetcode serverId');
   for (const name of ['simulate', 'readInput']) {
@@ -348,7 +348,7 @@ function validateNetcodeOptions(options) {
       throw new TypeError(`createNetcode ${name} must be a function or left out, got ${describe(options[name])}.`);
     }
   }
-  if (role === 'client' && options.localEntityId !== undefined) requireName(options.localEntityId, 'createNetcode localEntityId');
+  if (role !== 'authority' && options.localEntityId !== undefined) requireName(options.localEntityId, 'createNetcode localEntityId');
   return {
     role,
     authority,
@@ -777,7 +777,200 @@ function createClient(settings, stats) {
   };
 }
 
+// ----- The peer to peer side -----
+
+// Every peer owns the entities it adds and sends their full state to all peers. When two peers claim one entity, the
+// higher term wins, and on equal terms the lower peer id, so every peer settles on the same owner whatever the arrival order.
+function claimBeats(candidateTerm, candidateOwner, currentTerm, currentOwner) {
+  if (candidateTerm !== currentTerm) return candidateTerm > currentTerm;
+  return candidateOwner < currentOwner;
+}
+
+function createPeerSide(settings, stats) {
+  const { transport, steps } = settings;
+  const selfId = transport.id;
+  const entities = new Map(); // id -> { owner, term, tag, state, samples }
+  const senders = new Map(); // peer id -> { session, lastTick }
+  const sessionId = createSessionId();
+  let tick = 0;
+  let clock = 0;
+
+  function isLocal(entity) {
+    return entity.owner === selfId;
+  }
+
+  function listPresent() {
+    return [...entities.keys()].join(', ') || 'none';
+  }
+
+  function requireLocalEntity(id, action) {
+    const entity = entities.get(id);
+    if (!entity) throw new RangeError(`${action}: no entity named "${String(id)}". Present: ${listPresent()}. Use addEntity first.`);
+    if (!isLocal(entity)) throw new RangeError(`${action}: "${id}" is owned by peer "${entity.owner}". Call claimEntity("${id}") to take it over first.`);
+    return entity;
+  }
+
+  // The record of a sender, null when there is no room for another, undefined when the message is of an older run.
+  function senderRecord(peerId, session) {
+    let record = senders.get(peerId);
+    if (!record) {
+      if (senders.size >= NETCODE_LIMITS.maximumPeers) return null;
+      record = { session, lastTick: -1 };
+      senders.set(peerId, record);
+    }
+    if (record.session !== session) {
+      if (session < record.session) return undefined;
+      record.session = session;
+      record.lastTick = -1;
+    }
+    return record;
+  }
+
+  function acceptRemoteEntity(peerId, id, raw) {
+    const delta = isPlainObject(raw) ? readWireEntityDelta(raw, true) : null;
+    if (!delta || !Number.isSafeInteger(raw.m) || raw.m < 0) {
+      stats.rejectedMessages += 1;
+      return;
+    }
+    const known = entities.get(id);
+    if (known && known.owner !== peerId) {
+      if (!claimBeats(raw.m, peerId, known.term, known.owner)) return;
+      stats.ownershipChanges += 1;
+      known.samples = [];
+    } else if (!known) {
+      if (entities.size >= NETCODE_LIMITS.maximumEntities) return;
+      stats.ownershipChanges += 1;
+    } else if (raw.m < known.term) {
+      return;
+    }
+    const entity = known ?? { samples: [] };
+    entity.owner = peerId;
+    entity.term = raw.m;
+    entity.tag = delta.t ?? null;
+    entity.state = dequantizeEntity(delta, steps);
+    entity.samples.push({ time: clock, state: cloneState(entity.state) });
+    if (entity.samples.length > NETCODE_LIMITS.maximumSamplesPerEntity) entity.samples.shift();
+    entities.set(id, entity);
+  }
+
+  function receiveMessage(peerId, message) {
+    const valid = isPlainObject(message) && message.type === 'peer-state' && isValidSession(message.session)
+      && Number.isSafeInteger(message.tick) && message.tick >= 0 && isPlainObject(message.entities)
+      && Object.keys(message.entities).length <= NETCODE_LIMITS.maximumEntities;
+    const record = valid ? senderRecord(peerId, message.session) : null;
+    if (!valid || record === null) {
+      stats.rejectedMessages += 1;
+      return;
+    }
+    if (record === undefined || message.tick <= record.lastTick) {
+      stats.staleSnapshots += 1;
+      return;
+    }
+    record.lastTick = message.tick;
+    stats.snapshotsReceived += 1;
+    for (const [id, raw] of Object.entries(message.entities)) {
+      if (id.length > NETCODE_LIMITS.maximumNameLength) {
+        stats.rejectedMessages += 1;
+        continue;
+      }
+      acceptRemoteEntity(peerId, id, raw);
+    }
+  }
+
+  function dropEntitiesOfGonePeers() {
+    const present = new Set(transport.peers());
+    for (const [id, entity] of entities) {
+      if (!isLocal(entity) && !present.has(entity.owner)) entities.delete(id);
+    }
+  }
+
+  function sendOwnedEntities() {
+    const owned = {};
+    for (const [id, entity] of entities) {
+      if (isLocal(entity)) owned[id] = { ...quantizeEntity(entity.state, entity.tag, steps), m: entity.term };
+    }
+    const message = { type: 'peer-state', session: sessionId, tick, entities: owned };
+    const bytes = JSON.stringify(message).length;
+    if (bytes > settings.maximumMessageBytes) {
+      throw new RangeError(`A netcode peer message is ${bytes} bytes, over maximumMessageBytes ${settings.maximumMessageBytes}. Own fewer entities or variables, or raise maximumMessageBytes (up to ${NETCODE_LIMITS.maximumMessageBytes}).`);
+    }
+    for (const peerId of transport.peers()) {
+      if (peerId === selfId) continue;
+      transport.send(peerId, message);
+      stats.snapshotsSent += 1;
+      stats.bytesSent += bytes;
+    }
+  }
+
+  function drawnState(entity) {
+    if (isLocal(entity) || entity.samples.length === 0) return cloneState(entity.state);
+    return sampleAt(entity.samples, clock - settings.interpolationDelaySeconds, settings.maximumExtrapolationSeconds);
+  }
+
+  function moveLocalPlayer(step) {
+    const player = settings.localEntityId ? entities.get(settings.localEntityId) : null;
+    if (!settings.readInput || !player || !isLocal(player)) return;
+    const input = readInput(settings.readInput(), 'readInput result');
+    player.state = readState(settings.simulate(player.state, input, step), 'simulate result');
+    stats.inputsProcessed += 1;
+  }
+
+  return {
+    receiveMessage,
+    fixedUpdate(step) {
+      clock += step;
+      dropEntitiesOfGonePeers();
+      moveLocalPlayer(step);
+      tick += 1;
+      if (tick % settings.snapshotEveryTicks === 0) sendOwnedEntities();
+    },
+    addEntity(id, definition = {}) {
+      requireName(id, 'addEntity id');
+      if (entities.has(id)) throw new RangeError(`addEntity: an entity named "${id}" already exists. Use setEntityState to change it, or claimEntity to take over a remote one.`);
+      if (entities.size >= NETCODE_LIMITS.maximumEntities) {
+        throw new RangeError(`A netcode world syncs at most ${NETCODE_LIMITS.maximumEntities} entities. Remove some, or sync only what players see.`);
+      }
+      if (definition.owner !== undefined && definition.owner !== selfId) {
+        throw new RangeError(`addEntity: in peer to peer a peer adds only entities it owns. Leave owner out or pass "${selfId}", got ${String(definition.owner)}.`);
+      }
+      const tag = definition.tag === undefined ? null : requireName(definition.tag, 'addEntity tag');
+      entities.set(id, { owner: selfId, term: 0, tag, state: readState(definition.state ?? {}, `addEntity "${id}" state`), samples: [] });
+    },
+    removeEntity(id) {
+      requireLocalEntity(id, 'removeEntity');
+      entities.delete(id);
+    },
+    setEntityState(id, partialState) {
+      const entity = requireLocalEntity(id, 'setEntityState');
+      entity.state = readState(partialState, `setEntityState "${id}" state`, entity.state);
+    },
+    // Take over an entity another peer owns, starting from the state this peer sees. The raised term beats the old owner on every peer.
+    claimEntity(id) {
+      const entity = entities.get(id);
+      if (!entity) throw new RangeError(`claimEntity: no entity named "${String(id)}". Present: ${listPresent()}.`);
+      if (isLocal(entity)) return;
+      entity.state = drawnState(entity);
+      entity.owner = selfId;
+      entity.term += 1;
+      entity.samples = [];
+      stats.ownershipChanges += 1;
+    },
+    getEntityState(id) {
+      const entity = entities.get(id);
+      return entity ? drawnState(entity) : null;
+    },
+    getEntityOwner: id => entities.get(id)?.owner ?? null,
+    entityIds: () => [...entities.keys()],
+    get tick() { return tick; },
+  };
+}
+
 // ----- createNetcode: the runtime system -----
+
+function createSide(settings, stats) {
+  if (settings.role === 'peer') return createPeerSide(settings, stats);
+  return settings.role === 'authority' ? createAuthority(settings, stats) : createClient(settings, stats);
+}
 
 export function createNetcode(options) {
   const settings = validateNetcodeOptions(options);
@@ -794,12 +987,13 @@ export function createNetcode(options) {
     lastCorrection: 0,
     maximumCorrection: 0,
     rejectedMessages: 0,
+    ownershipChanges: 0,
   };
-  const side = settings.role === 'authority' ? createAuthority(settings, stats) : createClient(settings, stats);
+  const side = createSide(settings, stats);
   let unsubscribe = null;
 
   function requireAuthority(action) {
-    if (settings.role !== 'authority') throw new TypeError(`${action} is only for the authority. This netcode is a client; the authority owns the entities.`);
+    if (settings.role === 'client') throw new TypeError(`${action} is only for the authority. This netcode is a client; the authority owns the entities.`);
   }
 
   const netcode = {
@@ -807,7 +1001,7 @@ export function createNetcode(options) {
     get role() { return settings.role; },
     get authority() { return settings.authority; },
     get stats() { return { ...stats }; },
-    get tick() { return settings.role === 'authority' ? side.tick : side.latestTick; },
+    get tick() { return settings.role === 'client' ? side.latestTick : side.tick; },
     get pendingInputCount() { return side.pendingInputCount ?? 0; },
 
     init(context) {
@@ -847,6 +1041,15 @@ export function createNetcode(options) {
     // The state to draw: the truth on the authority, the prediction for the local entity, the interpolation for the rest.
     getEntityState(id) {
       return side.getEntityState(id);
+    },
+    // Peer to peer: take over an entity another peer owns. The raised term beats the old owner on every peer.
+    claimEntity(id) {
+      if (settings.role !== 'peer') throw new TypeError('claimEntity is only for peer to peer netcode (authority: "peer"). A server or host owns every entity already.');
+      side.claimEntity(id);
+      return netcode;
+    },
+    getEntityOwner(id) {
+      return side.getEntityOwner?.(id) ?? null;
     },
     get entityIds() { return side.entityIds(); },
   };

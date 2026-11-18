@@ -3,6 +3,7 @@ import { localVolumeInterval, localVolumeProfile, localVolumeStepCount, localVol
 import { countOpenEdges } from './local-volume-parts.js';
 import { gridMotionTimeFraction } from './volume-grid.js';
 import { bakeEmissionRamp, emissionRampPosition, sampleBakedRamp } from './local-volume-ramp-bake.js';
+import { stepIntegralWeight } from './volume-step-integral.js';
 import { buildTriangleBvh } from './triangle-bvh.js';
 import { createTracer } from './ray-query.js';
 
@@ -94,7 +95,7 @@ export function prepareMeshVolume(volume, label) {
   const openEdges = countOpenEdges(positions, geometry.indices, diagonal * 1e-6);
   if (openEdges > 0) throw new RangeError(`${label}.part "${volume.part.name}" is not a closed mesh (${openEdges} open edges), so it has no inside; close it or use fit "bounds"`);
   const bvh = buildTriangleBvh(positions, geometry.indices);
-  return { ...volume, mesh: { tracer: createTracer({ positions, indices: geometry.indices, bvh }), stepOffset: diagonal * 1e-6 } };
+  return { ...volume, mesh: { tracer: createTracer({ positions, indices: geometry.indices, bvh }), stepOffset: diagonal * 1e-6, positions, indices: geometry.indices, bvh } };
 }
 
 /**
@@ -145,8 +146,9 @@ function marchMeshVolume(volume, spans, originX, originY, originZ, directionX, d
       const distance = entry + (step + jitter) * stepLength;
       const width = localVolumeProfile(volume, originX + directionX * distance, originY + directionY * distance, originZ + directionZ * distance) * stepLength;
       for (let channel = 0; channel < 3; channel++) {
-        emitted[channel] += throughput[channel] * volume.emission[channel] * volume.emissionStrength * width;
-        throughput[channel] *= Math.exp(-volume.absorption[channel] * volume.density * width);
+        const opticalDepth = volume.absorption[channel] * volume.density * width;
+        emitted[channel] += throughput[channel] * volume.emission[channel] * volume.emissionStrength * width * stepIntegralWeight(opticalDepth);
+        throughput[channel] *= Math.exp(-opticalDepth);
       }
     }
   }
@@ -224,6 +226,8 @@ export function createLocalVolumeCrossing(volumes, lighting = null) {
   const entries = new Float64Array(volumes.length);
   const exits = new Float64Array(volumes.length);
   const dimming = new Float64Array(3);
+  // The glow one step adds before the step's own dimming weights it (#1894).
+  const stepLight = new Float64Array(3);
   const span = new Float64Array(2);
   const sunDepth = new Float64Array(3);
   const sunLight = new Float64Array(3);
@@ -267,11 +271,11 @@ export function createLocalVolumeCrossing(volumes, lighting = null) {
   // rasterizer's localVolumeRampLight does.
   const bakedRamps = new Map(volumes.filter(volume => volume.emissionRamp).map(volume => [volume, bakeEmissionRamp(volume.emissionRamp)]));
   const rampColor = new Float64Array(3);
-  function addRampLight(volume, sourceValue, stepLength, throughput, emitted) {
+  function addRampLight(volume, sourceValue, stepLength, stepGlow) {
     const position = emissionRampPosition(volume.emissionRamp, sourceValue);
     if (position <= 0) return;
     sampleBakedRamp(bakedRamps.get(volume), position, rampColor);
-    for (let channel = 0; channel < 3; channel++) emitted[channel] += throughput[channel] * rampColor[channel] * volume.emissionStrength * position * stepLength;
+    for (let channel = 0; channel < 3; channel++) stepGlow[channel] += rampColor[channel] * volume.emissionStrength * position * stepLength;
   }
 
   const gridCell = new Float64Array(6);
@@ -291,10 +295,13 @@ export function createLocalVolumeCrossing(volumes, lighting = null) {
     if (width > 0 && volume.scatter > 0 && lighting) addScatteredLight(volume, x, y, z, directionX, directionY, directionZ, width, throughput, emitted);
     const flameWidth = gridCell[2] * stepLength;
     const blackbodyWidth = volume.blackbodyIntensity * volume.emissionStrength * stepLength;
-    if (volume.emissionRamp) addRampLight(volume, gridCell[rampSourceChannel(volume.emissionRamp.source)], stepLength, throughput, emitted);
+    stepLight.fill(0);
+    if (volume.emissionRamp) addRampLight(volume, gridCell[rampSourceChannel(volume.emissionRamp.source)], stepLength, stepLight);
     for (let channel = 0; channel < 3; channel++) {
-      emitted[channel] += throughput[channel] * (volume.emission[channel] * volume.emissionStrength * flameWidth + gridCell[3 + channel] * blackbodyWidth);
-      throughput[channel] *= Math.exp(-volume.absorption[channel] * volume.density * width);
+      const opticalDepth = volume.absorption[channel] * volume.density * width;
+      stepLight[channel] += volume.emission[channel] * volume.emissionStrength * flameWidth + gridCell[3 + channel] * blackbodyWidth;
+      emitted[channel] += throughput[channel] * stepLight[channel] * stepIntegralWeight(opticalDepth);
+      throughput[channel] *= Math.exp(-opticalDepth);
     }
   }
 
@@ -365,19 +372,23 @@ export function createLocalVolumeCrossing(volumes, lighting = null) {
         const y = originY + directionY * distance;
         const z = originZ + directionZ * distance;
         dimming.fill(0);
+        stepLight.fill(0);
         for (let lane = 0; lane < (partner < 0 ? 1 : 2); lane++) {
           const member = lane === 0 ? volume : volumes[partner];
           const profile = localVolumeProfile(member, x, y, z);
           if (profile <= 0) continue;
           const width = profile * stepLength;
           if (member.scatter > 0 && lighting) addScatteredLight(member, x, y, z, directionX, directionY, directionZ, width, throughput, emitted);
-          if (member.emissionRamp) addRampLight(member, profile, stepLength, throughput, emitted);
+          if (member.emissionRamp) addRampLight(member, profile, stepLength, stepLight);
           for (let channel = 0; channel < 3; channel++) {
-            emitted[channel] += throughput[channel] * member.emission[channel] * member.emissionStrength * width;
+            stepLight[channel] += member.emission[channel] * member.emissionStrength * width;
             dimming[channel] += member.absorption[channel] * member.density * width;
           }
         }
-        for (let channel = 0; channel < 3; channel++) throughput[channel] *= Math.exp(-dimming[channel]);
+        for (let channel = 0; channel < 3; channel++) {
+          emitted[channel] += throughput[channel] * stepLight[channel] * stepIntegralWeight(dimming[channel]);
+          throughput[channel] *= Math.exp(-dimming[channel]);
+        }
       }
       if (segmentEnd < exits[leader]) entries[leader] = segmentEnd;
       if (partner >= 0) entries[partner] = segmentEnd < exits[partner] ? segmentEnd : Infinity;

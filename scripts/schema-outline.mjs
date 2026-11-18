@@ -87,6 +87,21 @@ export function outlineSchema(jsonSchema) {
   return { ...result, $defs: shared };
 }
 
+function withoutDescriptions(node) {
+  if (Array.isArray(node)) return node.map(withoutDescriptions);
+  if (node === null || typeof node !== 'object') return node;
+  return Object.fromEntries(Object.entries(node)
+    .filter(([key]) => key !== 'description')
+    .map(([key, value]) => [key, withoutDescriptions(value)]));
+}
+
+/** The type of one field in a few characters, without its note: int[1..16], "x"|"y", number[]{3..3}; a nested object is object. */
+export function compactType(node, definitions = {}) {
+  const outlined = outline(withoutDescriptions(node), definitions);
+  if (typeof outlined === 'string') return outlined;
+  return outlined.array === undefined ? 'object' : 'object[]';
+}
+
 /** The branches of a union keyed by the value of their first literal field, such as op or type. */
 export function unionBranches(jsonSchema) {
   const flatten = node => {

@@ -1,7 +1,7 @@
 name: CodeQL
 
 # No push trigger: every change to main arrives through a pull request that CodeQL already scanned.
-# The weekly run refreshes the alert list of main.
+# The weekly run refreshes the alert list of main; workflow_dispatch lets a maintainer rescan main after a fix lands (#1958).
 # CodeQL reads only the JavaScript and TypeScript sources, so a pull request that changes nothing but documents, change notes
 # or media skips the scan. The scan is not a required check (only `test` is), so a skipped run blocks no merge.
 on:
@@ -21,6 +21,7 @@ on:
       - '**/*.glb'
   schedule:
     - cron: '17 3 * * 1'
+  workflow_dispatch:
 
 permissions:
   contents: read

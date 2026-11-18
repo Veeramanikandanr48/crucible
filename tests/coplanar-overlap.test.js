@@ -361,3 +361,18 @@ test('two dense overlapping meshes are found without one object per triangle (#1
   // Allocated per triangle: about 3200 bytes with the flat triangle table, about 5600 with one object per triangle.
   assert.ok(bytesPerTriangle < 4400, `plane search allocated ${Math.round(bytesPerTriangle)} bytes of heap per triangle`);
 });
+
+// Two 20 m plates facing up, `gap` metres apart in height, in a scene stretched by a far-off marker so the scene-wide reach is large.
+function platesApart(gap) {
+  return coplanarWarnings([
+    node('plate-low', [0, 0, 0], [20, 0.1, 20]),
+    node('plate-high', [0, gap, 0], [20, 0.1, 20]),
+    node('far-marker', [1500, 0, 0], [1, 1, 1]),
+  ]).filter(warning => warning.parts?.includes('plate-high'));
+}
+
+test('plates 2 mm apart fight, plates 100 mm and 250 mm apart do not, even in a scene thousands of metres wide', () => {
+  assert.equal(platesApart(0.002).length, 1);
+  assert.deepEqual(platesApart(0.1), []);
+  assert.deepEqual(platesApart(0.25), []);
+});

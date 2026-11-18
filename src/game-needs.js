@@ -2,15 +2,17 @@
 // and the web export copies that piece only when the same check says so, so a plain game does not carry the physics engine or the
 // texture swap code.
 
-const UNSUPPORTED_SHAPES = ['trimesh', 'cone', 'compound'];
+// The body shapes the game physics builds: every baked shape except trimesh. A compound is up to 16 parts (box, ball, capsule,
+// cylinder or cone), as in the baked path.
+export const GAME_PHYSICS_BODY_SHAPES = Object.freeze(['box', 'ball', 'capsule', 'cylinder', 'cone', 'convex', 'compound']);
 
 /** Why a recipe cannot play physics in a game (the engine is Jolt), or null. */
 export function gamePhysicsProblem(recipe) {
   const physics = recipe.physics;
   if (!physics?.bodies?.length) return 'game.physics is true, but the recipe has no physics section with bodies. Add one with set-physics, or set game.physics to false with set-game.';
   if (physics.joints?.length || physics.ragdoll) return 'The game physics engine builds no joints or ragdolls yet. Remove physics.joints and physics.ragdoll, or set game.physics to false with set-game.';
-  const unsupported = physics.bodies.find(body => UNSUPPORTED_SHAPES.includes(body.shape));
-  if (unsupported) return `Body "${unsupported.node}" has shape ${unsupported.shape}, which the game physics engine does not build. Use box, ball, capsule or convex (give a fixed body shape "box": its default is trimesh).`;
+  const unsupported = physics.bodies.find(body => body.shape === 'trimesh');
+  if (unsupported) return `Body "${unsupported.node}" has shape ${unsupported.shape}, which the game physics engine does not build. The game physics builds ${GAME_PHYSICS_BODY_SHAPES.join(', ')}. Use "box" for a floor or wall (a fixed body defaults to trimesh) or "convex" for a closed solid.`;
   return null;
 }
 

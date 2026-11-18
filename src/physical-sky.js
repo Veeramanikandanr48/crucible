@@ -1,4 +1,5 @@
 import { createEnvironmentMap } from './environment.js';
+import { applyGradientSky, createGradientSkyMap } from './gradient-sky.js';
 
 // environment.sky { type: 'physical' }: a clear-sky model driven by the sun alone. It is an analytic single-scattering
 // approximation (Rayleigh and Henyey-Greenstein aerosol, Kasten-Young air mass), not the Nishita integration Blender uses.
@@ -36,7 +37,6 @@ const OZONE_DEPTH = [0.02, 0.014, 0.0005];
 const SUN_STRENGTH = 3.4;
 const SKY_STRENGTH = 2.2;
 const SUN_DISC_STRENGTH = 18;
-const SUN_DISC_COSINE = 0.9994;
 const MAXIMUM_AIR_MASS = 20;
 const AEROSOL_ANISOTROPY = 0.76;
 const SHARED_SUN_MASS = 4;
@@ -50,7 +50,7 @@ const LOW_SUN_KEY_BOOST = 1.2;
 export function resolvePhysicalSky(input, fail) {
   const unknown = Object.keys(input).filter(key => key !== 'preset' && !PHYSICAL_SKY_FIELDS.includes(key));
   if (unknown.length > 0 || input.type !== 'physical') {
-    throw fail('environment.sky', input.type !== 'physical' ? input.type : unknown[0], `type 'physical' with fields ${[...PHYSICAL_SKY_FIELDS.slice(1), 'preset'].join(', ')}`);
+    throw fail('environment.sky', input.type !== 'physical' ? input.type : unknown[0], `type 'physical' or 'gradient'; physical takes fields ${[...PHYSICAL_SKY_FIELDS.slice(1), 'preset'].join(', ')}`);
   }
   if (input.preset !== undefined && !Object.hasOwn(PHYSICAL_SKY_PRESETS, input.preset)) {
     throw fail('environment.sky.preset', input.preset, `one of ${PHYSICAL_SKY_PRESET_NAMES.join(', ')}`);
@@ -173,8 +173,15 @@ export function physicalSkyFields(sky) {
   return fields;
 }
 
-/** A physical sky owns the sun and the haze: its key light, background gradient and aerial perspective replace those fields. */
+/**
+ * A physical sky owns the sun and the haze: its key light, background gradient and aerial perspective replace those fields.
+ * A `type: 'gradient'` sky takes the same entry point and only supplies the sky colours.
+ */
 export function applyPhysicalSky(input, environment, fail) {
+  if (input.type === 'gradient') {
+    applyGradientSky(input, environment, fail);
+    return;
+  }
   const sky = resolvePhysicalSky(input, fail);
   const { aerialDensity, ...fields } = physicalSkyFields(sky);
   Object.assign(environment, fields, { sky, fogDensity: aerialDensity });
@@ -182,16 +189,6 @@ export function applyPhysicalSky(input, environment, fail) {
 
 const mapsByKey = new Map();
 const MAXIMUM_CACHED_MAPS = 8;
-
-/**
- * A round disc with a flat bright top and a soft rim, by the angle from the sun's centre. A squared falloff over a map of a few
- * degrees per texel drew the sun as the texel grid (a rounded rectangle); the finer map and this profile keep it a circle.
- */
-function sunDiscWeight(sunCosine) {
-  const rim = (sunCosine - SUN_DISC_COSINE) / (1 - SUN_DISC_COSINE);
-  const edge = Math.min(Math.max(rim / 0.64, 0), 1);
-  return edge * edge * (3 - 2 * edge) * SUN_DISC_STRENGTH;
-}
 
 // Haze fills the first degrees under the horizon, so a finite sea or plane whose far edge ends short of the true horizon meets
 // haze the colour of the sky, not a flat band of ground colour with a hard step at the horizon line.
@@ -205,21 +202,25 @@ function belowHorizonRadiance(sky, color, zenith, sun, direction) {
   return ground.map((component, channel) => horizonSky[channel] + (component - horizonSky[channel]) * groundShare);
 }
 
+/** The sun the background pass draws as a sharp disc, or null when the sky has none: the disc is not baked into the map. */
+function sunDiscOf(sky) {
+  if (sky.sunDisc === false || sky.sunElevation <= -1.5) {
+    return null;
+  }
+  const { sun, color } = colorAtZenithAndHorizon(sky);
+  return { direction: sun, radiance: color.map(component => component * SUN_DISC_STRENGTH) };
+}
+
 function buildMapData(sky) {
   const { sun, color, zenith } = colorAtZenithAndHorizon(sky);
-  const drawDisc = sky.sunDisc !== false && sky.sunElevation > -1.5;
   const data = new Float32Array(MAP_WIDTH * MAP_HEIGHT * 3);
   for (let row = 0; row < MAP_HEIGHT; row++) {
     const polar = ((row + 0.5) / MAP_HEIGHT) * Math.PI;
     for (let column = 0; column < MAP_WIDTH; column++) {
       const azimuth = ((column + 0.5) / MAP_WIDTH - 0.5) * 2 * Math.PI;
       const direction = [Math.sin(polar) * Math.sin(azimuth), Math.cos(polar), -Math.sin(polar) * Math.cos(azimuth)];
-      const sunCosine = direction[0] * sun[0] + direction[1] * sun[1] + direction[2] * sun[2];
-      const discWeight = drawDisc && direction[1] > 0 && sunCosine > SUN_DISC_COSINE
-        ? sunDiscWeight(sunCosine)
-        : 0;
       const radiance = direction[1] >= 0
-        ? skyRadiance(sky, direction, sun).map((component, channel) => component + color[channel] * discWeight)
+        ? skyRadiance(sky, direction, sun)
         : belowHorizonRadiance(sky, color, zenith, sun, direction);
       data.set(radiance, (row * MAP_WIDTH + column) * 3);
     }
@@ -228,13 +229,17 @@ function buildMapData(sky) {
 }
 
 /** The environment map of a physical sky; the same object returns while sky, strength, rotation and background hold. */
-export function createPhysicalSkyMap({ sky, environmentIntensity: intensity, environmentRotation: rotation, world: showBackground }) {
+export function createPhysicalSkyMap(environment) {
+  if (environment.sky.type === 'gradient') {
+    return createGradientSkyMap(environment);
+  }
+  const { sky, environmentIntensity: intensity, environmentRotation: rotation, world: showBackground } = environment;
   const key = [...PHYSICAL_SKY_FIELDS.slice(1).map(field => sky[field]), intensity, rotation, showBackground].join('|');
   if (!mapsByKey.has(key)) {
     if (mapsByKey.size >= MAXIMUM_CACHED_MAPS) {
       mapsByKey.clear();
     }
-    mapsByKey.set(key, createEnvironmentMap({ width: MAP_WIDTH, height: MAP_HEIGHT, data: buildMapData(sky), intensity, rotation, showBackground }));
+    mapsByKey.set(key, createEnvironmentMap({ width: MAP_WIDTH, height: MAP_HEIGHT, data: buildMapData(sky), intensity, rotation, showBackground, sunDisc: sunDiscOf(sky) }));
   }
   return mapsByKey.get(key);
 }

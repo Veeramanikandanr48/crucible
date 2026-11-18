@@ -78,7 +78,7 @@ test('set-environment changes one sky field and keeps the others', () => {
   assert.ok(Math.abs(lightDirection[1] - Math.sin(10 * Math.PI / 180)) < 1e-9);
 });
 
-test('ozone deepens twilight blue and sunDisc adds the solar disc to the sky map', () => {
+test('ozone deepens twilight blue and sunDisc hands the solar disc to the background pass', () => {
   const noOzone = skyEnvironment({ sunElevation: 4, ozone: 0 });
   const heavyOzone = skyEnvironment({ sunElevation: 4, ozone: 6 });
   assert.ok(heavyOzone.keyColor[0] < noOzone.keyColor[0]);
@@ -86,8 +86,8 @@ test('ozone deepens twilight blue and sunDisc adds the solar disc to the sky map
 
   const withDisc = agentEnvironmentMap(skyEnvironment({ sunElevation: 30, sunDisc: true }));
   const withoutDisc = agentEnvironmentMap(skyEnvironment({ sunElevation: 30, sunDisc: false }));
-  const peak = values => values.reduce((largest, value) => Math.max(largest, value), 0);
-  assert.ok(peak(withDisc.data) > peak(withoutDisc.data) * 1.2);
+  assert.ok(withDisc.sunDisc.radiance[0] > 1);
+  assert.equal(withoutDisc.sunDisc, null);
   assert.throws(() => skyEnvironment({ ozone: -1 }), /environment\.sky\.ozone/);
   assert.throws(() => skyEnvironment({ sunDisc: 1 }), /environment\.sky\.sunDisc/);
 });

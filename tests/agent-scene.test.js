@@ -711,3 +711,28 @@ test('kept revisions never block an edit that fits the geometry budget without t
   assert.equal(session.inspect().geometryBytes, 720);
   assert.throws(() => session.restoreRevision(0, { expectedRevision: 2 }), /kept revisions: 1/);
 });
+
+test('removing a geometry or material that nodes still use names the nodes and the fix', () => {
+  const session = createAgentScene(recipe());
+  assert.throws(() => session.apply([{ type: 'remove-geometry', id: 'box' }], { expectedRevision: 0 }),
+    /id: got "box"; expected geometry box is used by nodes child, other; set-node them to another geometry or remove-node them first./);
+  assert.throws(() => session.apply([{ type: 'remove-material', id: 'finish' }], { expectedRevision: 0 }),
+    /id: got "finish"; expected material finish is used by nodes child, other; set-node them to another material or remove-node them first./);
+  session.apply([{ type: 'add-geometry', geometry: { id: 'spare', type: 'box', bevel: 0 } }, { type: 'remove-geometry', id: 'spare' }], { expectedRevision: 0 });
+});
+
+test('the in-use removal error lists at most eight nodes and counts the rest', () => {
+  const crowded = recipe();
+  for (let index = 0; index < 11; index += 1) {
+    crowded.nodes.push({ id: `extra${index}`, geometry: 'box', material: 'finish' });
+  }
+  const session = createAgentScene(crowded);
+  assert.throws(() => session.apply([{ type: 'remove-geometry', id: 'box' }], { expectedRevision: 0 }),
+    /nodes child, other, extra0, extra1, extra2, extra3, extra4, extra5 and 5 more;/);
+});
+
+test('field errors never print an empty list of choices', () => {
+  const session = createAgentScene({ format: 'crucible.scene', schemaVersion: 1, geometries: [], materials: [], nodes: [] });
+  assert.throws(() => session.apply([{ type: 'add-node', node: { id: 'a', geometry: 'box', material: 'm' } }], { expectedRevision: 0 }),
+    error => !/expected one of \./.test(error.message) && /none is defined yet/.test(error.message));
+});

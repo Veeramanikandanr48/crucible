@@ -1,1 +1,0 @@
-- A finished path traced job reports `noise` (relative noise before denoising and a one-line verdict) in `scene_render_result` (#905).

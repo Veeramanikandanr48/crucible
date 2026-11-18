@@ -1,0 +1,1 @@
+- The home hero builds a world's renderer on one-pixel stand-in textures and uploads large textures in bands, which removes the 100 to 150 ms texture upload blocks of a world build (#779)

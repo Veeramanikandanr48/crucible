@@ -7,7 +7,8 @@ import { LOOK_NAMES, VIEW_TRANSFORM_NAMES } from './view-transform-names.js';
 //   sigmoid, a 2.4 power, a matrix back to Rec.709) as a fit of AgX_Base_sRGB.cube, not the 57-point LUT itself. The
 //   older Filament/three.js polynomial put 0.18 grey 0.04 above Blender (0.501 against 0.461).
 // - neutral is the Khronos PBR Neutral tone mapper: base colours below 0.76 pass unchanged.
-// All three take linear sRGB and return display-linear sRGB in 0 to 1; the caller encodes with a power of 1 / 2.2.
+// - standard is Blender's Standard: the sRGB encoding of the clipped scene value, with no tone curve. A value above 1 clips.
+// All four take linear sRGB and return display-linear sRGB in 0 to 1; the caller encodes with a power of 1 / 2.2.
 
 const rowsToColumns = rows => rows[0].map((_, column) => rows.map(row => row[column]));
 
@@ -79,6 +80,17 @@ export function neutralColor(rgb) {
   return shifted.map(channel => clampUnit(channel * newPeak / peak * (1 - mix) + newPeak * mix));
 }
 
+/** The sRGB transfer function of one linear channel clipped to 0 to 1 (IEC 61966-2-1). */
+export function srgbEncode(value) {
+  const color = clampUnit(value);
+  return color <= 0.0031308 ? color * 12.92 : 1.055 * color ** (1 / 2.4) - 0.055;
+}
+
+/** Blender Standard. The caller encodes with a power of 1 / 2.2, so this returns the value that power turns into the sRGB encoding. */
+export function standardColor(rgb) {
+  return rgb.map(channel => srgbEncode(channel) ** 2.2);
+}
+
 const LARGEST_RADIANCE = 1e30;
 
 // NaN reads as black and infinity as a very bright finite value, so one bad channel cannot turn the whole pixel into NaN
@@ -90,6 +102,7 @@ export function applyViewTransform(name, rgb) {
   const finite = rgb.map(finiteChannel);
   if (name === 'agx') return agxColor(finite);
   if (name === 'neutral') return neutralColor(finite);
+  if (name === 'standard') return standardColor(finite);
   if (name === 'aces' || name === undefined) return finite.map(acesChannel);
   throw new RangeError(`viewTransform must be one of ${VIEW_TRANSFORM_NAMES.join(', ')}.`);
 }

@@ -1,1 +1,0 @@
-- `scene.apply` of a pose edit at 961 parts drops from about 5 ms to about 2 ms: the committed scene graph is moved in place instead of rebuilt, nodes an earlier edit already checked are not checked again, and object reflections compare world matrices as numbers instead of as a JSON string (#1219)

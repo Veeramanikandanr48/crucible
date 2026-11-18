@@ -11,16 +11,12 @@ if (before.length !== after.length) throw new Error(`The frames differ in size: 
 
 let maximumChannelDifference = 0;
 let differingPixels = 0;
-let squaredSum = 0;
-let pixelsOverEleven = 0;
 const marks = Buffer.alloc(before.length);
 for (let offset = 0; offset < before.length; offset += 4) {
   let pixelDifference = 0;
   for (let channel = 0; channel < 4; channel++) {
     pixelDifference = Math.max(pixelDifference, Math.abs(before[offset + channel] - after[offset + channel]));
   }
-  for (let channel = 0; channel < 3; channel++) squaredSum += (before[offset + channel] - after[offset + channel]) ** 2;
-  if (pixelDifference > 11) pixelsOverEleven++;
   maximumChannelDifference = Math.max(maximumChannelDifference, pixelDifference);
   const differs = pixelDifference > 0;
   if (differs) differingPixels++;
@@ -29,5 +25,5 @@ for (let offset = 0; offset < before.length; offset += 4) {
   marks[offset + 2] = differs ? 0 : before[offset + 2] >> 2;
   marks[offset + 3] = 255;
 }
-console.log(JSON.stringify({ pixels: before.length / 4, differingPixels, pixelsOverEleven, rmseOf255: Number(Math.sqrt(squaredSum / (before.length / 4 * 3)).toFixed(3)), maximumChannelDifference }));
+console.log(JSON.stringify({ pixels: before.length / 4, differingPixels, maximumChannelDifference }));
 if (pngFile) await writeFile(pngFile, encodePng(marks, Number(width)));

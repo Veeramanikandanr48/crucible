@@ -2,7 +2,7 @@ import './support/load-agent-scene-modules.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAgentScene } from '../src/agent-scene.js';
-import { exposureProblems, framingProblems, lumaShares, mergeFrameDiagnostics, pathTracerFindingsLimit, placementProblems, textureProblems } from '../src/frame-checks.js';
+import { exposureProblems, framingProblems, lumaShares, mergeFrameDiagnostics, pathTracerFindingsLimit, pathTracerSkippedPassesWarning, placementProblems, textureProblems } from '../src/frame-checks.js';
 import { closedRoom, closedRoomWithoutBake, freezeBakeClockForFile } from './support/agent-bake-rooms.mjs';
 
 freezeBakeClockForFile();
@@ -288,6 +288,22 @@ test('a path traced job says why exposure findings and passes are unavailable', 
   assert.equal(limit.severity, 'info');
   assert.match(limit.message, /object ID, depth and normal/);
   assert.match(limit.fix, /scene_look/);
+});
+
+test('a path traced job names the postPasses it skipped, and says nothing when the scene has none', () => {
+  const warning = pathTracerSkippedPassesWarning([{ name: 'toon-water' }, { name: 'dither' }]);
+  assert.equal(warning.kind, 'post-passes-skipped');
+  assert.equal(warning.severity, 'warning');
+  assert.match(warning.message, /passes toon-water, dither did not touch the image/);
+  assert.match(warning.fix, /raster job/);
+  assert.equal(pathTracerSkippedPassesWarning([]), undefined);
+  assert.equal(pathTracerSkippedPassesWarning(undefined), undefined);
+});
+
+test('the path traced exposure advice says a daylit interior traces brighter and to lower the exposure, not raise it', () => {
+  const { fix } = pathTracerFindingsLimit();
+  assert.match(fix, /brighter than the raster one/);
+  assert.match(fix, /lower effects\.exposure/);
 });
 
 test('a scene reports the z-fighting its ranking left over, and none when it opted out', async () => {

@@ -1,1 +1,0 @@
-- Native render jobs get 640 MiB of fixed memory allowance instead of 256, sized from measured native + OIDN video jobs, so a 960 x 540 film no longer runs within 50 MiB of the guard (#1186)

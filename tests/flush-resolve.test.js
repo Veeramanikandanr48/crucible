@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { flushOrderOf, MAXIMUM_FLUSH_RANK } from '../src/depth-layer.js';
 import { resolveFlush } from '../src/flush-resolve.js';
 import { CrucibleRenderer } from '../src/renderer.js';
+import { WebGL2GlazeBackend } from '../src/glaze-backend-webgl2.js';
 import { vertexShader } from '../src/shaders.js';
 
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
@@ -249,7 +250,7 @@ test('a depth rank is a metric bias plus a slope-only offset, switched off for r
 
 test('a ranked batch draws one range per rank above its own layer and ends on the layer', () => {
   const { calls, context } = recordingContext();
-  const fake = { context, uniforms: {}, applyDepthRank: CrucibleRenderer.prototype.applyDepthRank };
+  const fake = { context, backend: new WebGL2GlazeBackend(context), uniforms: {}, applyDepthRank: CrucibleRenderer.prototype.applyDepthRank };
   const ranges = [{ start: 0, count: 6, rank: 0 }, { start: 6, count: 12, rank: 3 }];
   CrucibleRenderer.prototype.drawFlushRanges.call(fake, { depthLayer: 1 }, ranges, 5);
   assert.deepEqual(calls.filter(call => call[0] === 'draw'), [['draw', 6, 0, 5], ['draw', 12, 24, 5]]);

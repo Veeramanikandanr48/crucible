@@ -10,6 +10,7 @@ import { recipeAssetNeeds } from '../src/agent-scene-assets.js';
 import { normalizeFilmTimeline, filmTimelineDuration, videoFrameCount } from '../src/film-timeline.js';
 import { OIDN_DEFAULT_SAMPLES, PATH_TRACER_DENOISERS, PATH_TRACER_JOB_LIMITS } from '../src/path-tracer-capabilities.js';
 import { AGENT_ASSET_LIMITS, describeAssetBytes } from '../src/agent-asset-limits.js';
+import { iconArtifactNames, normalizeIconSettings } from '../src/icon-sheet.js';
 
 const UUID =/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const STATES = ['queued', 'running', 'finalizing', 'completed', 'cancelling', 'cancelled', 'failed', 'interrupted'];
@@ -108,9 +109,10 @@ export function normalizeJobSettings(input, clips, recipe) {
   return settingsFrom(input, clips, recipe);
 }
 
-function settingsFrom(input, clips, recipe) {
-  objectKeys(input, ['kind', 'width', 'height', 'fps', 'duration', 'animation', 'motion', 'rendererTime', 'passes', 'renderer', 'timeline', 'audio', 'encoder', 'transparent', 'format', 'multilayer', 'region', 'quality', 'stillCount'], 'settings');
-  if (!['image', 'stills', 'video'].includes(input.kind)) throw new TypeError('kind must be image, stills or video.');
+function settingsFrom(input, clips = [], recipe) {
+  if (input?.kind === 'icons') return normalizeIconSettings(input);
+  objectKeys(input, ['kind', 'width', 'height', 'fps', 'duration', 'animation', 'motion', 'rendererTime', 'passes', 'renderer', 'timeline', 'audio', 'encoder', 'transparent', 'format', 'multilayer', 'region', 'quality', 'stillCount', 'mattes'], 'settings');
+  if (!['image', 'stills', 'video'].includes(input.kind)) throw new TypeError('kind must be image, stills, video or icons.');
   const largeFrame = input.kind === 'image';
   const maximumSide = largeFrame ? MAXIMUM_JOB_SIDE : MAXIMUM_SEQUENCE_JOB_SIDE;
   const maximumPixels = largeFrame ? MAXIMUM_JOB_PIXELS : MAXIMUM_SEQUENCE_JOB_PIXELS;
@@ -138,6 +140,7 @@ function settingsFrom(input, clips, recipe) {
   if (framesAsked !== undefined) result.stillCount = framesAsked;
   if (input.passes !== undefined) result.passes = passesFrom(input.passes, input.kind);
   if (input.renderer !== undefined) result.renderer = rendererFrom(input.renderer, input.passes);
+  if (input.mattes !== undefined) result.mattes = mattesFrom(input);
   Object.assign(result, outputOptionsFrom(input, result));
   if (input.quality !== undefined) result.quality = qualityFrom(input.quality, result.renderer);
   const lastSampleTime = input.kind === 'image' ? 0 : input.kind === 'stills' ? duration : (frameCount - 1) / fps;
@@ -178,6 +181,7 @@ function settingsFrom(input, clips, recipe) {
   }
   if (input.animation !== undefined) {
     objectKeys(input.animation, ['clip', 'start'], 'animation');
+    if (clips.length === 0) throw new RangeError('animation needs an animation clip, and this scene has none. Drop animation from the settings, or add a clip to the scene first.');
     const clip = boundedNumber(input.animation.clip, 0, clips.length - 1, 'clip', true);
     const start = boundedNumber(input.animation.start ?? 0, 0, clips[clip].duration, 'animation start');
     if (input.kind !== 'image' && start + duration > clips[clip].duration) throw new RangeError('Animation range exceeds the selected clip duration.');
@@ -202,7 +206,7 @@ function stillsFrameCountFrom(input) {
 function stillsSequenceDuration(input, frames, fps) {
   const span = (frames - 1) / fps;
   if (input.duration !== undefined && Math.abs(input.duration - span) > 1e-9) {
-    throw new RangeError(`duration is (stillCount - 1) / fps = ${span} s when stillCount is set; leave duration out.`);
+    throw new RangeError(`Leave duration out when stillCount is set: it is (stillCount - 1) / fps = ${Number(span.toFixed(4))} s here, and you sent ${input.duration}.`);
   }
   return span;
 }
@@ -300,17 +304,41 @@ function passesFrom(passes, kind) {
   return [...passes];
 }
 
-/** Every artifact filename of a job, lit image first and then each requested pass, frame by frame. */
-export function artifactNames(kind, passes = [], format = 'png', multilayer = false, stillCount = 8) {
+const MAXIMUM_MATTES = 8;
+const MAXIMUM_MATTE_NAME_LENGTH = 120;
+
+/** The ID mattes of a job: each names one object (part) or one material, and writes one gray PNG per frame. */
+function mattesFrom(input) {
+  const { mattes, kind, renderer, format, multilayer } = input;
+  if (kind === 'video') throw new RangeError('mattes need kind image or stills; a video holds the lit image only.');
+  if (renderer !== undefined) throw new RangeError('mattes cannot combine with renderer: the path tracer has no object ID or Cryptomatte pass. Leave renderer out.');
+  if (format !== undefined && format !== 'png') throw new RangeError('mattes are 8-bit PNG files: leave format out or use png.');
+  if (multilayer) throw new RangeError('mattes cannot combine with multilayer. Leave multilayer out.');
+  if (!Array.isArray(mattes) || mattes.length < 1 || mattes.length > MAXIMUM_MATTES) throw new TypeError(`mattes must list 1 to ${MAXIMUM_MATTES} entries, each { object: "<part name>" } or { material: "<material name>" }.`);
+  return mattes.map((matte, index) => {
+    objectKeys(matte, ['object', 'material'], `mattes[${index}]`);
+    const kindsGiven = ['object', 'material'].filter(key => matte[key] !== undefined);
+    if (kindsGiven.length !== 1) throw new TypeError(`mattes[${index}] needs exactly one of object or material. Pass { object: "<part name>" } or { material: "<material name>" }.`);
+    const name = matte[kindsGiven[0]];
+    if (typeof name !== 'string' || name.length < 1 || name.length > MAXIMUM_MATTE_NAME_LENGTH) throw new TypeError(`mattes[${index}].${kindsGiven[0]} must be a name of 1 to ${MAXIMUM_MATTE_NAME_LENGTH} characters. scene_render_result metrics.objectNames and metrics.cryptomatte list the names of a render.`);
+    return { [kindsGiven[0]]: name };
+  });
+}
+
+/** Every artifact filename of a job, lit image first and then each requested pass and matte, frame by frame. */
+export function artifactNames(kind, passes = [], format = 'png', multilayer = false, stillCount = 8, mattes = []) {
   if (kind === 'video') return ['render.mp4'];
+  // An icons job has one frame per item, so its frame count is its item count.
+  if (kind === 'icons') return iconArtifactNames(stillCount);
   const extension = format === 'exr' ? 'exr' : 'png';
   const stems = kind === 'image' ? ['render'] : Array.from({ length: stillCount }, (_, index) => `frame-${index}`);
   if (multilayer) return stems.map(stem => `${stem}.${extension}`);
-  return stems.flatMap(stem => [`${stem}.${extension}`, ...passes.map(pass => `${stem}-${pass}.${extension}`)]);
+  return stems.flatMap(stem => [`${stem}.${extension}`, ...passes.map(pass => `${stem}-${pass}.${extension}`), ...mattes.map((_, index) => `${stem}-matte-${index}.png`)]);
 }
 
-function artifactMimeType(settings) {
+function artifactMimeType(settings, filename = '') {
   if (settings.kind === 'video') return 'video/mp4';
+  if (settings.kind === 'icons' && filename.endsWith('.json')) return 'application/json';
   return settings.format === 'exr' ? 'image/x-exr' : 'image/png';
 }
 
@@ -340,14 +368,15 @@ export function frameByteLimitFor(width, height, baseBytes) {
 }
 
 function artifactByteLimit(settings, limits) {
-  if (settings.kind === 'video') return limits.maxOutputBytes;
+  // The atlas of a full icon set is the largest file; the combined output limit still caps the whole job.
+  if (settings.kind === 'video' || settings.kind === 'icons') return limits.maxOutputBytes;
   const frameBytes = frameByteLimitFor(settings.width, settings.height, limits.maxFrameBytes);
   return settings.format === undefined ? frameBytes : frameBytes * HIGH_PRECISION_FRAME_FACTOR;
 }
 
 function allowedFile(name) {
   const passNames = RENDER_PASS_NAMES.join('|');
-  const artifact = new RegExp(`^(?:render\\.(?:png|mp4|exr)|(?:render|frame-\\d{1,3})(?:-(?:${passNames}))?\\.(?:png|exr))(?:\\.partial)?$`);
+  const artifact = new RegExp(`^(?:render\\.(?:png|mp4|exr)|(?:icon-\\d{1,3}|atlas)\\.png|icons\\.json|(?:render|frame-\\d{1,3})(?:-(?:${passNames}|matte-[0-7]))?\\.(?:png|exr))(?:\\.partial)?$`);
   return INTERNAL_FILES.has(name) || artifact.test(name);
 }
 
@@ -835,7 +864,7 @@ export async function createAgentRenderJobs({ root, run, acquireGpu, limits: inp
       boundedNumber(record.progress.maximumPendingFrames, 0, 1, 'persisted pending frames', true);
       if (record.metrics !== undefined) record.metrics = jsonCopy(record.metrics, 65536);
       if (record.reason !== undefined && (typeof record.reason !== 'string' || record.reason.length > 2048)) throw new Error('Invalid persisted job reason.');
-      const namesAllowed = artifactNames(settings.kind, settings.passes, settings.format, settings.multilayer, settings.frameCount);
+      const namesAllowed = artifactNames(settings.kind, settings.passes, settings.format, settings.multilayer, settings.frameCount, settings.mattes);
       if (!Array.isArray(record.artifacts) || record.artifacts.length > namesAllowed.length) throw new Error('Invalid persisted artifacts.');
       const seen = new Set();
       for (const artifact of record.artifacts) {
@@ -843,7 +872,7 @@ export async function createAgentRenderJobs({ root, run, acquireGpu, limits: inp
         if (!namesAllowed.includes(artifact.filename) || seen.has(artifact.filename)) throw new Error('Invalid persisted artifact name.');
         seen.add(artifact.filename);
         const actual = await hashFile(join(directory, artifact.filename), artifactByteLimit(settings, limits));
-        if (artifact.mimeType !== artifactMimeType(settings) || artifact.bytes !== actual.bytes || artifact.sha256 !== actual.sha256) throw new Error('Persisted artifact integrity failed.');
+        if (artifact.mimeType !== artifactMimeType(settings, artifact.filename) || artifact.bytes !== actual.bytes || artifact.sha256 !== actual.sha256) throw new Error('Persisted artifact integrity failed.');
       }
       if (record.state === 'completed' && record.artifacts.length !== namesAllowed.length) throw new Error('Completed job is missing its artifacts.');
       const job = { record, persistence: Promise.resolve(), settled: Promise.resolve() };
@@ -918,7 +947,7 @@ export async function createAgentRenderJobs({ root, run, acquireGpu, limits: inp
       record.state = 'finalizing';
       await persist(job);
       objectKeys(completed, ['artifacts', 'metrics'], 'runner result');
-      const expected = artifactNames(record.settings.kind, record.settings.passes, record.settings.format, record.settings.multilayer, record.settings.frameCount);
+      const expected = artifactNames(record.settings.kind, record.settings.passes, record.settings.format, record.settings.multilayer, record.settings.frameCount, record.settings.mattes);
       if (!Array.isArray(completed.artifacts) || completed.artifacts.length !== expected.length) throw new Error('Runner did not return the required fixed artifacts.');
       const directory = await directoryFor(record.jobId);
       const metrics = jsonCopy(completed.metrics ?? {}, 65536);
@@ -927,7 +956,7 @@ export async function createAgentRenderJobs({ root, run, acquireGpu, limits: inp
       let outputBytes = 0;
       for (const output of completed.artifacts) {
         objectKeys(output, ['temporary', 'filename', 'mimeType'], 'runner artifact');
-        if (!expected.includes(output.filename) || seen.has(output.filename) || output.temporary !== `${output.filename}.partial` || output.mimeType !== artifactMimeType(record.settings)) throw new Error('Runner artifact must use the fixed filename and MIME type.');
+        if (!expected.includes(output.filename) || seen.has(output.filename) || output.temporary !== `${output.filename}.partial` || output.mimeType !== artifactMimeType(record.settings, output.filename)) throw new Error('Runner artifact must use the fixed filename and MIME type.');
         seen.add(output.filename);
         const artifact = { filename: output.filename, mimeType: output.mimeType, ...await hashFile(join(directory, output.temporary), artifactByteLimit(record.settings, limits)) };
         outputBytes += artifact.bytes;

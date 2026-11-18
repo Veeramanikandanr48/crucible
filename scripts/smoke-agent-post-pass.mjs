@@ -7,6 +7,7 @@ import sharp from 'sharp';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { createAgentPreviewFixture } from './agent-preview-fixture.mjs';
+import { assertToolListMatchesServer } from './mcp-tool-list.mjs';
 
 // Proves the user post pass through the MCP server: a scene with an ordered dither and a quarter-size downscale looks
 // quantised and blocky, a broken snippet returns the mapped compile log and leaves the session usable, a snippet that
@@ -93,7 +94,7 @@ async function waitForJob(jobId) {
 
 try {
   await client.connect(transport);
-  assert.equal((await client.listTools()).tools.length, 25);
+  await assertToolListMatchesServer(client);
   const capabilities = (await call('scene_capabilities', { topic: 'postPasses' })).structuredContent;
   assert.equal(capabilities.value.limits.maxPasses, 4);
   assert.ok((await call('scene_capabilities', { topic: 'operations' })).structuredContent.value.includes('set-post-passes'));

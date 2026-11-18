@@ -1,3 +1,0 @@
-- scene:agent-scene: the scatterOctaves field and its check.
-- scene:agent-scene+lazy: the field and the CPU tracer's octave sum, which ship with the local volume code.
-- goal:agent-scene: the scatterOctaves field and its check, so an agent can ask for multiple scattering.

@@ -3,9 +3,9 @@ import { AGX_CONSTANTS, NEUTRAL_CONSTANTS, namedLook } from './view-transform.js
 import { VIEW_TRANSFORM_NAMES, LOOK_NAMES } from './view-transform-names.js';
 import { catalogLook } from './look-catalog.js';
 
-// The GLSL of the AgX and Khronos PBR Neutral view transforms and of the look LUT. It lives outside shaders.js so a
-// scene on the default curve never downloads it: the renderer asks for it only when it is given viewTransform: 'agx' or
-// 'neutral', or a look, and importing this module (or loading it through loadAgentSceneModules) registers it.
+// The GLSL of the AgX, Khronos PBR Neutral and Standard view transforms and of the look LUT. It lives outside shaders.js so a
+// scene on the default curve never downloads it: the renderer asks for it only when it is given viewTransform: 'agx',
+// 'neutral' or 'standard', or a look, and importing this module (or loading it through loadAgentSceneModules) registers it.
 // The constants are printed from view-transform.js, which the path tracer and the tests read, so the curves cannot drift.
 // The renderer carries the display curve in four programs (the main fragment, the liquid fragment, the environment
 // background and the HDR post pass). Each holds the ACES fit as one expression, which apply swaps for a call to
@@ -54,6 +54,14 @@ const NEUTRAL_GLSL = `vec3 selectedViewTransform(vec3 color) {
   return clamp(mix(color, vec3(newPeak), desaturate), 0.0, 1.0);
 }`;
 
+const STANDARD_GLSL = `vec3 selectedViewTransform(vec3 color) {
+  vec3 clipped = clamp(color, 0.0, 1.0);
+  vec3 encoded = mix(clipped * 12.92, 1.055 * pow(clipped, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, clipped));
+  return pow(encoded, vec3(2.2));
+}`;
+
+const VIEW_TRANSFORM_GLSL = { agx: AGX_GLSL, neutral: NEUTRAL_GLSL, standard: STANDARD_GLSL };
+
 const LOOK_GLSL = `uniform highp sampler3D ${LOOK_UNIFORM};
 vec3 applyLook(vec3 color) {
   float size = float(textureSize(${LOOK_UNIFORM}, 0).x);
@@ -72,7 +80,7 @@ function apply(source, kind, viewTransform, hasLook) {
   let result = source;
   if (viewTransform !== 'aces') {
     if (!result.includes(ACES_EXPRESSION)) throw new Error(`The ${kind} shader no longer holds the ACES expression that a view transform replaces.`);
-    result = insertAfterPrecision(result.replaceAll(ACES_EXPRESSION, 'selectedViewTransform(color)'), viewTransform === 'agx' ? AGX_GLSL : NEUTRAL_GLSL);
+    result = insertAfterPrecision(result.replaceAll(ACES_EXPRESSION, 'selectedViewTransform(color)'), VIEW_TRANSFORM_GLSL[viewTransform]);
   }
   if (hasLook && kind === 'post') {
     if (!result.includes(POST_FINISH_LINE)) throw new Error('The post shader no longer holds the line that a look is applied before.');

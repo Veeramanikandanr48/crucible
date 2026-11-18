@@ -2,7 +2,10 @@ blank_issues_enabled: false
 contact_links:
   - name: Ask a question
     url: https://github.com/codepawl/crucible/discussions/categories/q-a
-    about: How to do something with Crucible or its MCP server. Show what you made in Show and tell.
+    about: How to do something with Crucible or its MCP server.
+  - name: Show what you made
+    url: https://github.com/codepawl/crucible/discussions/new?category=show-and-tell
+    about: Post a render or a live scene. Picked work goes on the showcase page, with credit.
   - name: Report a security problem
     url: https://github.com/codepawl/crucible/security/advisories/new
     about: Report it privately. Do not open a public issue for a vulnerability.

@@ -2,6 +2,9 @@
 //
 // node bench/agent-modeling/compare-bench.mjs <baseline bench file> <candidate bench file> [--tolerance 0.05]
 //
+// Both files must come from the same skill mode (bench.mjs --skill-mode, recorded in each file; none when absent): comparing
+// runs whose agents saw different system prompts is refused with exit 2.
+//
 // A candidate that ran only a subset of the tasks (bench.mjs --kinds, --topics or --tasks) is compared on those tasks alone: the
 // baseline is cut down to the same tasks first, and the baseline tasks that did not run are listed as skipped. A skipped task
 // is never a failure. Prints pass@1, pass^k, calls and tokens per run side by side, then the tasks whose pass count changed. Exits with 1
@@ -16,6 +19,17 @@ const percent = value => (value === null || value === undefined ? '?' : `${Math.
 const signed = value => (value > 0 ? `+${value}` : String(value));
 
 export const DEFAULT_INFRA_BOUND = 0.1;
+
+/** The skill mode a bench file was run in; files from before skill modes were run without a skill. */
+export const skillModeOf = benchFile => benchFile.skillMode ?? 'none';
+
+/** Two runs in different skill modes differ in the system prompt, so their pass rates say nothing about a change. */
+export function assertSameSkillMode(baseline, candidate) {
+  const baselineMode = skillModeOf(baseline);
+  const candidateMode = skillModeOf(candidate);
+  if (baselineMode === candidateMode) return;
+  throw new Error(`Cannot compare a ${baselineMode}-skill baseline with a ${candidateMode}-skill candidate: the agents saw different system prompts. Run base and head in the same skill mode (a change under skills/ uses --skill-mode references on both).`);
+}
 
 /** The baseline of one model cut down to the tasks the candidate ran: its totals and its per-task results. With the per-run
  * records the totals are recomputed exactly; without them only pass@1 can be, from the per-task pass counts. */
@@ -37,6 +51,7 @@ export function restrictBaseline(baseline, model, ranTasks) {
  * pass@1 and are not in it; a model whose infra share passes `infraBound` in either file is flagged INFRA, since its
  * pass@1 then rests on too few runs, and that makes the comparison fail like a regression does. */
 export function compareBench(baseline, candidate, tolerance = 0.05, infraBound = DEFAULT_INFRA_BOUND) {
+  assertSameSkillMode(baseline, candidate);
   const lines = [];
   let regressed = false;
   let tooMuchInfra = false;
@@ -69,7 +84,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: { tolerance: { type: 'string', default: '0.05' }, 'infra-bound': { type: 'string', default: String(DEFAULT_INFRA_BOUND) } } });
   const [baselinePath, candidatePath] = positionals;
   const [baseline, candidate] = await Promise.all([baselinePath, candidatePath].map(async path => JSON.parse(await readFile(path, 'utf8'))));
-  const result = compareBench(baseline, candidate, Number(values.tolerance), Number(values['infra-bound']));
+  let result;
+  try {
+    result = compareBench(baseline, candidate, Number(values.tolerance), Number(values['infra-bound']));
+  } catch (error) {
+    console.error(error.message);
+    process.exit(2);
+  }
   console.log(result.text);
   process.exitCode = result.regressed || result.tooMuchInfra ? 1 : 0;
 }

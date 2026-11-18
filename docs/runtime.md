@@ -43,7 +43,11 @@ Two guards stop a slow frame from spiralling. A frame longer than `maximumFrameS
 | `systems` | `[]` | System objects, in the order they run |
 | `frame` | `context => ({ time })` | Returns the object passed to `target.render`. Move parts with `renderer.updateParts` here. |
 | `pauseWhenHidden` | `true` | Stop frames while the tab is hidden |
-| `scheduler`, `clock`, `visibility` | browser | `{ request(callback), cancel(handle) }`, `() => milliseconds` and `{ hidden, subscribe(callback) }`, injected by tests and headless runs |
+| `pauseWhenOffscreen` | `true` | With `element`, stop frames while the canvas is scrolled out of view (an `IntersectionObserver`) |
+| `element` | none | The canvas or its container, watched for `pauseWhenOffscreen` |
+| `isIdle` | none | `context => boolean`, true when nothing changed: no system is moving anything and no temporal accumulation is converging. The loop then draws no frame and schedules none, so it costs no GPU and no CPU, until `wake()`. Without it the loop never sleeps, because a runtime cannot know whether its systems change the picture. |
+| `idleSleep` | `true` | `false` keeps drawing every frame even when `isIdle` says idle |
+| `scheduler`, `clock`, `visibility`, `observe` | browser | `{ request(callback), cancel(handle) }`, `() => milliseconds`, `{ hidden, subscribe(callback) }` and `(element, callback(onscreen)) => stop`, injected by tests and headless runs |
 
 The first argument is any object with `render(frame)`, such as `CrucibleRenderer`.
 
@@ -51,6 +55,7 @@ The first argument is any object with `render(frame)`, such as `CrucibleRenderer
 
 - `start()` initialises the systems once and schedules frames; a system whose `init` threw is initialised again by the next `start()`. `stop()` ends the loop and drops the partial step; systems stay initialised, so `start()` continues the same world.
 - `pause()` and `resume()` hold and release the loop. The time spent paused is never simulated. A hidden tab pauses the same way and resumes when it shows again.
+- `wake()` draws the next frame after input or a state change when the loop sleeps because of `isIdle`; `sleeping` is true while it waits. Call it from your input handlers and whenever a system changes something. A frame that follows a sleep, a hidden tab or an offscreen pause starts with a zero time step, so the sleep is never simulated.
 - `step(milliseconds)` runs one frame without a scheduler, for tests and for stepping while paused.
 - `addSystem(system, index)`, `replaceSystem(name, system)`, `removeSystem(name)`, `getSystem(name)` and `systems` (the names, in order). A system added to a started runtime is initialised at once; a replaced or removed one is disposed.
 - `dispose()` stops the loop and disposes every system in reverse order. The runtime cannot start again.

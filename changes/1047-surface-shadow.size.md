@@ -1,2 +1,0 @@
-- scene:agent-scene+lazy: the castShadow field and its check, and the CPU tracer's surface-shadow function; both ship with the local volume code that carries them.
-- goal:agent-scene: the castShadow field and its check, so an agent can switch the surface shadow on.

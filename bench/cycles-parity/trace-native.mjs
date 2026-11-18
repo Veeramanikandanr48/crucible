@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import { createCamera } from '../../src/path-tracer.js';
 import * as packModule from '../../src/path-tracer-gpu-pack.js';
 import { buildTraceSceneWithManyLights } from './trace-scene-many-lights.mjs';
-import { buildInstancedTraceScene } from './instanced-scene.mjs';
+import { buildCookJobTraceScene, buildInstancedTraceScene } from './instanced-scene.mjs';
 import * as renderNative from '@codepawlhq/cook';
 import { writeFloat32Npy } from './npy.mjs';
 import { reconstructTraceSceneSource } from './scene-bridge.mjs';
@@ -196,6 +196,18 @@ function parseLensOptions(argumentList) {
   return lens;
 }
 
+// The "cycles" kernel traces the scene the way a native render job exports it (a normal-mapped part under a non-conformal matrix is an
+// instance, #1844); --instancing also keeps copies of one geometry as instances and refuses a scene with none. The legacy kernel is flattened.
+function buildParityTraceScene(traceSource, options) {
+  if (options.instancing) {
+    return buildInstancedTraceScene(traceSource.parts, traceSource.environment);
+  }
+  if (options.kernel === 'cycles') {
+    return buildCookJobTraceScene(traceSource.parts, traceSource.environment, { instancing: false });
+  }
+  return buildTraceSceneWithManyLights(traceSource.parts, traceSource.environment);
+}
+
 function packSceneForKernel(traceScene, camera, options) {
   if (options.kernel === 'cycles' && typeof renderNative.buildNativeInputV2 === 'function') {
     return renderNative.buildNativeInputV2(traceScene, camera, options, packModule);
@@ -332,7 +344,7 @@ async function runCli() {
   if (options.instancing && options.kernel !== 'cycles') {
     throw new RangeError('Option --instancing needs --kernel cycles: the legacy kernel packs flattened scenes only.');
   }
-  const traceScene = options.instancing ? buildInstancedTraceScene(traceSource.parts, traceSource.environment) : buildTraceSceneWithManyLights(traceSource.parts, traceSource.environment);
+  const traceScene = buildParityTraceScene(traceSource, options);
   // render-cycles.py takes the lens from the flags only, so a lens set in the scene file is dropped here to keep the two sides comparable.
   const { fStop: ignoredSceneFStop, ...sceneCameraWithoutLens } = traceSource.camera;
   const camera = createCamera({ ...sceneCameraWithoutLens, ...options.lens }, options.width, options.height);

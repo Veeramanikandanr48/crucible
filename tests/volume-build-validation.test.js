@@ -31,6 +31,7 @@ const BAD_DETAIL_FIELDS = [
   ['multiScatter', 2, /Volume multi scatter must be between 0 and 1/],
   ['detailAmount', 2, /Volume detail amount must be between 0 and 1/],
   ['surfaceTransmittance', -0.5, /Volume surface transmittance must be between 0 and 1/],
+  ['beamRadius', 21, /Volume beam radius must be between 0 and 20/],
   ['multiExtinction', 2, /Volume multi extinction must be between 0 and 1/],
   ['multiAnisotropy', -1, /Volume multi anisotropy must be between 0 and 1/],
   ['keyTransmittance', 2, /Volume key transmittance must be between 0 and 1/],

@@ -1,0 +1,1 @@
+- `createGaussianSplats` takes `outline: { color, width }` (width 1 to 4 pixels, needs `alphaCut`) to draw a dark pixel outline round the silhouette of hard-disc splats, for the pixel-art look (#1744)

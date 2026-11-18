@@ -10,7 +10,9 @@ export const JOLT_ADAPTER_LIMITS = Object.freeze({
 });
 
 const MAX_CONVEX_RADIUS = 0.05;
-const SUPPORTED_SHAPES = ['ball', 'cuboid', 'capsule', 'cylinder', 'convexHull'];
+const SUPPORTED_SHAPES = ['ball', 'cuboid', 'capsule', 'cylinder', 'cone', 'convexHull'];
+// A compound body is several colliders on one body; the baked path allows the same number.
+const MAX_COMPOUND_COLLIDERS = 16;
 const INSTALL_HINT = 'Install it with `npm install jolt-physics`, or build the system with rapierAdapter.';
 
 let joltPromise;
@@ -68,8 +70,8 @@ function validateSupported(prepared) {
   }
   colliderCount.forEach((count, bodyIndex) => {
     const body = prepared.bodies[bodyIndex];
-    if (count > 1) {
-      throw new TypeError(`The jolt adapter takes one collider per body; body "${body.name}" has ${count}. Split it into one body per collider, or use rapierAdapter.`);
+    if (count > MAX_COMPOUND_COLLIDERS) {
+      throw new RangeError(`The jolt adapter takes at most ${MAX_COMPOUND_COLLIDERS} colliders per body; body "${body.name}" has ${count}. Merge colliders or split the body.`);
     }
     if (count === 0 && body.type === 'dynamic') {
       throw new TypeError(`A dynamic body needs a collider for the jolt adapter; body "${body.name}" has none.`);
@@ -120,9 +122,10 @@ function createJoltWorld(prepared) {
   const bodyIds = [];
   const colliderOfBodyIndex = new Map();
   const bodyOfIdIndex = new Map();
-  const colliderOfBody = new Array(prepared.bodies.length).fill(-1);
+  // A compound body lists several colliders; the first one stands for the body in events, rays and overlaps.
+  const collidersOfBody = prepared.bodies.map(() => []);
   prepared.colliders.forEach((collider, colliderIndex) => {
-    colliderOfBody[collider.body] = colliderIndex;
+    collidersOfBody[collider.body].push(colliderIndex);
   });
 
   const motionTypes = { dynamic: Jolt.EMotionType_Dynamic, fixed: Jolt.EMotionType_Static, kinematic: Jolt.EMotionType_Kinematic };
@@ -138,6 +141,9 @@ function createJoltWorld(prepared) {
       shapeSettings = new Jolt.CapsuleShapeSettings(collider.halfHeight, collider.radius);
     } else if (collider.shape === 'cylinder') {
       shapeSettings = new Jolt.CylinderShapeSettings(collider.halfHeight, collider.radius, Math.min(MAX_CONVEX_RADIUS, collider.halfHeight, collider.radius) * 0.5);
+    } else if (collider.shape === 'cone') {
+      // Rapier's cone has its apex at +Y; Jolt has no cone, so a tapered cylinder with a zero top radius stands in for it.
+      shapeSettings = new Jolt.TaperedCylinderShapeSettings(collider.halfHeight, 0, collider.radius, 0);
     } else {
       shapeSettings = new Jolt.ConvexHullShapeSettings();
       for (let index = 0; index < collider.points.length; index += 3) {
@@ -154,10 +160,21 @@ function createJoltWorld(prepared) {
     return new Jolt.RotatedTranslatedShapeSettings(offset, rotation, shapeSettings);
   }
 
-  function createShape(collider) {
-    const shapeResult = createShapeSettings(collider).Create();
+  function createShape(colliderIndices) {
+    const colliders = colliderIndices.map(colliderIndex => prepared.colliders[colliderIndex]);
+    let shapeSettings;
+    if (colliders.length === 1) {
+      shapeSettings = createShapeSettings(colliders[0]);
+    } else {
+      // Each part carries its own offset inside its settings, so the compound places every part at the origin.
+      shapeSettings = new Jolt.StaticCompoundShapeSettings();
+      const origin = own(new Jolt.Vec3(0, 0, 0));
+      const identity = own(new Jolt.Quat(0, 0, 0, 1));
+      for (const collider of colliders) shapeSettings.AddShape(origin, identity, createShapeSettings(collider), 0);
+    }
+    const shapeResult = shapeSettings.Create();
     if (shapeResult.HasError()) {
-      throw new RangeError(`Collider "${collider.name}" could not be built by jolt: ${shapeResult.GetError().c_str()}. Convex hull points must span a volume.`);
+      throw new RangeError(`Collider "${colliders[0].name}" could not be built by jolt: ${shapeResult.GetError().c_str()}. Convex hull points must span a volume.`);
     }
     return shapeResult.Get();
   }
@@ -172,11 +189,12 @@ function createJoltWorld(prepared) {
   }
 
   function addBody(body, bodyIndex) {
-    const colliderIndex = colliderOfBody[bodyIndex];
+    const colliderIndices = collidersOfBody[bodyIndex];
+    const colliderIndex = colliderIndices.length ? colliderIndices[0] : -1;
     const collider = colliderIndex >= 0 ? prepared.colliders[colliderIndex] : undefined;
     let shape;
     if (collider) {
-      shape = createShape(collider);
+      shape = createShape(colliderIndices);
     } else {
       shape = new Jolt.EmptyShapeSettings().Create().Get();
     }
@@ -192,7 +210,7 @@ function createJoltWorld(prepared) {
       creation.mRestitution = collider.restitution;
       if (collider.mass !== undefined && body.type === 'dynamic') {
         creation.mOverrideMassProperties = Jolt.EOverrideMassProperties_CalculateInertia;
-        creation.mMassPropertiesOverride.mMass = collider.mass;
+        creation.mMassPropertiesOverride.mMass = colliderIndices.reduce((total, index) => total + prepared.colliders[index].mass, 0);
       }
     }
     if (body.type === 'dynamic') {

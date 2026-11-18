@@ -4,9 +4,10 @@ import { createAgentScene, REVISION_HISTORY_LIMIT } from './agent-scene.js';
 import { environmentPatchWithSetup } from './agent-look.js';
 import { assetDiagnostics } from './agent-diagnostics.js';
 import { fitPerspectiveDistance } from './camera.js';
-import { validateSkinGeometry, validateSkinPose } from './skinning.js';
+import { skinnedWorldBounds, validateSkinGeometry, validateSkinPose } from './skinning.js';
 import { validateMorphGeometry, validateMorphTransform } from './morph.js';
 import * as agentMotion from './agent-motion.js';
+import { clipDisplayName } from './clip-name.js';
 import { compileClipStrip } from './clip-strip.js';
 import { clipLayerContextFromAsset, retargetSourceFromAsset } from './agent-clip-layers.js';
 import { retargetAssetClip, retargetReport } from './agent-retarget.js';
@@ -186,10 +187,20 @@ function localBounds(geometry) {
   return { min: minimum, max: maximum };
 }
 
-function framingBounds(geometryInfos, matrices) {
+// Unskinned parts use their geometry bounds corners; a skinned part is measured as drawn, through its joint palette.
+function framingBounds(geometryInfos, matrices, skinnedParts = []) {
   const minimum = [Infinity, Infinity, Infinity];
   const maximum = [-Infinity, -Infinity, -Infinity];
   for (let index = 0; index < geometryInfos.length; index++) {
+    const skinned = skinnedParts[index];
+    if (skinned) {
+      const drawn = skinnedWorldBounds(skinned.geometry, skinned.skin, matrices[index]);
+      for (let axis = 0; axis < 3; axis++) {
+        minimum[axis] = Math.min(minimum[axis], drawn.minimum[axis]);
+        maximum[axis] = Math.max(maximum[axis], drawn.maximum[axis]);
+      }
+      continue;
+    }
     const bounds = geometryInfos[index].bounds;
     const matrix = matrices[index];
     for (let corner = 0; corner < 8; corner++) {
@@ -771,7 +782,11 @@ export function createAgentAssetScene(asset, inputRecipe, { sources } = {}) {
         return world;
       });
       if (autoFrame) {
-        candidate.camera = framedCamera(framingBounds(records.map(record => geometryInfoOf(record, stagedEdits)), stagedMatrices));
+        candidate.camera = framedCamera(framingBounds(
+          records.map(record => geometryInfoOf(record, stagedEdits)),
+          stagedMatrices,
+          records.map((record, index) => transaction.parts[index].skin ? { geometry: geometryOf(record, stagedEdits), skin: transaction.parts[index].skin } : null),
+        ));
         candidate = normalize(candidate);
         stagedSampler = agentMotion.compileAgentMotion(candidate.motion, motionRecipe(candidate));
         sampled = targetTime === null ? null : stagedSampler?.sample(targetTime);
@@ -1121,7 +1136,7 @@ export function createAgentAssetScene(asset, inputRecipe, { sources } = {}) {
         geometryBytes, animation: structuredClone(recipe.animation),
         motion: recipe.motion ? { duration: recipe.motion.duration, loop: recipe.motion.loop, tracks: recipe.motion.tracks.length, layers: recipe.motion.layers?.length ?? 0, time: motionTime } : null,
         physics: physicsSampler ? physicsSampler.report() : null,
-        animations: asset.animations.map((clip, index) => ({ id: index, label: String(clip.name ?? `Clip ${index}`).slice(0, 256), duration: clip.duration })),
+        animations: asset.animations.map((clip, index) => ({ id: index, label: clipDisplayName(clip, index).slice(0, 256), duration: clip.duration })),
         nodes, offset, truncated: selected.length > offset + nodes.length,
       };
     },

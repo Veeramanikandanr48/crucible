@@ -1,5 +1,0 @@
-- entry:liquid-shader: the liquid pass carries the mirror lookup (about 580 bytes gzip) so water that transmits light shows the building and sky in it, as the lit program already does for opaque water
-- entry:spume: spume bundles the liquid shader, so it takes the same 580 bytes
-- scene:gltf-box+lazy: a glTF with transmission loads the liquid shader, so the scene pays the same 600 bytes
-- scene:agent-scene+lazy: the lazy shader code includes the liquid shader, the same 610 bytes
-- goal:agent-scene: the scene was over its goal before this change (136589 bytes), and the 10 bytes it grows in the core bundle come from the shared mirror lookup moving into its own module

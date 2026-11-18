@@ -37,7 +37,7 @@ export default defineConfig({
   build: {
     copyPublicDir: false,
     rolldownOptions: {
-      external: ['@dimforge/rapier3d-compat', 'jolt-physics', 'manifold-3d'],
+      external: ['@dimforge/rapier3d-compat', 'jolt-physics', 'manifold-3d', 'playwright-core', /^node:/],
       output: { banner: legalBanner },
     },
     outDir: 'build',
@@ -73,6 +73,9 @@ export default defineConfig({
         grass: 'src/grass.js',
         clutter: 'src/clutter.js',
         'light-bake': 'src/light-bake.js',
+        'scene-pack': 'src/scene-pack.js',
+        'scene-pack-poster': 'src/scene-pack-poster.js',
+        'crucible-scene': 'src/crucible-scene.js',
         'light-bake-gpu': 'src/light-bake-gpu.js',
         'ground-bounce': 'src/ground-bounce.js',
         'floor-sky-visibility': 'src/floor-sky-visibility.js',
@@ -102,6 +105,8 @@ export default defineConfig({
         'subsurface-shader': 'src/subsurface-shader.js',
         'fog-shader': 'src/fog-shader.js',
         'linear-output-shader': 'src/linear-output-shader.js',
+        'retro-shader': 'src/retro-shader.js',
+        'glitter-shader': 'src/glitter-shader.js',
         'light-linking': 'src/light-linking.js',
         'cascaded-shadows': 'src/cascaded-shadows.js',
         'light-shapes': 'src/light-shapes.js',

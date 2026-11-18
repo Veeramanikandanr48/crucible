@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
-import { createHash, randomUUID } from 'node:crypto';
+import { previewCallTimeoutMs, recipeHasGridVolume, operationsAddGridVolume } from './agent-evaluation-timeout.mjs';
+import { createHash, randomUUID, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { totalmem } from 'node:os';
 import { sampleBrowserHeap, memoryGuardLimits, exceedsMemoryGuard, memoryGuardMessage, createNativeMemoryAllowance } from './agent-memory-guard.mjs';
@@ -21,15 +22,17 @@ import { chooseDenoiser, finishWithOidn } from './agent-path-trace-denoise.mjs';
 import { createNativeSequence } from './agent-native-sequence.mjs';
 import { chooseNativeTemporal, createTemporalAccumulator, temporalFrameSeed } from './agent-native-temporal.mjs';
 import { readNativeCapacity } from './native-capacity.mjs';
+import { describeBackendFallback, explainFailureAfterFallback } from '../src/agent-backend-fallback.js';
 import { chooseNativeInstancing, chooseNativeKernel, chooseTraceBackend, createNativeTracerLocator, fetchNativeExport, isNativeTimeLimitError, traceFrameNative, traceTexelsNative } from './agent-native-trace.mjs';
 import { addonCapabilities, addonFileFor, addonImportMap } from './mcp-addons.mjs';
-import { createAgentAssetCatalog } from './agent-asset-catalog.mjs';
+import { createAgentAssetCatalog, fingerprintAssetDirectory } from './agent-asset-catalog.mjs';
+import { launchWithShaderCache, shaderCacheDirectory } from './agent-shader-cache.mjs';
 import { createPackRegistry } from './agent-packs.mjs';
 import { MAXIMUM_INSTALLED_PACKS, MAXIMUM_PACK_BYTES, MAXIMUM_PACK_FILES, MAXIMUM_PACK_FILE_BYTES, MAXIMUM_PACK_JSON_BYTES, MAXIMUM_PACK_ITEMS_PER_KIND, PACK_CONTENT_KINDS } from '../src/pack-manifest.js';
 import { geometryOnlyGlb } from './agent-query-asset.mjs';
 import { AGENT_ASSET_LIMITS, assertCombinedAssetBytes, assertCombinedByteTotal, sceneAssetBytesLimitMessage } from '../src/agent-asset-limits.js';
 import { recipeAssetNeeds } from '../src/agent-scene-assets.js';
-import { namesCatalogFiles, resolveAssetPlacementNames } from '../src/agent-asset-names.js';
+import { namesCatalogFiles, resolveAssetPlacementNames, namesCatalogSequences, resolveCatalogSequenceNames } from '../src/agent-asset-names.js';
 import { sequenceFrameIds, hasStreamedSequence } from '../src/agent-texture-sequence.js';
 import { readVolumeGridFiles, volumeGridFileBytes } from '../src/mcp-volume-grids.js';
 import { catalogLookReferences, BUNDLED_ENVIRONMENT_NAMES, BUNDLED_CUBE_LOOK_NAMES } from '../src/look-catalog.js';
@@ -42,6 +45,9 @@ import { RENDER_QUALITY_NOTE, applyQuality, tierReport } from './agent-render-qu
 import { RENDER_BUDGET_NOTE, chooseBudgetSettings, parseBudget } from './agent-render-budget.mjs';
 import { RENDER_ESTIMATE_NOTE, estimateRenderJob, historyWithJob, parseHistory, pathTraceTriangleProblem, renderReport, sceneSizeFrom } from './agent-render-estimate.mjs';
 import { objectIdMetrics } from './agent-object-id-metrics.mjs';
+import { renderIconsInPage } from './agent-icon-page.mjs';
+import { ICON_CAPABILITIES } from '../src/icon-sheet.js';
+import { renderJobMattes } from './job-mattes.mjs';
 import { encodeRenderOutput, encodeMultilayerExr } from './render-output-encoders.mjs';
 import { createFrameEncoder } from './frame-encoder.mjs';
 import { DEFAULT_PAGE_ENCODER_QUANTIZER, createFrameReceiver, startVideoEncoderInPage } from './gpu-frame-reader.mjs';
@@ -50,11 +56,14 @@ import { filmTimelineDuration, filmTimelineShotStarts, sampleFilmTimeline } from
 import { isPreviewHost } from './preview-host.mjs';
 import { runAnnotateSession } from './annotate-session.mjs';
 import { openInDefaultBrowser } from './annotate-open.mjs';
-import { ANNOTATE_LIMITS } from '../src/agent-annotate.js';
+import { ANNOTATE_LIMITS, validateMarks, isBoundedPng } from '../src/agent-annotate.js';
+import { REVIEW_LINK_LIMITS, newReviewId, parseReviewFile, validateReviewMarks } from '../src/review-link.js';
+import { writeReviewBuild } from './review-page.mjs';
 import { normalizeReview, reviewDeadlineMessage, REVIEW_LIMITS } from './agent-review.mjs';
-import { mergeFrameDiagnostics, pathTracerFindingsLimit } from '../src/frame-checks.js';
+import { mergeFrameDiagnostics, pathTracerFindingsLimit, pathTracerSkippedPassesWarning } from '../src/frame-checks.js';
 import { BRANCH_LIMITS, validateBranchName } from '../src/agent-branches.js';
 import { createSharedGpuCard } from './agent-gpu-queue.mjs';
+import { isBrowserLoss, describeBrowserLoss } from './agent-browser-loss.mjs';
 import { sessionProblem, SCENE_STORE_LIMITS } from '../src/agent-errors.js';
 
 const SCENE_LIMITS = AGENT_SCENE_DEFAULT_LIMITS;
@@ -75,6 +84,8 @@ const MAXIMUM_KEPT_WEB_BUILDS = 4;
 const EXPORTED_GLB_NAME = /^[0-9a-f-]{36}\.glb$/;
 const EXPORTED_WEB_BUILD_NAME = /^web-[0-9a-f-]{36}$/;
 const EVALUATION_TIMEOUT_MS = 30000;
+// A browser stuck in a long shader compile may never answer the close request; teardown waits this long, then goes on (#2200).
+const BROWSER_CLOSE_TIMEOUT_MS = 5000;
 const RECOVERY_HINT = 'The scenes in this runtime are lost. Call scene_create (or scene_create_asset) to start a fresh runtime; no server restart is needed.';
 const FAILED_RUNTIME_MESSAGE = `The agent runtime is failed. ${RECOVERY_HINT}`;
 // Handing the scene page to a render job or review and bringing it back gets longer than an ordinary call. A job cut short by its deadline usually ran
@@ -83,8 +94,6 @@ const PAGE_HANDOFF_TIMEOUT_MS = 4 * EVALUATION_TIMEOUT_MS;
 const QUERY_ONLY_TIMEOUT_MS = 120000;
 /** A bake runs on a worker for up to its own limit, so a call that bakes gets that much more than a plain call. */
 const BAKE_EVALUATION_TIMEOUT_MS = EVALUATION_TIMEOUT_MS + BAKE_WORKER_MAXIMUM_SECONDS * 1000;
-/** The first draw of a grid volume compiles its shader, which took 23 to 29 s on a loaded GPU, so an add-explosion apply (which adds one) gets twice a plain call. */
-const GRID_VOLUME_EVALUATION_TIMEOUT_MS = 2 * EVALUATION_TIMEOUT_MS;
 
 /** The last set-bake among the operations decides: a bake object adds one, null clears it. Undefined when there is none. */
 function bakeAfterOperations(operations) {
@@ -108,6 +117,12 @@ const VENDOR_FILES = Object.freeze({
 });
 
 /** Checks the launch paths that need no job folder; the CLI runs it before serving so a bad value exits with its message. */
+// What a tool that needs the preview renderer says while a render job holds it: which job, how far it is, and the next call.
+function leaseHeldMessage(record) {
+  const progress = record.state === 'running' ? ` (frame ${record.progress.frames} of ${record.settings.frameCount})` : '';
+  return `The renderer is leased to render job ${record.jobId}, which is ${record.state}${progress}. Poll scene_render_status with {"jobId":"${record.jobId}"} until it is completed, or stop it with scene_render_cancel, then call this tool again.`;
+}
+
 export function validateLaunchPaths({ browser, assets, packs, ffmpeg = 'ffmpeg', audio }) {
   if (browser !== undefined && (typeof browser !== 'string' || !existsSync(browser))) {
     throw new Error('The configured browser executable does not exist.');
@@ -128,7 +143,7 @@ export function validateLaunchPaths({ browser, assets, packs, ffmpeg = 'ffmpeg',
 
 export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', browser: browserPath, memory = 192, assets: assetRoot, packs: packsRoot,
   jobs: jobRoot, ffmpeg = 'ffmpeg', audio: audioRoot, gpuQueue, openPage = openInDefaultBrowser, addons: addonSet = { addons: [], skipped: [] },
-  previewUrl = new URL(/* @vite-ignore */ '../build/mcp/preview.js', import.meta.url), totalMemoryBytes = totalmem() } = {}) {
+  previewUrl = new URL(/* @vite-ignore */ '../build/mcp/preview.js', import.meta.url), totalMemoryBytes = totalmem(), askUserFixture } = {}) {
   if (!['gpu', 'cpu'].includes(backend)) {
     throw new RangeError('backend must be gpu or cpu.');
   }
@@ -166,6 +181,13 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
   let cancelReview;
   // One per scene_ask_user call that is waiting for the person; close() aborts them so the page server and its timer end at once.
   const pendingAskControllers = new Set();
+  // The view each exported review page shows (reviewId to sessionId, revision and camera), so a saved review file carries only marks and
+  // cannot choose the camera its rays are cast from. The reviewId sits in the exported page, so a file proves nothing about who wrote it.
+  // Each entry is read once; oldest first, bounded.
+  const rememberedReviews = new Map();
+  // Views shown inline by an MCP Apps host (#923): the person's marks come back in a later call, so the frame they marked is kept here.
+  const inlineAsks = new Map();
+  const MAXIMUM_INLINE_ASKS = 8;
   // Open scenes, least recently used first; the last one is what a call without a sessionId means.
   const openSessionIds = new Set();
   // Set once a recipe with a streamed texture sequence is read; from then on a call with a motion time supplies its frames first.
@@ -178,6 +200,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
   let queue = Promise.resolve();
   let closing;
   let catalogPromise;
+  let catalogFingerprint;
   let packsPromise;
   let jobsPromise;
   // Set by submitJob for the one job that may run; runJob takes it. Kept in the job folder, the history never leaves the machine.
@@ -201,6 +224,81 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
   }
   const savedGlbPaths = [];
   const savedWebBuildPaths = [];
+  // One frame for marking, with the camera it was drawn with. Shared by the local annotate page and the exported review page.
+  async function captureAnnotateFrame(sessionId, width, height, motionTime) {
+    if (![width, height].every(value => Number.isInteger(value) && value >= 64 && value <= 1024)) {
+      throw new RangeError('Preview dimensions must be integers from 64 to 1024.');
+    }
+    return enqueue(async () => {
+      await requirePreviewRenderer();
+      requireSession(sessionId);
+      await page.setViewportSize({ width, height });
+      return invoke('annotateFrame', { sessionId, ...(motionTime === undefined ? {} : { motionTime }) });
+    });
+  }
+  // The view the marks were made on. A film scene also names the time it was drawn at (`motionTime`), so a note like "too bright
+  // here" says at which moment; a scene without motion leaves the field out.
+  function annotateViewOf(frame) {
+    const motionTime = frame.metadata.motionTime;
+    return { width: frame.width, height: frame.height, camera: frame.camera, ...(typeof motionTime === 'number' ? { motionTime } : {}) };
+  }
+  // Resolves pixel marks to parts, points and normals against the camera of the picture they were made on. The answer is the same
+  // shape whether the marks came from the local page or from a saved review file.
+  async function sentMarksContent(base, camera, marks, duringText) {
+    const { sessionId, view } = base;
+    const picked = await enqueue(() => invoke('pickMarks', { sessionId, camera, marks, width: view.width, height: view.height, ...(view.motionTime === undefined ? {} : { motionTime: view.motionTime }) }));
+    const sceneChanged = picked.revision !== base.revision;
+    return { ...base, outcome: 'sent', marks: picked.marks,
+      ...(sceneChanged ? { warning: `The scene changed from revision ${base.revision} to ${picked.revision} ${duringText}; part IDs and points describe revision ${picked.revision}, the picture shows ${base.revision}.` } : {}) };
+  }
+  // scene_export_web with review: a static page of the current view that a person pins on any device and saves as a file. It shares the
+  // export folder, naming and retention of the game builds, and needs no game.
+  async function exportReviewPage({ sessionId, title }) {
+    await jobs();
+    const frame = await captureAnnotateFrame(sessionId, 768, 512);
+    const directory = join(jobRoot, EXPORT_DIRECTORY_NAME);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await seedKeptExports(directory);
+    const outputDirectory = join(directory, `web-${randomUUID()}`);
+    const reviewId = newReviewId();
+    let summary;
+    try {
+      summary = await writeReviewBuild({ frame, outputDirectory, title, reviewId });
+    } catch (error) {
+      await rm(outputDirectory, { recursive: true, force: true });
+      throw error;
+    }
+    savedWebBuildPaths.push(outputDirectory);
+    while (savedWebBuildPaths.length > MAXIMUM_KEPT_WEB_BUILDS) await rm(savedWebBuildPaths.shift(), { recursive: true, force: true });
+    const view = annotateViewOf(frame);
+    rememberReview(reviewId, { sessionId, revision: frame.metadata.revision, view });
+    return { sessionId, revision: frame.metadata.revision, review: true, ...summary, entry: join(outputDirectory, 'index.html'),
+      host: 'Serve the folder with any static file server, or send it as is. The reviewer saves a file; pass its text to scene_ask_user as reviewFile.' };
+  }
+  function rememberReview(reviewId, entry) {
+    rememberedReviews.set(reviewId, entry);
+    while (rememberedReviews.size > REVIEW_LINK_LIMITS.maxRememberedReviews) rememberedReviews.delete(rememberedReviews.keys().next().value);
+  }
+  // scene_ask_user with reviewFile: the saved marks of an exported review page, read as if the person had pressed Send here.
+  async function readReviewFile(input) {
+    const { reviewId, marks: rawMarks } = parseReviewFile(input.reviewFile);
+    const review = rememberedReviews.get(reviewId);
+    if (!review) {
+      throw new Error('This review file does not match a review page exported by this server run (or its export was dropped after eight newer ones). Export the review page again with scene_export_web review: true and ask for a new file.');
+    }
+    if (review.consumed) {
+      throw new Error('This review file was already read by an earlier scene_ask_user call. Each export is read once: export the review page again with scene_export_web review: true and ask for a new file.');
+    }
+    if (review.sessionId !== input.sessionId) {
+      throw new Error(`This review file was made for scene ${review.sessionId}, not ${input.sessionId}. Pass that sessionId.`);
+    }
+    const maxMarks = Math.min(input.maxMarks ?? ANNOTATE_LIMITS.maxMarks, ANNOTATE_LIMITS.maxMarks);
+    const marks = validateReviewMarks(rawMarks, { width: review.view.width, height: review.view.height, maxMarks });
+    const base = { sessionId: review.sessionId, revision: review.revision, view: review.view };
+    const content = await sentMarksContent(base, review.view.camera, marks, 'after the review page was exported');
+    review.consumed = true;
+    return { content };
+  }
   // Capabilities must work without the job store: a store that cannot open is reported here, not thrown.
   async function jobRecords() {
     if (!jobRoot) return { records: [] };
@@ -254,19 +352,46 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
     return { path, filename, mimeType: 'model/gltf-binary', bytes: bytes.length,
       sha256: createHash('sha256').update(bytes).digest('hex'), keptExports: savedGlbPaths.length };
   }
-  async function requirePreviewRenderer() {
-    if (phase !== 'rendering') return;
+  /** The render job that still holds the renderer: one that has not reached a terminal state. Undefined when the renderer is free. */
+  async function leasingJob() {
+    if (phase !== 'rendering') return undefined;
     const terminal = ['completed', 'cancelled', 'failed', 'interrupted'];
-    if ((await jobs()).list().some(record => !terminal.includes(record.state))) {
-      throw new Error('The renderer is leased to a render job. Wait for completion or cancel the job.');
-    }
+    const running = (await jobs()).list().find(record => !terminal.includes(record.state));
+    if (running) return running;
     // A queued job can be cancelled before its runner acquires the renderer.
     phase = 'ready';
+    return undefined;
+  }
+  async function rendererStillLeased() {
+    return (await leasingJob()) !== undefined;
+  }
+  async function requirePreviewRenderer() {
+    const holder = await leasingJob();
+    if (holder) throw new Error(leaseHeldMessage(holder));
   }
   function catalog() {
     if (!assetRoot && !packsRoot) throw new Error('Configure --assets or --packs with an absolute directory before importing GLB assets.');
     catalogPromise ??= packs().then(registry => createAgentAssetCatalog(assetRoot ?? null, registry?.files));
     return catalogPromise;
+  }
+  /**
+   * The catalog after a stat-only look at the --assets folder: a file that appeared, vanished or was rewritten since the last build
+   * makes a new catalog (#2209), so a download made mid-session is listed and placeable by name. Used where an agent asks for the
+   * list or names a file; reads by asset ID keep the catalog they were pinned against.
+   */
+  async function rescannedCatalog() {
+    if (assetRoot) {
+      const fingerprint = await fingerprintAssetDirectory(assetRoot);
+      if (fingerprint !== catalogFingerprint) {
+        catalogFingerprint = fingerprint;
+        catalogPromise = undefined;
+      }
+    }
+    const ready = catalog();
+    ready.catch(() => {
+      if (catalogPromise === ready) catalogPromise = undefined;
+    });
+    return ready;
   }
   // Installed data-only packs (docs/packs.md): checked once per runtime; their GLB, image, look and HDRI files join the catalog.
   function packs() {
@@ -277,14 +402,15 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
 
   /** Replaces each `asset: { name }` placement of a recipe or edit list with its catalog id, so everything after this holds the pinned hash. */
   async function pinNamedAssets(value) {
-    if (namesCatalogFiles(value)) resolveAssetPlacementNames(value, (await catalog()).resolveName);
+    if (namesCatalogFiles(value)) resolveAssetPlacementNames(value, (await rescannedCatalog()).resolveName);
+    if (namesCatalogSequences(value)) await resolveCatalogSequenceNames(value, pattern => rescannedCatalog().then(assets => assets.resolveSequence(pattern)));
   }
 
   /** The same for the asset recipe of scene_create_asset: `assetName` (a catalog file name) becomes `assetId`. */
   async function pinNamedAssetRecipe(recipe) {
     if (recipe?.assetName === undefined) return;
     if (recipe.assetId !== undefined) throw new TypeError('Pass exactly one of recipe.assetId (the pinned SHA-256) or recipe.assetName (the catalog file name), not both.');
-    recipe.assetId = (await catalog()).resolveName(recipe.assetName);
+    recipe.assetId = (await rescannedCatalog()).resolveName(recipe.assetName);
     delete recipe.assetName;
   }
 
@@ -330,6 +456,24 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
   async function assertSceneFitsBeforeJob(recipe) {
     if (recipe?.format === 'crucible.asset') return;
     await assertPlacedAssetsFitBeforeReading({}, [], recipe);
+  }
+
+  /**
+   * Pins each item of an icons job to its catalog asset id, so the job holds the content hash and a re-exported file cannot change
+   * a render in flight. An item is a catalog GLB name or an asset id; the original text stays as `source` for icons.json.
+   */
+  async function pinIconItems(settings) {
+    if (!Array.isArray(settings.items)) return settings;
+    const readyCatalog = await rescannedCatalog();
+    const items = await Promise.all(settings.items.map(async item => {
+      if (typeof item !== 'string') return item;
+      if (/^[0-9a-f]{64}$/.test(item)) {
+        await readyCatalog.size(item);
+        return { source: item, asset: item };
+      }
+      return { source: item, asset: readyCatalog.resolveName(item) };
+    }));
+    return { ...settings, items };
   }
 
   /** Bytes of the catalog assets a recipe or edit list places, base64 by asset id, for the page that decodes them. */
@@ -439,9 +583,19 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
     return result;
   }
 
+  // Closing the browser that just timed out can hang as long as its stuck operation does. The scenes are already forgotten, so the
+  // teardown does not wait for a browser that will not answer, and the next call launches a fresh one instead of queueing behind it (#2200).
+  async function closeBrowserWithinLimit(browser) {
+    if (!browser) return;
+    let timer;
+    const closed = browser.close().catch(() => {});
+    await Promise.race([closed, new Promise(resolve => { timer = setTimeout(resolve, BROWSER_CLOSE_TIMEOUT_MS); })]);
+    clearTimeout(timer);
+  }
+
   async function shutdownResources() {
     try {
-      await browserInstance?.close();
+      await closeBrowserWithinLimit(browserInstance);
     } finally {
       browserInstance = undefined;
       page = undefined;
@@ -516,10 +670,21 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
     });
   }
 
+  // A start that fails on its page load is tried once more on a fresh browser: right after a timeout the old browser may still be
+  // dying and hold the card, and the caller would otherwise need several retries before the runtime came back (#2200).
   async function boot() {
     if (page) {
       return;
     }
+    try {
+      await bootOnce();
+    } catch (error) {
+      if (closing || !/page.goto|Timeout d+ms exceeded/i.test(String(error?.message))) throw error;
+      await bootOnce();
+    }
+  }
+
+  async function bootOnce() {
     phase = 'starting';
     try {
       const [{ chromium }, code] = await Promise.all([
@@ -569,9 +734,12 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
       if (backend === 'cpu') {
         args.push('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
       }
-      browserInstance = await chromium.launch({ headless: true, args,
-        ...(browserPath ? { executablePath: browserPath } : { channel: 'chrome' }),
-      });
+      const launchOptions = { headless: true, args, ...(browserPath ? { executablePath: browserPath } : { channel: 'chrome' }) };
+      // The shader cache only helps the GPU backend: the CPU backend compiles in SwiftShader, which has no driver compile to skip.
+      const shaderCacheFolder = backend === 'gpu' ? shaderCacheDirectory() : null;
+      browserInstance = shaderCacheFolder
+        ? await launchWithShaderCache(chromium, launchOptions, shaderCacheFolder, { viewport: { width: 768, height: 512 }, deviceScaleFactor: 1 })
+        : await chromium.launch(launchOptions);
       page = await browserInstance.newPage({ viewport: { width: 768, height: 512 }, deviceScaleFactor: 1 });
       await page.route('**/*', route => {
         const url = new URL(route.request().url());
@@ -630,6 +798,11 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
     bakedSessionIds.clear();
   }
 
+  async function resolveSentMarks({ sessionId, frame, marks, image }) {
+    const base = { sessionId, revision: frame.metadata.revision, view: annotateViewOf(frame) };
+    return { image, content: await sentMarksContent(base, frame.camera, marks, 'while the person marked') };
+  }
+
   function requireSession(sessionId) {
     if (!openSessionIds.has(sessionId)) {
       throw new Error(sessionProblem(sessionId, lastUsedSessionId(), { openSessionIds: [...openSessionIds], evictedSessionIds }));
@@ -669,6 +842,12 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
     return evaluate(method, input, page, timeoutMs);
   }
 
+  // Names the call that ran long: its method, and for an edit list the kinds of operation it carried, so the caller knows what to split (#2200).
+  function describeOperation(method, input) {
+    const kinds = Array.isArray(input?.operations) ? [...new Set(input.operations.map(operation => operation?.type).filter(Boolean))] : [];
+    return kinds.length ? `"${method}" (${input.operations.length} operations: ${kinds.join(', ')})` : `"${method}"`;
+  }
+
   async function evaluate(method, input, target = page, timeoutMs = EVALUATION_TIMEOUT_MS) {
     assertCombinedAssetBytes(input);
     let timer;
@@ -681,8 +860,8 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
             timedOut = true;
             if (target === page) phase = 'failed';
             reject(new Error(target === page
-              ? `The preview operation exceeded ${timeoutMs / 1000} seconds. ${RECOVERY_HINT}`
-              : `The private render operation exceeded ${timeoutMs / 1000} seconds.`));
+              ? `The preview operation ${describeOperation(method, input)} exceeded ${timeoutMs / 1000} seconds. ${RECOVERY_HINT}`
+              : `The private render operation ${describeOperation(method, input)} exceeded ${timeoutMs / 1000} seconds.`));
           }, timeoutMs);
         }),
       ]);
@@ -708,11 +887,16 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
     let frameReceiver;
     // A stills or video job of native frames renders them all through one session; it is closed when the job ends.
     let nativeSequence;
+    // The tables of the last native export of this job, so a frame reads only the byte ranges that changed since (#1861).
+    const nativeExportBaseline = {};
     // A native video job blends each frame into the ones before it, so the noise the denoiser leaves does not shimmer.
     let nativeTemporal;
     let nativeTemporalShotIndex;
     let pageEncodes = false;
     let suspended = false;
+    // The frame being rendered, so a browser that dies mid-job is reported with where it died (#2018).
+    let frameIndex = -1;
+    let browserLossFailure;
     const generationAtStart = runtimeGeneration;
     const started = performance.now();
     // One job runs at a time, so the estimate made at submission belongs to the job that starts next.
@@ -747,6 +931,13 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
       jobPage.setDefaultTimeout(15000);
       await jobPage.goto(origin);
       await jobPage.waitForFunction(() => Boolean(window.__agentPreview));
+      if (settings.kind === 'icons') {
+        // Each icon is its own scene, created and disposed inside the job, so the shared dispose below has nothing left to release.
+        const icons = await renderIconsInPage({ jobPage, jobId, settings, directory, signal, progress, assetData: placedAssetData, memoryBudgetMiB: memory, backend, tier: settings.quality });
+        metrics.renderSeconds = (performance.now() - started) / 1000;
+        metrics.elapsedSeconds = metrics.renderSeconds;
+        return { artifacts: icons.artifacts, metrics: { ...metrics, ...icons.metrics } };
+      }
       const input = { sessionId: jobId, recipe: snapshot.recipe, memoryBudgetMiB: memory, backend, ...(settings.transparent ? { transparent: true } : {}), ...(settings.quality ? { tier: settings.quality } : {}),
         ...(snapshot.assetBytes ? { data: snapshot.assetBytes.toString('base64'), ...(await motionSources([snapshot.recipe.motion])) } : await placedAssetData(snapshot.recipe)) };
       const created = await jobPage.evaluate(({ method, input }) => window.__agentPreview[method](input),
@@ -762,7 +953,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
       await jobPage.setViewportSize({ width, height });
       session = await jobPage.context().newCDPSession(jobPage);
       const region = settings.region;
-      if (settings.format && settings.format !== 'png') await jobPage.evaluate(prepareInput => window.__agentPreview.prepareFloatOutput(prepareInput), { sessionId: jobId });
+      if ((settings.format && settings.format !== 'png') || settings.mattes) await jobPage.evaluate(prepareInput => window.__agentPreview.prepareFloatOutput(prepareInput), { sessionId: jobId });
       if (settings.passes?.includes('wireframe')) await jobPage.evaluate(prepareInput => window.__agentPreview.prepareWireframe(prepareInput), { sessionId: jobId });
       // A memory budget can shrink the frame below the size the region was chosen for.
       if (region && (region.x + region.width > width || region.y + region.height > height)) {
@@ -812,6 +1003,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
       }
       for (let frame = 0; frame < settings.frameCount; frame++) {
         signal.throwIfAborted();
+        frameIndex = frame;
         const elapsed = settings.kind === 'video' ? frame / settings.fps
           : settings.kind === 'stills' ? (settings.stillCount ? frame / settings.fps : settings.duration * frame / (settings.frameCount - 1)) : 0;
         // A timeline job reads one clock for the shot, the motion and the renderer, so a seek matches the frame in a video.
@@ -837,6 +1029,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
           const traceOptions = { width, height, ...tracerOptions, backend: trace.backend === 'native' ? 'gpu' : trace.backend, denoise: choice.denoise, threads: PATH_TRACER_THREADS };
           let traced;
           let backendNote = trace.note;
+          let fallbackReason = trace.reason;
           if (trace.backend === 'native') {
             let exportedScene = false;
             nativeMemoryAllowance.grantForFrame({ width, height, memoryMiB: memory });
@@ -845,7 +1038,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
             const blendsOverTime = usesSession && settings.kind === 'video' && chooseNativeKernel() === 'cycles' && chooseNativeTemporal();
             const frameSeed = blendsOverTime ? temporalFrameSeed(tracerOptions.seed, frame) : tracerOptions.seed;
             try {
-              const exported = await fetchNativeExport(jobPage, { ...frameInput, options: { width, height, bounces: tracerOptions.bounces, seed: frameSeed, fireflyClamp: 20, noiseThreshold: tracerOptions.noiseThreshold, samples: tracerOptions.samples, instancing: chooseNativeInstancing(), kernel: chooseNativeKernel() } }, { capacity: readNativeCapacity(trace.tracer).capacity });
+              const exported = await fetchNativeExport(jobPage, { ...frameInput, options: { width, height, bounces: tracerOptions.bounces, seed: frameSeed, fireflyClamp: 20, noiseThreshold: tracerOptions.noiseThreshold, samples: tracerOptions.samples, instancing: chooseNativeInstancing(), kernel: chooseNativeKernel() } }, { capacity: readNativeCapacity(trace.tracer).capacity, session, baseline: usesSession ? nativeExportBaseline : undefined });
               exportedScene = true;
               if (usesSession) nativeSequence ??= createNativeSequence({ tracer: trace.tracer });
               if (blendsOverTime) {
@@ -867,20 +1060,29 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
               nativeTemporal?.restart('a frame rendered on another backend');
               // Only a tracer or adapter failure makes the tracer unusable; a scene that failed to export says so for this job alone.
               if (exportedScene) nativeTracerLocator.markUnusable(error.message);
-              backendNote = exportedScene ? (await nativeTracerLocator.find()).reason : `renderer.backend "native" could not export the scene (${error.message}).`;
+              fallbackReason = exportedScene ? (await nativeTracerLocator.find()).reason : `renderer.backend "native" could not export the scene (${error.message}).`;
+              backendNote = fallbackReason;
               traceOptions.backend = backend === 'cpu' ? 'cpu' : 'gpu';
               choice = await chooseDenoiser(settings.renderer.denoise);
               traceOptions.denoise = choice.denoise;
               backendNote += ' The ' + traceOptions.backend + ' backend ran instead.';
             }
           }
+          const fallback = settings.renderer.backend === 'native' && traceOptions.backend !== 'native'
+            ? describeBackendFallback({ requestedBackend: 'native', usedBackend: traceOptions.backend, fallbackReason })
+            : undefined;
           if (!traced) {
-            traced = await jobPage.evaluate(input => window.__agentPreview.pathTrace(input), { ...frameInput, options: traceOptions });
+            try {
+              traced = await jobPage.evaluate(input => window.__agentPreview.pathTrace(input), { ...frameInput, options: traceOptions });
+            } catch (error) {
+              throw explainFailureAfterFallback(error, fallback);
+            }
             if (traced.features) {
               traced = await finishWithOidn({ traced, denoiser: choice.denoiser, drawLinear: input => jobPage.evaluate(drawInput => window.__agentPreview.finishPathTrace(drawInput), input) });
             }
           }
           if (backendNote) traced.report.backendNote = backendNote;
+          if (fallback) traced.report.backendFallback = fallback;
           const denoiserNote = [choice.note, traced.report.denoiserNote].filter(Boolean).join(' ');
           if (denoiserNote) traced.report.denoiserNote = denoiserNote;
           metrics.renderSeconds += (performance.now() - renderStarted) / 1000;
@@ -889,7 +1091,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
           metrics.pathTracer = traced.report;
           if (frame === 0) {
             const looked = await jobPage.evaluate(input => window.__agentPreview.findings(input), frameInput);
-            mergeFrameDiagnostics(metrics, [pathTracerFindingsLimit(), ...looked.diagnostics]);
+            mergeFrameDiagnostics(metrics, [pathTracerFindingsLimit(), pathTracerSkippedPassesWarning(snapshot.recipe.postPasses), ...looked.diagnostics].filter(Boolean));
           }
           if (traced.report.nativeSession) (metrics.nativeSessionRoutes ??= []).push(traced.report.nativeSession.path);
           const tracedBytes = Buffer.from(traced.data, 'base64');
@@ -1004,6 +1206,15 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
               Object.assign(metrics, objectIdMetrics(passInfo));
             }
           }
+          if (settings.mattes) {
+            const mattes = await renderJobMattes({ mattes: settings.mattes, renderPass: async pass => {
+              const info = await jobPage.evaluate(input => window.__agentPreview.frame(input),
+                { ...frameInput, floatOutput: false, pass, passDepthRange: RENDER_PASS_DEPTH_RANGE, passFloat: true });
+              return { info, ...(await readFloatPass(pass)) };
+            } });
+            for (const [index, matte] of mattes.entries()) await writeArtifact(`${stem}-matte-${index}.png`, matte.bytes);
+            metrics.mattes = mattes.map(matte => matte.metric);
+          }
         }
           }
         await recordPeakMemory();
@@ -1020,6 +1231,10 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
       if (settings.renderer?.backend === 'gpu') gpuTracerWarm = true;
       await rememberRenderJob({ settings, estimate, report: metrics.report });
       return { artifacts, metrics };
+    } catch (error) {
+      if (signal.aborted || !isBrowserLoss(error)) throw error;
+      browserLossFailure = describeBrowserLoss({ error, frameIndex, frameCount: settings.frameCount, width: settings.width, height: settings.height, passes: settings.passes, memoryMiB: memory, estimatedPeakMemoryMiB: estimate?.peakMemoryMiB });
+      throw browserLossFailure;
     } finally {
       signal.removeEventListener('abort', abort);
       nativeSequence?.close();
@@ -1029,8 +1244,9 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
       finally {
         try {
           if (jobPage && !jobPage.isClosed()) {
-            try { await jobPage.evaluate(sessionId => window.__agentPreview.dispose({ sessionId }), jobId); }
-            finally { await jobPage.close(); }
+            // A crashed or navigated page cannot dispose its scene (its bridge is gone: "reading 'dispose'"); the close below frees it, and the failure that matters is the job's own (#2198).
+            try { if (settings.kind !== 'icons') await jobPage.evaluate(sessionId => window.__agentPreview.dispose({ sessionId }), jobId).catch(error => { if (!browserLossFailure && !isBrowserLoss(error)) throw error; }); }
+            finally { await jobPage.close().catch(error => { if (!browserLossFailure && !isBrowserLoss(error)) throw error; }); }
           }
         }
         finally {
@@ -1042,7 +1258,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
               phase = 'ready';
             } catch (error) {
               phase = 'failed';
-              throw new Error(`Preview recovery failed after render job: ${error.message}`);
+              throw browserLossFailure ?? new Error(`Preview recovery failed after render job: ${error.message}`);
             }
           } else if (!closing && phase !== 'failed') phase = 'ready';
         }
@@ -1099,7 +1315,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
           maximumFileBytes: MAXIMUM_PACK_FILE_BYTES, maximumJsonBytes: MAXIMUM_PACK_JSON_BYTES, maximumItemsPerKind: MAXIMUM_PACK_ITEMS_PER_KIND,
           use: 'scene_asset_catalog lists packs: name, version, license, author, description and item ids. GLBs, images, looks and environments carry assetId values that work in scene_create_asset, look, hdri and texture fields. Materials and recipes are read with scene_asset_catalog { pack, material } or { pack, recipe }: pass a recipe to scene_create, and a material as a materials entry or a scene_apply set-material. Packs are installed by the user (unzip into the --packs folder); a tool call never downloads one. Invalid packs are skipped and listed under packs.rejected with the reason.',
         },
-        jobs: { configured: Boolean(jobRoot), kinds: ['image', 'stills', 'video'], passes: RENDER_PASS_NAMES, pathTracer: PATH_TRACER_CAPABILITIES, maximumActiveJobs: 1, estimate: RENDER_ESTIMATE_NOTE, budget: RENDER_BUDGET_NOTE, quality: RENDER_QUALITY_NOTE, tiers: await deviceTiers(),
+        jobs: { configured: Boolean(jobRoot), kinds: ['image', 'stills', 'video', 'icons'], icons: ICON_CAPABILITIES, passes: RENDER_PASS_NAMES, pathTracer: PATH_TRACER_CAPABILITIES, maximumActiveJobs: 1, estimate: RENDER_ESTIMATE_NOTE, budget: RENDER_BUDGET_NOTE, quality: RENDER_QUALITY_NOTE, tiers: await deviceTiers(),
           maximumWidth: MAXIMUM_JOB_SIDE, maximumHeight: MAXIMUM_JOB_SIDE, maximumPixels: MAXIMUM_JOB_PIXELS, maximumSequenceWidth: MAXIMUM_SEQUENCE_JOB_SIDE, maximumSequenceHeight: MAXIMUM_SEQUENCE_JOB_SIDE, maximumSequencePixels: MAXIMUM_SEQUENCE_JOB_PIXELS, maximumSquareSide: MAXIMUM_SQUARE_JOB_SIDE, maximumSquareSequenceSide: MAXIMUM_SQUARE_SEQUENCE_JOB_SIDE,
           maximumDuration: MAXIMUM_VIDEO_SECONDS, maximumFps: MAXIMUM_JOB_FPS, maximumFrames: MAXIMUM_JOB_FRAMES, maximumStills: 8, maximumStillCount: MAXIMUM_STILLS_FRAMES, stillCountNote: 'a stills job with stillCount (2 to maximumStillCount) and fps writes frame-0.png and on, one per 1 / fps s of the motion clock from motion.start; with transparent each is RGBA. Without stillCount it is 8 spread over duration.',
           encoder: 'H.264', encoders: VIDEO_ENCODERS, audio: Boolean(audioRoot), timeline: true, previewSuspendedDuringJob: true,
@@ -1116,7 +1332,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
         await boot();
         const sessionId = randomUUID();
         const createInput ={ recipe, sessionId, memoryBudgetMiB: memory, backend, ...(await placedAssetData(recipe)) };
-        const result = await evaluate('create', createInput, page, recipe?.bake ? BAKE_EVALUATION_TIMEOUT_MS : EVALUATION_TIMEOUT_MS);
+        const result = await evaluate('create', createInput, page, previewCallTimeoutMs({ bakes: Boolean(recipe?.bake), addsGridVolume: recipeHasGridVolume(recipe), plainTimeoutMs: EVALUATION_TIMEOUT_MS, bakeTimeoutMs: BAKE_EVALUATION_TIMEOUT_MS }));
         registerCreatedScene(sessionId, result, Boolean(recipe?.bake));
         return result;
       }, { recoversFailedRuntime: true });
@@ -1134,7 +1350,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
           return { pack, [kind === 'recipes' ? 'recipe' : 'material']: recipe ?? material, json: (await packs()).read(kind, pack, recipe ?? material) };
         }
         if (!assetRoot && !packsRoot) return { configured: false, assets: [] };
-        return { configured: true, ...(await catalog()).list(), ...(packsRoot && { packs: (await packs()).list() }) };
+        return { configured: true, ...(await rescannedCatalog()).list(), ...(packsRoot && { packs: (await packs()).list() }) };
       });
     },
     createAsset({ recipe }) {
@@ -1197,8 +1413,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
         const placedValue = gameAssets?.recipe ?? input.operations;
         await assertSceneAssetsFitAfterEdit(input.sessionId, placedValue);
         const applyInput = { ...input, ...(await motionSources(motions, placedValue)), ...(await placedAssetData(placedValue)), ...(gameAssets ? { assetNeeds: gameAssets.recipe } : {}) };
-        const addsGridVolume = (input.operations ?? []).some(operation => operation.type === 'add-explosion');
-        const applyTimeout = rebakes ? BAKE_EVALUATION_TIMEOUT_MS : addsGridVolume ? GRID_VOLUME_EVALUATION_TIMEOUT_MS : EVALUATION_TIMEOUT_MS;
+        const applyTimeout = previewCallTimeoutMs({ bakes: rebakes, addsGridVolume: operationsAddGridVolume(input.operations), plainTimeoutMs: EVALUATION_TIMEOUT_MS, bakeTimeoutMs: BAKE_EVALUATION_TIMEOUT_MS });
         const applied = await invoke('apply', applyInput, applyTimeout);
         if (bakeAfter ?? hadBake) bakedSessionIds.add(input.sessionId);
         else bakedSessionIds.delete(input.sessionId);
@@ -1248,20 +1463,28 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
     // Shows the current view in the person's own browser, waits for their pins and notes, and resolves each pin to a part and a
     // world point. The wait holds no preview queue slot, so other tools keep working while the person marks.
     async askUser(input) {
+      if (input.reviewFile !== undefined) return readReviewFile(input);
       const width = input.width ?? 768;
       const height = input.height ?? 512;
-      if (![width, height].every(value => Number.isInteger(value) && value >= 64 && value <= 1024)) {
-        throw new RangeError('Preview dimensions must be integers from 64 to 1024.');
-      }
       const maxMarks = input.maxMarks ?? ANNOTATE_LIMITS.maxMarks;
       const timeoutSeconds = input.timeoutSeconds ?? ANNOTATE_LIMITS.defaultTimeoutSeconds;
-      const frame = await enqueue(async () => {
-        await requirePreviewRenderer();
-        requireSession(input.sessionId);
-        await page.setViewportSize({ width, height });
-        return invoke('annotateFrame', { sessionId: input.sessionId });
-      });
+      const frame = await captureAnnotateFrame(input.sessionId, width, height, input.motionTime);
       if (closing) throw new Error('The agent runtime is closing.');
+      if (askUserFixture) {
+        // Test-only (#1956): the fixture stands in for the person, and its marks go through the same pick as a browser answer.
+        const marks = validateMarks(askUserFixture.marks, { width: frame.width, height: frame.height, maxMarks });
+        return resolveSentMarks({ sessionId: input.sessionId, frame, marks, image: frame.data });
+      }
+      if (input.inline) {
+        // The nonce goes to the view in the result's _meta only, never in the content the model reads: the model cannot call the
+        // app-only submit tool with a person's marks because it never sees the nonce.
+        const nonce = randomBytes(16).toString('hex');
+        inlineAsks.set(nonce, { sessionId: input.sessionId, frame, maxMarks, expiresAt: Date.now() + timeoutSeconds * 1000 });
+        while (inlineAsks.size > MAXIMUM_INLINE_ASKS) inlineAsks.delete(inlineAsks.keys().next().value);
+        return { image: frame.data, viewMeta: { nonce }, content: { sessionId: input.sessionId, outcome: 'pending', revision: frame.metadata.revision,
+          view: annotateViewOf(frame), maxMarks, maxNoteLength: ANNOTATE_LIMITS.maxNoteLength, prompt: input.prompt ?? '',
+          message: 'The view is open in the chat for the person. Their marks arrive as a message from them: stop here and do not call scene_ask_user again.' } };
+      }
       const askController = new AbortController();
       pendingAskControllers.add(askController);
       let session;
@@ -1275,16 +1498,30 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
         pendingAskControllers.delete(askController);
       }
       if (session.outcome === 'aborted') throw new Error('The agent runtime closed while the person was marking the scene.');
-      const base = { sessionId: input.sessionId, revision: frame.metadata.revision, view: { width: frame.width, height: frame.height, camera: frame.camera } };
+      const base = { sessionId: input.sessionId, revision: frame.metadata.revision, view: annotateViewOf(frame) };
       if (session.outcome !== 'sent') {
         return { content: { ...base, outcome: session.outcome, marks: [], message: session.outcome === 'timeout'
           ? `The person did not press Send within ${timeoutSeconds} seconds. Ask in text, or call scene_ask_user again with a longer timeoutSeconds.`
           : 'The person cancelled without sending marks. Ask what they meant in text.' } };
       }
-      const picked = await enqueue(() => invoke('pickMarks', { sessionId: input.sessionId, camera: frame.camera, marks: session.marks, width: frame.width, height: frame.height }));
-      const sceneChanged = picked.revision !== frame.metadata.revision;
-      return { image: session.image, content: { ...base, outcome: 'sent', marks: picked.marks,
-        ...(sceneChanged ? { warning: `The scene changed from revision ${frame.metadata.revision} to ${picked.revision} while the person marked; part IDs and points describe revision ${picked.revision}, the picture shows ${frame.metadata.revision}.` } : {}) } };
+      return resolveSentMarks({ sessionId: input.sessionId, frame, marks: session.marks, image: session.image });
+    },
+    // The second half of an inline scene_ask_user: the MCP Apps view sends the marks it collected, the answer has the same shape as a
+    // browser answer. Only the nonce the view received can submit, so the model cannot forge an answer; an unknown, used or
+    // expired nonce fails. The ask stays open until the marks resolve, so a failed pick can be retried.
+    async submitAskUser({ nonce, marks, image }) {
+      const pending = inlineAsks.get(nonce);
+      if (!pending) throw new Error('scene_ask_user_submit only accepts the marks of an open annotate view, using the nonce that view received. Call scene_ask_user again to get a fresh view.');
+      if (Date.now() > pending.expiresAt) {
+        inlineAsks.delete(nonce);
+        throw new Error('The annotate view timed out before the marks were sent. Ask in text, or call scene_ask_user again with a longer timeoutSeconds.');
+      }
+      const clean = validateMarks(marks, { width: pending.frame.width, height: pending.frame.height, maxMarks: pending.maxMarks });
+      if (!clean.length) throw new TypeError('Add at least one pin before sending.');
+      if (!isBoundedPng(image)) throw new TypeError('The marked picture is not a PNG within 1 MiB.');
+      const answer = await resolveSentMarks({ sessionId: pending.sessionId, frame: pending.frame, marks: clean, image });
+      inlineAsks.delete(nonce);
+      return answer;
     },
     checkpoint(input) {
       return enqueue(async () => {
@@ -1457,6 +1694,8 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
         await requirePreviewRenderer();
         const result = await invoke('dispose', input);
         forgetSession(input.sessionId);
+        for (const [nonce, pending] of inlineAsks) if (pending.sessionId === input.sessionId) inlineAsks.delete(nonce);
+        for (const [reviewId, review] of rememberedReviews) if (review.sessionId === input.sessionId) rememberedReviews.delete(reviewId);
         return result;
       });
     },
@@ -1470,7 +1709,8 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
         return { ...summary, ...file };
       });
     },
-    exportWeb({ sessionId, title }) {
+    exportWeb({ sessionId, title, review = false }) {
+      if (review) return exportReviewPage({ sessionId, title });
       return enqueue(async () => {
         await requirePreviewRenderer();
         await jobs();
@@ -1499,6 +1739,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
       return enqueue(async () => {
         await requirePreviewRenderer();
         const controller = await jobs();
+        if (settings?.kind === 'icons') settings = await pinIconItems(settings);
         if (settings?.audio) {
           if (!audioLibrary) throw new Error('Configure --audio with an absolute folder before submitting a job with audio.');
           await audioLibrary.resolve(settings.audio.file);
@@ -1547,9 +1788,8 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
     },
     async jobStatus({ jobId }) {
       const record = (await jobs()).status(jobId);
-      if (phase === 'rendering' && ['completed', 'cancelled', 'failed', 'interrupted'].includes(record.state)) {
-        await requirePreviewRenderer();
-      }
+      // Reading a job never fails because a newer job holds the renderer; it only hands the renderer back once none does.
+      if (['completed', 'cancelled', 'failed', 'interrupted'].includes(record.state)) await rendererStillLeased();
       return record;
     },
     async cancelJob({ jobId }) {
@@ -1573,6 +1813,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
         phase = 'closing';
         cancelReview?.(new Error('The agent runtime is closing.'));
         for (const askController of pendingAskControllers) askController.abort();
+        inlineAsks.clear();
         closing = (async () => {
           try {
             // The job store goes first: a client that closes the connection waits only a couple of seconds before it kills this

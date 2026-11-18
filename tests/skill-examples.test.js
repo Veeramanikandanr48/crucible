@@ -11,7 +11,7 @@ import {
 
 // The build-crucible-scene skill teaches agents the scene_apply tool by example. Every json block in these references that
 // carries an `operations` list must keep applying to a fresh scene, so an API change fails here instead of misleading an agent.
-const referenceNames = ['look', 'light', 'camera', 'film-and-animation'];
+const referenceNames = ['look', 'light', 'camera', 'film-and-animation', 'effects-and-feedback'];
 
 const shippedFile = (name, extension) => readFile(new URL(`../assets/looks/${name}.${extension}`, import.meta.url));
 for (const name of BUNDLED_ENVIRONMENT_NAMES) registerCatalogEnvironment(name, parseRadianceHdr(await shippedFile(name, 'hdr')));

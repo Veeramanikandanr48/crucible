@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { AGENT_ASSET_LIMITS } from '../src/agent-asset-limits.js';
 import { padded, readGlb, writeGlb } from './agent-glb-io.mjs';
 
 // Draco-compressed GLBs through MCP (#1698). The preview page cannot be handed a Draco decoder by an agent, so the server
@@ -42,18 +43,34 @@ function dracoDataType(draco, ArrayType) {
   return types.get(ArrayType);
 }
 
+// A Draco stream states its own point and face counts. Before the decoder heap gets a buffer sized from one of them, the count
+// must match the accessor the glTF declares and the buffer must fit the asset byte limit (#1913).
+function assertClaimedCount(label, what, claimedCount, declaredCount) {
+  if (claimedCount !== declaredCount) {
+    throw new Error(`${label}: the Draco data holds ${claimedCount} ${what} but its accessor declares count ${declaredCount}. Re-export the GLB; the file is damaged or was edited.`);
+  }
+}
+
+function assertBufferFitsLimit(label, what, byteLength, maximumBytes) {
+  if (byteLength > maximumBytes) {
+    throw new RangeError(`${label}: decoding the Draco ${what} needs ${byteLength} bytes, over the ${maximumBytes} byte asset limit. Re-export a smaller mesh.`);
+  }
+}
+
 function copyFromHeap(draco, ArrayType, pointer, count) {
   return new ArrayType(draco.HEAPU8.buffer, pointer, count).slice();
 }
 
-function decodeAttribute(draco, decoder, mesh, uniqueId, accessor, label) {
+function decodeAttribute(draco, decoder, mesh, uniqueId, accessor, label, maximumBytes) {
   const attribute = decoder.GetAttributeByUniqueId(mesh, uniqueId);
   if (!attribute || attribute.ptr === 0) throw new Error(`${label}: the Draco data has no attribute with id ${uniqueId}.`);
   const ArrayType = ARRAY_TYPES[accessor.componentType];
   const components = COMPONENTS_PER_TYPE[accessor.type];
   if (!ArrayType || !components) throw new Error(`${label}: accessor componentType ${accessor.componentType} or type ${accessor.type} is not a glTF vertex format.`);
+  assertClaimedCount(label, 'points', mesh.num_points(), accessor.count);
   const count = mesh.num_points() * components;
   const byteLength = count * ArrayType.BYTES_PER_ELEMENT;
+  assertBufferFitsLimit(label, 'attribute', byteLength, maximumBytes);
   const pointer = draco._malloc(byteLength);
   try {
     if (!decoder.GetAttributeDataArrayForAllPoints(mesh, attribute, dracoDataType(draco, ArrayType), byteLength, pointer)) {
@@ -65,9 +82,11 @@ function decodeAttribute(draco, decoder, mesh, uniqueId, accessor, label) {
   }
 }
 
-function decodeIndices(draco, decoder, mesh) {
+function decodeIndices(draco, decoder, mesh, accessor, label, maximumBytes) {
+  assertClaimedCount(label, 'face indices', mesh.num_faces() * 3, accessor.count);
   const count = mesh.num_faces() * 3;
   const byteLength = count * 4;
+  assertBufferFitsLimit(label, 'indices', byteLength, maximumBytes);
   const pointer = draco._malloc(byteLength);
   try {
     decoder.GetTrianglesUInt32Array(mesh, byteLength, pointer);
@@ -78,7 +97,7 @@ function decodeIndices(draco, decoder, mesh) {
 }
 
 /** Decodes one primitive and returns the arrays to write, keyed by accessor index. */
-function decodePrimitive(draco, primitive, document, binary, label) {
+function decodePrimitive(draco, primitive, document, binary, label, maximumBytes) {
   const extension = primitive.extensions[DRACO_EXTENSION];
   const view = document.bufferViews?.[extension.bufferView];
   if (!view || (view.buffer ?? 0) !== 0) throw new Error(`${label}: the Draco bufferView ${extension.bufferView} must point into the GLB's binary chunk.`);
@@ -96,10 +115,12 @@ function decodePrimitive(draco, primitive, document, binary, label) {
       const accessorIndex = primitive.attributes[semantic];
       const accessor = document.accessors?.[accessorIndex];
       if (!accessor) throw new Error(`${label}: attribute ${semantic} has no accessor.`);
-      decoded.set(accessorIndex, { values: decodeAttribute(draco, decoder, mesh, uniqueId, accessor, `${label} ${semantic}`), count: mesh.num_points() });
+      decoded.set(accessorIndex, { values: decodeAttribute(draco, decoder, mesh, uniqueId, accessor, `${label} ${semantic}`, maximumBytes), count: mesh.num_points() });
     }
     if (primitive.indices !== undefined) {
-      const indices = decodeIndices(draco, decoder, mesh);
+      const indicesAccessor = document.accessors?.[primitive.indices];
+      if (!indicesAccessor) throw new Error(`${label}: the indices accessor ${primitive.indices} does not exist.`);
+      const indices = decodeIndices(draco, decoder, mesh, indicesAccessor, `${label} indices`, maximumBytes);
       decoded.set(primitive.indices, { values: indices, count: indices.length, componentType: UNSIGNED_INT });
     }
     return decoded;
@@ -117,9 +138,9 @@ function withoutDracoExtension(list) {
 
 /**
  * Returns the GLB with every Draco primitive decoded into plain buffer views and the extension removed. The compressed
- * buffer views stay in the binary chunk, unreferenced. `loadDecoder` returns the draco3d decoder module.
+ * buffer views stay in the binary chunk, unreferenced. `loadDecoder` returns the draco3d decoder module; `maximumBytes` bounds each decoded buffer.
  */
-export async function decompressDracoGlb(bytes, { filename = 'GLB', loadDecoder = loadDefaultDracoDecoder } = {}) {
+export async function decompressDracoGlb(bytes, { filename = 'GLB', loadDecoder = loadDefaultDracoDecoder, maximumBytes = AGENT_ASSET_LIMITS.maxBytes } = {}) {
   const { document, binary } = readGlb(bytes, 'A Draco GLB');
   const draco = await loadDecoder();
   const chunks = [padded(Buffer.from(binary), 0)];
@@ -130,7 +151,7 @@ export async function decompressDracoGlb(bytes, { filename = 'GLB', loadDecoder 
     for (const [primitiveIndex, primitive] of (mesh.primitives ?? []).entries()) {
       if (!primitive.extensions?.[DRACO_EXTENSION]) continue;
       const label = `${filename} mesh ${meshIndex} primitive ${primitiveIndex}`;
-      for (const [accessorIndex, { values, count, componentType }] of decodePrimitive(draco, primitive, document, binary, label)) {
+      for (const [accessorIndex, { values, count, componentType }] of decodePrimitive(draco, primitive, document, binary, label, maximumBytes)) {
         if (written.has(accessorIndex)) continue;
         written.add(accessorIndex);
         const chunk = padded(Buffer.from(values.buffer, values.byteOffset, values.byteLength), 0);

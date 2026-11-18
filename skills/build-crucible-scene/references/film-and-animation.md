@@ -3,7 +3,7 @@
 <!-- skill-navigation:start -->
 This is the [Film and animation: motion tracks, shots, timeline](#film-and-animation-motion-tracks-shots-timeline) reference. Read [Motion record](#motion-record) before any track.
 Then read what the film needs: [Animated lights, sun, sky and effects](#animated-lights-sun-sky-and-effects), [Shots and cuts](#shots-and-cuts) or
-[Character and imported motion](#character-and-imported-motion). Read [Before a film goes out](#before-a-film-goes-out) completely before the first export.
+[Character and imported motion](#character-and-imported-motion) or [Seamless turntable](#seamless-turntable). Read [Before a film goes out](#before-a-film-goes-out) completely before the first export.
 <!-- skill-navigation:end -->
 
 Calls follow the conventions in `look.md`. `tests/skill-examples.test.js` applies every block, so they stay valid.
@@ -12,11 +12,11 @@ Everything here is deterministic: a seek to a time gives the same pixels as play
 
 ## Motion record
 
-`set-motion` takes one complete record `{ duration, loop, tracks }`, or `null` to clear it. A track has `kind`, an
+`set-motion` takes one complete record `{ duration, loop, tracks }` (`duration` 0.1 to 30 s), or `null` to clear it. A track has `kind`, an
 `id` (omitted for `camera`, `sun`, `environment`, `effects`), a `property`, optional `interpolation`
 (`LINEAR`, `STEP`, `SMOOTH`, `CUBICSPLINE`) and `keyframes` of `{ time, value }` (optional per-key `easing`).
 Properties: node `translation`, `rotation` (XYZW quaternion), `scale`, `visible` (1 or 0); material `color`,
-`emission`, `roughness`, `metallic`; camera `eye`, `target`, `fov`, `roll`. Every referenced ID must exist after the
+`emissiveColor`, `emission`, `roughness`, `metallic`; camera `eye`, `target`, `fov`, `roll`. Every referenced ID must exist after the
 batch. Nonlooping motion must cover every sampled time.
 
 Tool `scene_apply` (a camera push-in plus a spinning part; node `lid` exists):
@@ -94,6 +94,15 @@ rejected; the job reads timeline time (`settings.timeline: { start }`).
 Rigs, `motion.ik`, constraints, drivers, clip layers on an imported asset and morph weights are listed in
 `scene_capabilities`. Read `scene_inspect` (`motionIk`, `rig`, `animations`) after every change and fix its warnings
 before you finish.
+
+## Seamless turntable
+
+One turn that repeats with no hitch: rotation keys every 45 degrees with `interpolation: "LINEAR"` (rotation keys blend with a
+quaternion slerp that takes the short way, so keep neighbouring keys well under 180 degrees apart; 9 keys, the last at 360, give
+constant speed), motion `duration` equal to the turn, `loop: true`, and a video job of the same `duration`. Video frame n samples the
+clock at n / fps, so the last frame stops one step short of the full turn and a repeated clip has no doubled frame. Check cropping on
+the union of the object's bounds over frames sampled through the whole turn (`scene_review` with several `motionTime`), not one still:
+the widest angle is rarely frame 0.
 
 ## Before a film goes out
 

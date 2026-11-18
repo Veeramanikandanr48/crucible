@@ -17,7 +17,7 @@ import { resolveLocalVolumes, createLocalVolumeBuffers, packLocalVolumes } from 
 import { LOCAL_VOLUME_RAMP_STOPS } from '../src/local-volume-ramp.js';
 import { blackbodyChromaticity, blackbodyRampColor, bakeEmissionRamp, sampleBakedRamp } from '../src/local-volume-ramp-bake.js';
 import { createLocalVolumeCrossing } from '../src/path-tracer-volume.js';
-import { assertWebGpuLocalVolumes } from '../src/path-tracer-webgpu-local-volumes.js';
+import { assertWebGpuLocalVolumes, webGpuVolumeFeatures } from '../src/path-tracer-webgpu-local-volumes.js';
 import { encodeVolumeGrid, decodeVolumeGrid } from '../src/volume-grid.js';
 
 // Mitchell Charity, "What color is a blackbody?", bbr_color.txt (version 2001-Jun-22), http://www.vendian.org/mncharity/dir3/blackbody/:
@@ -347,9 +347,11 @@ test('the rasterizer and the CPU path tracer draw the same graded fireball, and 
   }
 });
 
-test('the WebGPU path tracer refuses a ramp with a message that names the volume and the backend that draws it', () => {
+test('the WebGPU path tracer draws a ramp (#1785): it accepts it and compiles the ramp light in only for a scene that has one', () => {
   const [volume] = resolveLocalVolumes([{ shape: 'sphere', center: [0, 0, 0], radius: 1, emissionRamp: { kelvin: [1000, 3000] } }]);
-  assert.throws(() => assertWebGpuLocalVolumes({ localVolumes: [volume] }), /localVolumes\[0\]\.emissionRamp .* backend "cpu"/);
+  assert.doesNotThrow(() => assertWebGpuLocalVolumes({ localVolumes: [volume] }));
+  assert.equal(webGpuVolumeFeatures([volume]).hasEmissionRamp, true);
+  assert.equal(webGpuVolumeFeatures([{ ...volume, emissionRamp: undefined }]).hasEmissionRamp, false);
 });
 
 test('a scene recipe resolves emissionRamp through the on-demand module and an edit with a bad ramp throws at build time', () => {

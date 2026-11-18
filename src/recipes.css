@@ -1,0 +1,39 @@
+/* The recipe pages: the picture first, a few plain lines, then the scene code. Quiet surfaces, spacing instead of rules. */
+body.recipes > main { gap: 32px; width: var(--page); margin-inline: auto; padding-block: 24px 64px; }
+.recipes main > h1 { font-size: clamp(30px, 4.2vw, 48px); letter-spacing: -1.2px; max-width: 22ch; }
+
+.recipe-back a { display: inline-flex; align-items: center; gap: 4px; min-height: 32px; color: var(--muted); font-size: 15px; }
+.recipe-back a:hover { color: var(--text); }
+.recipe-back svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+.recipe-clip { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: var(--panel-radius); background: var(--surface); }
+.recipe-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 0; }
+.recipe-pair figure { position: relative; margin: 0; }
+.recipe-pair img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: var(--panel-radius); background: var(--surface); }
+.recipe-pair figcaption { position: absolute; left: 12px; bottom: 12px; padding: 4px 10px; border-radius: 6px; background: var(--primary); color: var(--primary-text); font-size: 13px; font-weight: 500; }
+
+.recipe-why { display: grid; gap: 12px; max-width: 68ch; font-size: 17px; }
+.recipe-why p { color: var(--muted); }
+.recipe-why p:first-child { color: var(--text); }
+
+.recipe-code { display: grid; gap: 12px; min-width: 0; }
+.recipe-code-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.recipe-code h2 { font-size: 20px; }
+.recipe-code pre { margin: 0; padding: 16px 20px; max-height: 480px; overflow: auto; border-radius: var(--panel-radius); background: var(--bg); font-size: 13px; line-height: 1.7; tab-size: 2; user-select: text; }
+.recipe-code pre code { display: block; width: max-content; min-width: 100%; color: var(--text); }
+
+.recipe-file { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; color: var(--muted); font-size: 15px; }
+.recipe-file a { color: var(--text); text-decoration: underline; }
+.recipe-file code { color: var(--text); font-size: 13px; }
+
+.recipe-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 20px; }
+.recipe-card { display: grid; align-content: start; gap: 10px; padding: 12px 12px 20px; border-radius: var(--panel-radius); background: var(--bg); }
+.recipe-card img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: var(--radius); background: var(--surface); }
+.recipe-card h2 { padding-inline: 6px; font-size: 19px; letter-spacing: -0.02em; }
+.recipe-card p { padding-inline: 6px; color: var(--muted); font-size: 15px; }
+.recipe-card:hover { background: var(--tint-strong); }
+
+@media (max-width: 640px) {
+  .recipe-pair { grid-template-columns: minmax(0, 1fr); }
+  .recipe-code pre { padding: 14px; font-size: 12px; }
+}

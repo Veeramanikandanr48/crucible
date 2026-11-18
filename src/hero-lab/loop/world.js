@@ -13,6 +13,7 @@ import { readPartRanks } from '../../showcase-download.js';
 import { prepareEffects } from './effects.js';
 import { createSlicer, yieldToPage } from '../../cooperative.js';
 import { loopedClipTime } from './clip-time.js';
+import { withStandInTextures } from './construction-parts.js';
 
 // The water mirror is off in the loop: once the camera moves between two draws the port world drew only its sky (the same happens
 // on hero-b.html?scene=port when the camera is set by hand; with the mirror off every pose draws). Turn it on again when that is fixed.
@@ -57,6 +58,9 @@ const REPLACE_SLICES = 8;
 // Each texture upload is a synchronous GL call. The renderer caches uploads by descriptor, so uploading them here, a few
 // milliseconds at a time with a yield between slices, leaves nothing for replaceParts to do in one block.
 async function uploadTexturesInSlices(renderer, parts, isCancelled = () => false) {
+  // A texture over 1 MiB would be one call of 30 to 80 ms; it goes up in bands first, and the loop below finds it cached.
+  await renderer.preloadTextures(parts, { checkpoint: createSlicer(SLICE_MILLISECONDS) });
+  if (isCancelled()) return;
   const seen = new Set();
   let sliceStart = performance.now();
   for (const part of parts) {
@@ -246,7 +250,7 @@ export async function buildWorld(download, canvas, overrides = {}) {
   // whole world drew nothing after its first frame).
   const frame = { ...description.frame, exposure: description.exposure ?? 1 };
   const whole = wholeOf(parsedFirst.files, effects);
-  const renderer = new CrucibleRenderer(canvas, [...new Set([...shaderFeatureRepresentatives(whole.parts), ...whole.parts.filter(isPinnedPart)])], {
+  const renderer = new CrucibleRenderer(canvas, withStandInTextures([...new Set([...shaderFeatureRepresentatives(whole.parts), ...whole.parts.filter(isPinnedPart)])], isPinnedPart), {
     ...options,
     ...overrides,
     pixelRatio: Math.min(devicePixelRatio, 1.25),

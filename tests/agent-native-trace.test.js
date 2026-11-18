@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
-  chooseNativeKernel, chooseTraceBackend, clampNegativeColor, createNativeTracerLocator, isNativeTimeLimitError, traceFrameNative, yieldToEventLoop,
+  chooseNativeKernel, chooseTraceBackend, clampNegativeColor, describeKernelCompile, createNativeTracerLocator, isNativeTimeLimitError, traceFrameNative, yieldToEventLoop,
 } from '../scripts/agent-native-trace.mjs';
 
 // These tests use fake engines, so they run with and without Cook installed; a COOK_DISABLE from the suite's absent-mode run
@@ -149,6 +149,31 @@ function tracerRecording(calls) {
     },
   };
 }
+
+function tracerWithCompile(timings) {
+  const traced = tracerRecording([]).traceNative();
+  return { traceNative: () => ({ ...traced, ...timings }) };
+}
+
+test('a frame that spent seconds compiling says so apart from the trace time', async () => {
+  const frame = { exported: emptyExport, width: 4, height: 4, samples: 8, denoise: 'none' };
+  const compiled = await traceFrameNative({ ...frame, tracer: tracerWithCompile({ compileSeconds: 7.04, tracedSeconds: 0.017 }) });
+  assert.equal(compiled.report.compileSeconds, 7.04);
+  assert.equal(compiled.report.gpuTraceSeconds, 0.017);
+  assert.match(compiled.report.kernelCompileNote, /spent 7\.0 s compiling the kernel variant/);
+  assert.match(compiled.report.kernelCompileNote, /Later frames of this job reuse it/);
+});
+
+test('a frame whose kernel was held or compiled quickly carries no compile note, and an older Cook adds no trace field', async () => {
+  const frame = { exported: emptyExport, width: 4, height: 4, samples: 8, denoise: 'none' };
+  const quick = await traceFrameNative({ ...frame, tracer: tracerWithCompile({ compileSeconds: 0.05, tracedSeconds: 0.02 }) });
+  assert.equal(quick.report.kernelCompileNote, undefined);
+  assert.equal(quick.report.gpuTraceSeconds, 0.02);
+  const older = await traceFrameNative({ ...frame, tracer: tracerRecording([]) });
+  assert.equal('gpuTraceSeconds' in older.report, false);
+  assert.equal('kernelCompileNote' in older.report, false);
+  assert.equal(describeKernelCompile({ compileSeconds: undefined }), undefined);
+});
 
 const emptyExport = {
   triangleCount: 0, triangles: 0, ignored: [],
@@ -390,4 +415,26 @@ test('clampNegativeColor returns a buffer without negatives as the same array', 
   const signed = new Float32Array([-0.1, 0.5, -2]);
   assert.deepEqual([...clampNegativeColor(signed)], [0, 0.5, 0]);
   assert.deepEqual([...signed], [...new Float32Array([-0.1, 0.5, -2])], 'the input is not edited');
+});
+
+const STALE_ADDON_MESSAGE = 'The Cook addon at "/build/render-native.node" does not match this package: built for 0.1.0, expected 0.2.0. Run `npx cook fetch-addon` after a release, or rebuild it.';
+
+test('a stale addon is reported with the load error as written, not as a missing Vulkan adapter', async () => {
+  const staleEngine = { ...fakeEngine(), loadNativeAddon() { throw new Error(STALE_ADDON_MESSAGE); } };
+  const locator = locatorFor(async () => staleEngine);
+  const found = await locator.find();
+  assert.equal(found.reason, STALE_ADDON_MESSAGE);
+  assert.equal(found.tracer, undefined);
+  const choice = await chooseTraceBackend({ requested: 'native', runtimeBackend: 'gpu', locator });
+  assert.equal(choice.backend, 'gpu');
+  assert.doesNotMatch(choice.note, /Vulkan/);
+  assert.match(choice.note, /npx cook fetch-addon/);
+});
+
+test('an addon that loads fine is used as before, and a package without loadNativeAddon still works', async () => {
+  let loads = 0;
+  const loadingEngine = { ...fakeEngine(), loadNativeAddon() { loads += 1; return {}; } };
+  assert.ok((await locatorFor(async () => loadingEngine).find()).tracer);
+  assert.equal(loads, 1);
+  assert.ok((await locatorFor(async () => fakeEngine()).find()).tracer);
 });

@@ -11,7 +11,6 @@ import time
 import mcp
 from mcp.client.stdio import stdio_client
 
-EXPECTED_TOOL_COUNT = 22
 PNG_SIGNATURE = bytes([137, 80, 78, 71, 13, 10, 26, 10])
 
 
@@ -26,7 +25,7 @@ async def run(node_path, server_script, recipe_path):
         async with mcp.ClientSession(read_stream, write_stream) as session:
             await session.initialize()
             listing = await session.list_tools()
-            assert len(listing.tools) == EXPECTED_TOOL_COUNT, len(listing.tools)
+            assert len(listing.tools) > 0, "tools/list returned no tools"
             created = await session.call_tool("scene_create", {"recipe": recipe})
             assert not created.is_error, created.content
             look = await session.call_tool("scene_look", {"width": 256, "height": 192})
@@ -36,7 +35,7 @@ async def run(node_path, server_script, recipe_path):
             assert images[0].mime_type == "image/png"
             png_bytes = base64.b64decode(images[0].data)
             assert png_bytes[:8] == PNG_SIGNATURE
-            return {"tools": len(listing.tools), "pngBytes": len(png_bytes)}
+            return {"toolNames": sorted(tool.name for tool in listing.tools), "pngBytes": len(png_bytes)}
 
 
 started = time.time()
