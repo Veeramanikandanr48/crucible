@@ -180,20 +180,26 @@ class UnknownTopicError extends TopicEntryError {
   }
 }
 
+const GROUP_NAMES = ['scene', 'runtime', 'schemas'];
+
 function indexAnswer(capabilities, names) {
   return {
     format: capabilities.scene.format, schemaVersion: capabilities.scene.schemaVersion,
     phase: capabilities.phase, availableIn: capabilities.availableIn,
-    how: `Call scene_capabilities with topic set to a name below, or to a list of up to ${MAX_TOPICS_PER_CALL} names to read several at once. Tools list common fields; schemas names the full field list of a recipe part (meshEdit and meshStack also take <name>.<op>, geometries takes geometries.<type>). examples.<tool> is one complete call.`,
+    how: `Call scene_capabilities with topic set to a name below, or to a list of up to ${MAX_TOPICS_PER_CALL} names to read several at once. Tools list common fields; each name in topics.schemas gives the full field list of a recipe part, and the group names scene, runtime and schemas list their topics (meshEdit and meshStack also take <name>.<op>, geometries takes geometries.<type>). examples.<tool> is one complete call.`,
     topics: names,
   };
 }
 
 function answerOneTopic(capabilities, topic, names, outlineSources) {
   const allNames = [...names.scene, ...names.runtime, ...names.schemas];
+  // A group name is not a topic, but an agent that read the index asks for it: answer with the topics it holds.
+  if (GROUP_NAMES.includes(topic) && !allNames.includes(topic)) {
+    return { topic, value: { topics: names[topic], use: `${topic} is a group of topics; ask for one of its names, or ${topic}.<name>.` } };
+  }
   const parts = topic.split('.');
   // The index groups topics under scene, runtime and schemas; a caller may repeat the group as a prefix (schemas.geometries).
-  if (['scene', 'runtime', 'schemas'].includes(parts[0]) && parts.length > 1) parts.shift();
+  if (GROUP_NAMES.includes(parts[0]) && parts.length > 1) parts.shift();
   const [requestedName, branchName] = parts;
   const aliased = TOPIC_ALIASES[requestedName.toLowerCase()];
   const name = closestTopic(requestedName, allNames) ?? (allNames.includes(aliased) ? aliased : requestedName);

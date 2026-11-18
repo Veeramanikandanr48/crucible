@@ -1,0 +1,1 @@
+- Scenes can build anime cumulus: a `cloud` geometry (`seed`, `puffs`, `width`, `height`, `flatBase`) makes one closed mesh of round puffs that toon-shades into clean lobes (#2039)

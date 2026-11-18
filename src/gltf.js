@@ -366,7 +366,9 @@ function validateDocument(document, limits, allowedExtensions) {
       for (const target of primitive.targets ?? []) {
         if (!target || typeof target !== 'object' || Array.isArray(target) || !Object.keys(target).length) throw new Error('Morph targets require POSITION or NORMAL channels.');
         for (const [semantic, accessorIndex] of Object.entries(target)) {
-          if (!['POSITION', 'NORMAL'].includes(semantic)) throw new Error(`Unsupported morph target semantic: ${semantic}.`);
+          // TANGENT deltas are derived data the renderer never reads; they are ignored with a warning (see ignoredMorphTangentWarnings).
+          if (semantic === 'TANGENT') continue;
+          if (!['POSITION', 'NORMAL'].includes(semantic)) throw new Error(`Unsupported morph target semantic: ${semantic}. Crucible reads morph POSITION and NORMAL (TANGENT is ignored). Re-export the GLB without ${semantic} morph deltas.`);
           const accessor = document.accessors?.[accessorIndex];
           // A morph NORMAL without a base NORMAL is dropped at conversion with a warning, so it needs no base attribute here.
           if (primitive.attributes?.[semantic] === undefined && semantic !== 'NORMAL') throw new Error('Morph target channels require corresponding base attributes.');
@@ -867,6 +869,13 @@ function computeVertexNormals(positions, indices) {
   return normals;
 }
 
+/** One warning when any morph target carries TANGENT deltas, which the loader ignores. */
+function ignoredMorphTangentWarnings(document) {
+  const hasTangentDeltas = (document.meshes ?? []).some(mesh => (mesh.primitives ?? [])
+    .some(primitive => (primitive.targets ?? []).some(target => target?.TANGENT !== undefined)));
+  return hasTangentDeltas ? ['Ignored morph target TANGENT deltas; the POSITION and NORMAL morphs and the weight animation load as authored.'] : [];
+}
+
 /** A primitive whose decoded data cannot be drawn; the loader skips it with a warning instead of refusing the file. */
 class UnusablePrimitiveError extends Error {}
 
@@ -987,28 +996,9 @@ function makeSkinBinding(node) {
 
 const IDENTITY_MATRIX = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
-/** True when collapseSingularMatrix would replace the matrix at this offset: a non-finite value or a determinant below its floor. */
+/** True when collapseSingularMatrix would replace the matrix at this offset: a non-finite value or a singular axis ratio. */
 function needsCollapse(values, offset) {
-  for (let index = offset; index < offset + 16; index++) {
-    if (!Number.isFinite(values[index])) return true;
-  }
-  // The determinant of mat4.determinant, read at an offset.
-  const a00 = values[offset], a01 = values[offset + 1], a02 = values[offset + 2], a03 = values[offset + 3];
-  const a10 = values[offset + 4], a11 = values[offset + 5], a12 = values[offset + 6], a13 = values[offset + 7];
-  const a20 = values[offset + 8], a21 = values[offset + 9], a22 = values[offset + 10], a23 = values[offset + 11];
-  const a30 = values[offset + 12], a31 = values[offset + 13], a32 = values[offset + 14], a33 = values[offset + 15];
-  const b0 = a00 * a11 - a01 * a10;
-  const b1 = a00 * a12 - a02 * a10;
-  const b2 = a01 * a12 - a02 * a11;
-  const b3 = a20 * a31 - a21 * a30;
-  const b4 = a20 * a32 - a22 * a30;
-  const b5 = a21 * a32 - a22 * a31;
-  const b6 = a00 * b5 - a01 * b4 + a02 * b3;
-  const b7 = a10 * b5 - a11 * b4 + a12 * b3;
-  const b8 = a20 * b2 - a21 * b1 + a22 * b0;
-  const b9 = a30 * b2 - a31 * b1 + a32 * b0;
-  const determinant = a13 * b6 - a03 * b7 + a33 * b8 - a23 * b9;
-  return !Number.isFinite(determinant) || Math.abs(determinant) < 1e-12;
+  return singularReason(values.subarray(offset, offset + 16)) !== undefined;
 }
 
 function prepareSkinBinding(binding, geometry, checks = true) {
@@ -1019,7 +1009,7 @@ function prepareSkinBinding(binding, geometry, checks = true) {
     pendingWorld.set(node.skeleton.bones[joint].matrixWorld.elements, offset);
     // A joint at zero scale collapses its vertices to a point instead of refusing the pose. Only a joint that needs
     // the repair gets a view, so a normal pose allocates nothing.
-    if (needsCollapse(pendingWorld, offset) && collapseSingularMatrix(pendingWorld.subarray(offset, offset + 16), undefined, COLLAPSED_JOINT_SCALE)) binding.collapsedJoints = true;
+    if (needsCollapse(pendingWorld, offset) && collapseSingularMatrix(pendingWorld.subarray(offset, offset + 16), COLLAPSED_JOINT_SCALE)) binding.collapsedJoints = true;
   }
   updateSkinPose(pendingPose, pendingWorld, skin.inverseBindMatrices, node.matrixWorld.elements, skin.bindMatrix, checks);
   if (checks) validateSkinPose(pendingPose, geometry, node.matrixWorld.elements);
@@ -1052,23 +1042,41 @@ function prepareMorphBinding(binding) {
 }
 
 const COLLAPSED_SCALE = 2e-4;
+/** A transform is singular when its smallest axis scale is under this fraction of its largest: the test follows the scale, so a uniform 1e-7 stays valid. */
+const SINGULAR_AXIS_RATIO = 1e-12;
+
+/** The scale along each axis of a column-major affine matrix, read as doubles. */
+function axisScales(elements) {
+  return [0, 4, 8].map(offset => Math.hypot(elements[offset], elements[offset + 1], elements[offset + 2]));
+}
+
+/** Why a world matrix cannot be drawn: 'non-finite', 'singular', or undefined when it is valid at any size. */
+function singularReason(elements) {
+  for (let index = 0; index < 16; index++) {
+    if (!Number.isFinite(elements[index])) return 'non-finite';
+  }
+  const [scaleX, scaleY, scaleZ] = axisScales(elements);
+  const determinant = mat4.determinant(elements);
+  if (!Number.isFinite(determinant)) return 'non-finite';
+  return Math.abs(determinant) > SINGULAR_AXIS_RATIO * scaleX * scaleY * scaleZ ? undefined : 'singular';
+}
+
+/** The sentence a skipped node carries: the measured axis scales and the limit, or the non-finite cause. */
+function singularWarning(label, elements, reason) {
+  if (reason === 'non-finite') return `Skipped node ${label}: its world transform is non-finite (NaN or Infinity in its translation, rotation or scale); pass finite node values.`;
+  const scales = axisScales(elements);
+  const smallest = Math.min(...scales);
+  const largest = Math.max(...scales);
+  return `Skipped node ${label}: its world transform is singular. Its axis scales are ${scales.map(value => value.toExponential(2)).join(', ')}; the smallest (${smallest.toExponential(2)}) must exceed ${SINGULAR_AXIS_RATIO} times the largest (${(SINGULAR_AXIS_RATIO * largest).toExponential(2)}). Pass a nonzero scale on every axis.`;
+}
 const COLLAPSED_JOINT_SCALE = 1e-2;
 
 /**
  * Replaces a singular or non-finite world matrix, in place, with a uniform scale of 0.0002 at the same position so the
  * part is a speck that stays finite and invertible. Returns true when it replaced the matrix.
  */
-function collapseSingularMatrix(elements, determinantFloor = 1e-12, collapsedScale = COLLAPSED_SCALE) {
-  let finite = true;
-  for (let index = 0; index < 16; index++) {
-    if (!Number.isFinite(elements[index])) {
-      finite = false;
-      break;
-    }
-  }
-  // mat4.determinant reads the elements as doubles, the same values a Float64 copy would hold.
-  const determinant = finite ? mat4.determinant(elements) : NaN;
-  if (finite && Number.isFinite(determinant) && Math.abs(determinant) >= determinantFloor) return false;
+function collapseSingularMatrix(elements, collapsedScale = COLLAPSED_SCALE) {
+  if (!singularReason(elements)) return false;
   const position = [elements[12], elements[13], elements[14]];
   const keepPosition = position.every(Number.isFinite);
   elements.fill(0);
@@ -1100,12 +1108,11 @@ function isKeyedInClip(node, keyedNodeIndices) {
  * Rejects a pose that makes a node's world matrix non-finite or singular. A node that was already singular at load
  * (its meshes were skipped with a warning) is listed in `tolerated` and is not checked again.
  */
-function validateNodeTransforms(nodes, pending, transform, tolerated) {
+function validateNodeTransforms(nodes, pending, tolerated) {
   for (const node of nodes) {
     pending.set(node.matrixWorld.elements);
     const finite = pending.every(Number.isFinite);
-    const determinant = finite ? transform.fromArray(pending).determinant() : NaN;
-    if (finite && Number.isFinite(determinant) && Math.abs(determinant) >= 1e-12) continue;
+    if (singularReason(pending) === undefined) continue;
     if (tolerated.has(node)) continue;
     if (!tolerated.collecting) throw new Error(finite ? 'Animation creates a singular Float32 node transform.' : 'Animation creates a non-finite Float32 world matrix.');
     tolerated.add(node);
@@ -1263,7 +1270,7 @@ export async function parseGltf(data, options = {}) {
   }
   const { ignoredExtensions, overruns } = validated;
   await loadLayerShadersFor(document);
-  const warnings = [...fallbackWarnings, ...ignoredExtensions.map(extension => `${extension} is accepted but not rendered.`), ...skippedPrimitiveWarnings(document), ...unusablePrimitiveWarnings, ...clampedIorWarnings(document)];
+  const warnings = [...fallbackWarnings, ...ignoredExtensions.map(extension => `${extension} is accepted but not rendered.`), ...skippedPrimitiveWarnings(document), ...unusablePrimitiveWarnings, ...clampedIorWarnings(document), ...ignoredMorphTangentWarnings(document)];
   const dataBytes = typeof data === 'string' ? new TextEncoder().encode(data).byteLength : data.byteLength;
   const { resourceBytes, textureScaling } = await prepareResources(document, data, dataBytes, options, limits, overruns);
   if (textureScaling.scaledTextures.length) {
@@ -1313,18 +1320,19 @@ export async function parseGltf(data, options = {}) {
       if (!materials.has(node.material)) materials.set(node.material, convertMaterial(node.material, limits, maps, document.materials?.[materialIndex]));
       const material = materials.get(node.material);
       for (const instanceMatrix of instanceMatricesOf(node, limits.maxInstances)) {
-        const determinant = worldMatrixOf(node, instanceMatrix, pendingTransform).determinant();
-        const singular = !Number.isFinite(determinant) || Math.abs(determinant) < 1e-12;
+        const worldElements = worldMatrixOf(node, instanceMatrix, pendingTransform).elements;
+        const singularCause = singularReason(worldElements);
+        const singular = singularCause !== undefined;
         if (singular) {
           const keyed = isKeyedInClip(node, keyedNodeIndices);
           const label = node.name ? `"${node.name}"` : association.nodes;
           const warning = keyed
             ? `Node ${label} starts with a singular or non-finite world transform; it draws nothing while its scale is zero.`
-            : `Skipped node ${label}: its world transform is singular or non-finite.`;
+            : singularWarning(label, worldElements, singularCause);
           if (!warnings.includes(warning)) warnings.push(warning);
           if (!keyed) continue;
         }
-        const mirrored = singular ? false : determinant < 0;
+        const mirrored = singular ? false : mat4.determinant(worldElements) < 0;
         const geometryKey = `${node.geometry.uuid}:${uvKey}:${secondUvSet}`;
         if (!geometries.has(geometryKey)) {
           await node.geometry.load();
@@ -1399,7 +1407,7 @@ export async function parseGltf(data, options = {}) {
       await checkpoint();
     }
     const toleratedNodes = Object.assign(new Set(), { collecting: true });
-    validateNodeTransforms(nodes, pendingNodeMatrix, pendingTransform, toleratedNodes);
+    validateNodeTransforms(nodes, pendingNodeMatrix, toleratedNodes);
     toleratedNodes.collecting = false;
     // A skeleton-only file (a skin or clips, no mesh) loads with zero parts so it can be posed and retargeted.
     if (!parts.length && !document.skins?.length && !gltf.animations.length) {
@@ -1529,7 +1537,7 @@ export async function parseGltf(data, options = {}) {
     /** Pose every part from the scene graph. `checks: false` keeps the zero-scale repairs and skips the finite, singular and winding checks. */
     function preparePose(checks = true) {
       gltf.scene.updateMatrixWorld(true);
-      if (checks) validateNodeTransforms(nodes, pendingNodeMatrix, pendingTransform, toleratedNodes);
+      if (checks) validateNodeTransforms(nodes, pendingNodeMatrix, toleratedNodes);
       const worldMatrix = new Matrix4();
       for (const { node, instanceMatrix, part, mirrored, matrix, pendingMatrix, skin } of bindings) {
         if (part.matrix !== matrix || matrix.length !== 16) {
@@ -1547,7 +1555,7 @@ export async function parseGltf(data, options = {}) {
         }
         const determinant = worldMatrix.determinant();
         const roundedDeterminant = pendingTransform.fromArray(pendingMatrix).determinant();
-        if (!Number.isFinite(determinant) || !Number.isFinite(roundedDeterminant) || Math.abs(roundedDeterminant) < 1e-12 || (determinant < 0) !== mirrored || (roundedDeterminant < 0) !== mirrored) {
+        if (!Number.isFinite(determinant) || !Number.isFinite(roundedDeterminant) || singularReason(pendingMatrix) !== undefined || (determinant < 0) !== mirrored || (roundedDeterminant < 0) !== mirrored) {
           throw new Error('Animation creates a singular transform or changes triangle winding.');
         }
       }

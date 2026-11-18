@@ -4,13 +4,15 @@
  * kind, a severity, a target (the material, node or asset it concerns), a message and a fix that names the next action.
  * Reads of an inspected scene include them only when there is something to say, to keep default results small.
  */
+import { agentSceneModule } from './agent-scene-modules.js';
+
 const PLAIN_SURFACE_TAGS = new Set(['surface', 'gltf']);
 const LAYER_FIELDS = ['clearcoat', 'sheenColor', 'specular', 'specularColor', 'anisotropy', 'iridescence'];
 // The pass that draws transmission is a separate shader without these layers.
 const FIELDS_IGNORED_BY_TRANSMISSION = ['anisotropy', 'iridescence'];
 const TRANSMISSION_DETAIL_FIELDS = ['thickness', 'attenuationColor', 'attenuationDistance'];
 
-function diagnostic(kind, severity, target, message, fix) {
+export function diagnostic(kind, severity, target, message, fix) {
   return { kind, severity, target, message, fix };
 }
 
@@ -72,6 +74,7 @@ export function recipeDiagnostics(recipe) {
       `Geometry ${geometry.id} is used by no node, so nothing draws it.`,
       'Add a node that uses it with scene_apply add-node, or remove it with remove-geometry.'));
   }
+  problems.push(...recipe.geometries.filter(geometry => geometry.type === 'terrain').flatMap(geometry => agentSceneModule('terrain').terrainHoleDiagnostics(geometry)));
   problems.push(...portalProblems(recipe.environment?.areaLights ?? []));
   return problems;
 }

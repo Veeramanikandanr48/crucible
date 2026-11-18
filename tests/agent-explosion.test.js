@@ -8,6 +8,7 @@ import { EXPLOSION_EMPTY_GRID, EXPLOSION_EMPTY_VELOCITY_GRID, explosionGridBytes
 import { decodeVolumeGrid, hasGridVelocity } from '../src/volume-grid.js';
 import { readVolumeGridFiles } from '../src/mcp-volume-grids.js';
 import { agentSceneModulesNeeded, needsPhysics } from '../src/agent-scene-modules.js';
+import { findCoplanarOverlaps } from '../src/coplanar-overlap.js';
 
 await loadPhysicsEngine();
 
@@ -295,4 +296,16 @@ test('bad sparks and motionBlur values name the field and a valid value', () => 
     [blast({ motionBlur: 'on' }), /motionBlur.*true.*false/],
   ];
   for (const [operation, pattern] of cases) assert.throws(() => applyBlast(operation), pattern, JSON.stringify(operation));
+});
+
+test('the blast dust and rubble sampled at a later time are ranked against a box floor, so no coplanar pair is left (#2054)', () => {
+  const recipe = setRecipe();
+  delete recipe.physics;
+  recipe.nodes = [{ id: 'floor', geometry: 'slab', material: 'stone', translation: [0, -0.05, 0], scale: [6, 0.1, 6] }];
+  const { scene } = applyBlast(blast({ start: 0.5, seed: 7, fuel: 'oily', shake: 0.4 }), recipe);
+  scene.sampleMotion(1.2);
+  const blastParts = scene.parts.filter(part => part.name.startsWith('blast-'));
+  assert.ok(blastParts.some(part => part.name === 'blast-dust'), 'the sampled dust part exists');
+  const pairs = findCoplanarOverlaps(scene.parts).overlaps.map(overlap => [overlap.first?.name ?? overlap.larger?.name, overlap.second?.name ?? overlap.smaller?.name]);
+  assert.deepEqual(pairs, []);
 });

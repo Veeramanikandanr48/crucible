@@ -48,7 +48,7 @@ function validateColor(values, label) {
   for (const value of values) validateFactor(value, label);
 }
 
-function validateGeometry(geometry) {
+function validateGeometry(geometry, partName) {
   const count = geometry?.positions?.length;
   if (!Number.isSafeInteger(count) || count < 3 || count % 3 !== 0) {
     throw new TypeError('GLB positions require a nonempty array of XYZ vertices.');
@@ -62,7 +62,10 @@ function validateGeometry(geometry) {
   if (geometry.colors !== undefined) validateFloatChannel(geometry.colors, count, 'GLB colors', true);
   if (geometry.uvs !== undefined) validateFloatChannel(geometry.uvs, count / 3 * 2, 'GLB UVs');
   if (geometry.lightUvs !== undefined) validateFloatChannel(geometry.lightUvs, count / 3 * 2, 'GLB lightUvs');
-  if (!(geometry.indices instanceof Uint32Array) || geometry.indices.length === 0 || geometry.indices.length % 3 !== 0) {
+  if (geometry.indices instanceof Uint32Array && geometry.indices.length === 0) {
+    throw new RangeError(`GLB part ${partName} has no triangles. Terrain holes may cover the whole ground: lower a radius or move a center.`);
+  }
+  if (!(geometry.indices instanceof Uint32Array) || geometry.indices.length % 3 !== 0) {
     throw new TypeError('GLB indices require a nonempty Uint32Array of triangles.');
   }
   for (const index of geometry.indices) {
@@ -258,7 +261,7 @@ export function exportGlb(parts, options = {}) {
   const morphMetadata = new Map();
   for (const part of parts) {
     if (!validatedGeometries.has(part?.geometry)) {
-      validateGeometry(part?.geometry);
+      validateGeometry(part?.geometry, part?.name);
       validatedGeometries.add(part.geometry);
     }
     validatePart(part);

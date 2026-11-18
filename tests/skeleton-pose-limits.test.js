@@ -100,6 +100,41 @@ test('a limb stretched to its reach warns about hyperextension', () => {
   assert.ok(result.warnings.some(warning => warning.code === 'hyperextended'));
 });
 
+function jointPositionsAreFinite(pose) {
+  return ['hip', 'knee', 'ankle'].every(name => Array.from(pose.jointWorld(name).position).every(Number.isFinite));
+}
+
+test('a target exactly on the root folds an equal-bone limb onto it and says so', () => {
+  const pose = solved({ target: [0, 1, 0], pole: [0, 0, 2] });
+  const [result] = pose.ikResults;
+  assert.equal(result.reached, true);
+  assert.ok(jointPositionsAreFinite(pose));
+  const warning = result.warnings.find(entry => entry.code === 'target-at-root');
+  assert.ok(warning);
+  assert.match(warning.message, /Move the target at least 0\.001 m off hip/);
+});
+
+test('a target a hair from the root warns the same way and stays deterministic', () => {
+  const near = solved({ target: [0, 1 - 1e-5, 0], pole: [0, 0, 2] });
+  assert.equal(near.ikResults[0].reached, true);
+  assert.ok(near.ikResults[0].warnings.some(entry => entry.code === 'target-at-root'));
+  const again = solved({ target: [0, 1 - 1e-5, 0], pole: [0, 0, 2] });
+  assert.deepEqual(Array.from(again.jointWorld('ankle').position), Array.from(near.jointWorld('ankle').position));
+  const clear = solved({ target: [0, 0.99, 0], pole: [0, 0, 2] });
+  assert.ok(!clear.ikResults[0].warnings.some(entry => entry.code === 'target-at-root'));
+});
+
+test('a target on the root of an unequal limb cannot be reached but names the cause', () => {
+  const rig = createLegRig();
+  rig.joints[2].translation = [0, -0.25, 0];
+  const pose = createSkeletonPose({ rig, ik: [{ ...LEG, target: [0, 1, 0], pole: [0, 0, 2] }] });
+  pose.apply(0);
+  const [result] = pose.ikResults;
+  assert.equal(result.reached, false);
+  assert.ok(jointPositionsAreFinite(pose));
+  assert.ok(result.warnings.some(entry => entry.code === 'target-at-root'));
+});
+
 test('seeking gives the same limited pose as playing to that time', () => {
   const definition = {
     target: { },

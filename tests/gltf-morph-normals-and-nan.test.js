@@ -74,3 +74,25 @@ test('a NaN joint transform loads with a warning and a finite palette', async ()
   assert.ok(Array.from(asset.parts[0].skin.jointMatrices).every(Number.isFinite));
   asset.dispose();
 });
+
+function tangentMorphDocument() {
+  const document = JSON.parse(morphDocument());
+  document.accessors.push({ ...document.accessors[1] });
+  document.meshes[0].primitives[0].targets = [{ POSITION: 1, TANGENT: 2 }];
+  return document;
+}
+
+test('TANGENT morph deltas are ignored with a warning that names TANGENT, and the POSITION morph loads', async () => {
+  const asset = await parseGltf(JSON.stringify(tangentMorphDocument()));
+  const channels = asset.parts[0].geometry.morphTargets[0];
+  assert.equal(channels.positions.length, 9);
+  assert.equal(channels.tangents, undefined);
+  assert.ok(asset.warnings.some(warning => /morph target TANGENT deltas/.test(warning)));
+  asset.dispose();
+});
+
+test('another unsupported morph semantic is refused with a message that says to re-export the GLB', async () => {
+  const document = tangentMorphDocument();
+  document.meshes[0].primitives[0].targets = [{ POSITION: 1, TEXCOORD_0: 2 }];
+  await assert.rejects(() => parseGltf(JSON.stringify(document)), /Unsupported morph target semantic: TEXCOORD_0\..*Re-export the GLB without TEXCOORD_0 morph deltas/);
+});

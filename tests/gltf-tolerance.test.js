@@ -47,7 +47,7 @@ test('valid normals load with no warning', async () => {
 test('a node with a zero scale is skipped with a warning and the rest of the file loads', async () => {
   const asset = await parseGltf(documentWith(FACE_NORMALS, document => { document.nodes[0].scale = [0, 0, 0]; }));
   assert.equal(asset.parts.length, 1);
-  assert.deepEqual(asset.warnings, ['Skipped node "Good": its world transform is singular or non-finite.']);
+  assert.deepEqual(asset.warnings, ['Skipped node "Good": its world transform is singular. Its axis scales are 0.00e+0, 0.00e+0, 0.00e+0; the smallest (0.00e+0) must exceed 1e-12 times the largest (0.00e+0). Pass a nonzero scale on every axis.']);
 });
 
 test('a singular group node skips the meshes under it', async () => {
@@ -98,4 +98,36 @@ test('a primitive without NORMAL falls back to a touching face normal or up when
   assert.equal(asset.parts.length, 1);
   assert.deepEqual(Array.from(asset.parts[0].geometry.normals), [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0]);
   assert.deepEqual(asset.warnings, []);
+});
+
+function partDiagonal(asset) {
+  const { matrix } = asset.parts[0];
+  return [matrix[0], matrix[5], matrix[10]];
+}
+
+for (const scale of [1e-4, 1e-5, 1e-6, 1e-7]) {
+  test(`a uniform node scale of ${scale} loads and keeps its size (#2077)`, async () => {
+    const asset = await parseGltf(documentWith(FACE_NORMALS, document => {
+      document.nodes[0].scale = [scale, scale, scale];
+    }));
+    assert.deepEqual(asset.warnings, []);
+    assert.equal(asset.parts.length, 2);
+    for (const value of partDiagonal(asset)) assert.ok(Math.abs(value - scale) <= scale * 1e-6, `scale ${value} should be ${scale}`);
+  });
+}
+
+test('a tiny scale under a tiny parent multiplies instead of falling under an absolute floor (#2077)', async () => {
+  const asset = await parseGltf(documentWith(FACE_NORMALS, document => {
+    document.nodes = [{ name: 'Millimetres', scale: [1e-3, 1e-3, 1e-3], children: [1] }, { name: 'Micrometres', scale: [1e-3, 1e-3, 1e-3], mesh: 0 }];
+    document.scenes[0].nodes = [0];
+  }));
+  assert.deepEqual(asset.warnings, []);
+  assert.ok(Math.abs(partDiagonal(asset)[0] - 1e-6) < 1e-12);
+});
+
+test('a zero axis still skips the node and the warning names the axis scales and the limit (#2077)', async () => {
+  const asset = await parseGltf(documentWith(FACE_NORMALS, document => { document.nodes[0].scale = [1e-5, 0, 1e-5]; }));
+  assert.equal(asset.parts.length, 1);
+  assert.match(asset.warnings[0], /Skipped node "Good": its world transform is singular\. Its axis scales are 1\.00e-5, 0\.00e\+0, 1\.00e-5;/);
+  assert.match(asset.warnings[0], /must exceed 1e-12 times the largest \(1\.00e-17\)\. Pass a nonzero scale on every axis\./);
 });

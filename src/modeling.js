@@ -1,6 +1,7 @@
 import { buildLathe, buildExtrusion, buildTube } from './modeling-shapes.js';
 import { sweepSamples } from './modeling-bezier.js';
 import { KNOT_MODES, NURBS_DEFAULT_ORDER, NURBS_MAX_ORDER, resampleSamples, sampleCountOf, sampleSpline, shapeToSpline, trimSamples } from './modeling-splines.js';
+import { cloudMesh } from './cloud-geometry.js';
 import { planSdf, sdfGeometry as buildSdf } from './modeling-sdf.js';
 
 const MAX_INPUT_POINTS = 4096;
@@ -561,6 +562,14 @@ export function sdfGeometry(value, maxVertices = DEFAULT_VERTEX_LIMIT) {
   planSdf(value);
   return meshFrom(buildSdf(value), maxVertices);
 }
+
+/** The cloud scene geometry: a seeded cluster of puffs as one closed, smooth surface. See docs/modeling.md. */
+export function cloudGeometry(value, maxVertices = DEFAULT_VERTEX_LIMIT) {
+  return meshFrom(cloudMesh(value), maxVertices);
+}
+
+/** The vertex count reserved for a cloud geometry, validated like cloudGeometry. */
+export { cloudVertexEstimate } from './cloud-geometry.js';
 
 /** The vertex count reserved for an sdf geometry, validated like sdfGeometry. */
 export { sdfVertexEstimate } from './modeling-sdf.js';

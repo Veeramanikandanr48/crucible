@@ -615,6 +615,33 @@ function prepareHair(system, node, surfaceNode, surfaceGeometry, forces) {
  * `sea` is optional: `{ followsOceanTime(geometryId), geometryAt(geometryId, time) }` lets a mesh emitter read a sea whose `oceanTime`
  * is driven by a motion track, as it is at each particle's birth.
  */
+function isOrigin(vector) {
+  return !vector || vector.every(component => component === 0);
+}
+
+/**
+ * A system node's own transform does not move its particles, only emitter.position does, so a node placed at the spark point
+ * with a translation and no emitter.position births its particles at the world origin (#2053). A mesh emitter takes its place
+ * from the mesh node, so it has nothing to ignore.
+ */
+function nodeTransformProblems(particles, recipe) {
+  const nodesById = new Map(recipe.nodes.map(node => [node.id, node]));
+  const reported = new Set();
+  const problems = [];
+  for (const system of particles.systems) {
+    const node = nodesById.get(system.node);
+    if (!node || reported.has(node.id) || isOrigin(node.translation) || system.emitter?.shape === 'mesh' || !isOrigin(system.emitter?.position)) continue;
+    reported.add(node.id);
+    const translation = Array.from(node.translation).map(component => Math.round(component * 1000) / 1000).join(', ');
+    problems.push({
+      kind: 'particle-node-transform-ignored', severity: 'warning', target: node.id,
+      message: `Particle system node ${node.id} is translated to [${translation}], but a system node's transform does not move its particles, so they are born at the world origin.`,
+      fix: `Set emitter.position to [${translation}] on the system with scene_apply set-particles, and leave the node translation at [0, 0, 0].`,
+    });
+  }
+  return problems;
+}
+
 export function bakeAgentParticles(particles, recipe, geometries, sea = null) {
   const nodes = new Map(recipe.nodes.map(node => [node.id, node]));
   const forces = { gravity: particles.gravity ?? DEFAULT_GRAVITY, wind: particles.wind ?? [0, 0, 0], fields: particles.fields ?? [] };
@@ -633,6 +660,10 @@ export function bakeAgentParticles(particles, recipe, geometries, sea = null) {
     return prepareEmitter(system, node, templates, forces, collisionSurfaceOf(system, nodes, geometries), meshSourceOf(system, nodes, geometries, systemIndex, sea));
   });
   return Object.freeze({
+    /** Warnings for a recipe that loads but does not do what its author likely meant. */
+    diagnostics() {
+      return nodeTransformProblems(particles, recipe);
+    },
     sample(time) {
       return new Map(prepared.map(({ node, build }) => [node.id, worldToNodeLocal(build(time), nodeMatrix(node))]));
     },

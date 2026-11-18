@@ -80,7 +80,7 @@ test('scene_render_status given a sessionId says jobs are addressed by jobId alo
 
 test('the other job tools give the same hint for sessionId', async context => {
   const client = await connect(context);
-  const accepted = { scene_render_cancel: 'jobId', scene_render_result: 'jobId (and response_format)', scene_render_release: 'jobId' };
+  const accepted = { scene_render_cancel: 'jobId', scene_render_result: 'jobId (and response_format, images)', scene_render_release: 'jobId' };
   for (const [name, keys] of Object.entries(accepted)) {
     const result = await client.callTool({ name, arguments: { jobId: randomUUID(), sessionId: randomUUID() } });
     assert.equal(result.isError, true, name);
