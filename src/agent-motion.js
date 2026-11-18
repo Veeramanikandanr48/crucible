@@ -518,7 +518,7 @@ export function normalizeAgentMotion(input, recipe) {
   const inputTracks = input.tracks ?? [];
   denseArray(inputTracks, 128, 'Motion tracks');
   if (!inputTracks.length && !input.layers?.length && !input.ik?.length && !input.springs && !input.constraints?.length && !input.drivers?.length && !drive) {
-    throw invalidField('motion', input, 'at least one track, IK solver, constraint or driver, such as { "duration": 1, "tracks": [...] }; use null to clear it');
+    throw invalidField('motion', input, 'at least one track or driver (or an IK solver, constraint, layer, spring or drive), such as { "duration": 1, "tracks": [...] } or { "duration": 1, "drivers": [...] }; use null to clear it');
   }
   const nodes = new Set((recipe.nodes ?? []).map(node => node.id));
   // A material track may also name the id of an asset.materials override, which gives a placed asset's material a handle.

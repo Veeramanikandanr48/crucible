@@ -806,6 +806,8 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
     let frameReceiver;
     // A stills or video job of native frames renders them all through one session; it is closed when the job ends.
     let nativeSequence;
+    // The tables of the last native export of this job, so a frame reads only the byte ranges that changed since (#1861).
+    const nativeExportBaseline = {};
     // A native video job blends each frame into the ones before it, so the noise the denoiser leaves does not shimmer.
     let nativeTemporal;
     let nativeTemporalShotIndex;
@@ -943,7 +945,7 @@ export function createAgentRuntime({ kernelWorkers = true, backend = 'gpu', brow
             const blendsOverTime = usesSession && settings.kind === 'video' && chooseNativeKernel() === 'cycles' && chooseNativeTemporal();
             const frameSeed = blendsOverTime ? temporalFrameSeed(tracerOptions.seed, frame) : tracerOptions.seed;
             try {
-              const exported = await fetchNativeExport(jobPage, { ...frameInput, options: { width, height, bounces: tracerOptions.bounces, seed: frameSeed, fireflyClamp: 20, noiseThreshold: tracerOptions.noiseThreshold, samples: tracerOptions.samples, instancing: chooseNativeInstancing(), kernel: chooseNativeKernel() } }, { capacity: readNativeCapacity(trace.tracer).capacity, session });
+              const exported = await fetchNativeExport(jobPage, { ...frameInput, options: { width, height, bounces: tracerOptions.bounces, seed: frameSeed, fireflyClamp: 20, noiseThreshold: tracerOptions.noiseThreshold, samples: tracerOptions.samples, instancing: chooseNativeInstancing(), kernel: chooseNativeKernel() } }, { capacity: readNativeCapacity(trace.tracer).capacity, session, baseline: usesSession ? nativeExportBaseline : undefined });
               exportedScene = true;
               if (usesSession) nativeSequence ??= createNativeSequence({ tracer: trace.tracer });
               if (blendsOverTime) {

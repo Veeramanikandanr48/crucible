@@ -16,8 +16,6 @@ const GUIDE = 'docs/learn/if-you-know-three-js.md';
 
 const UNSUPPORTED = {
   MeshBasicMaterial: 'Use MeshStandardMaterial with emissive and emissiveIntensity (Crucible: material { color, emission }).',
-  MeshLambertMaterial: 'Use MeshStandardMaterial (Crucible: material { color, metallic: 0, roughness }).',
-  MeshPhongMaterial: 'Use MeshStandardMaterial (Crucible: material { color, metallic, roughness }).',
   MeshNormalMaterial: 'Use MeshStandardMaterial (Crucible: material { color, metallic, roughness }).',
   ShaderMaterial: 'Crucible has no custom shaders. Use the material fields of materials-and-color (Crucible: part.material).',
   RawShaderMaterial: 'Crucible has no custom shaders. Use the material fields of materials-and-color (Crucible: part.material).',
@@ -394,7 +392,7 @@ export function createThreeCompat(core) {
 
   class MeshStandardMaterial {
     constructor(parameters = {}) {
-      const rejected = UNSUPPORTED_OPTIONS[new.target.name === 'MeshPhysicalMaterial' ? 'MeshStandardMaterial' : new.target.name] ?? {};
+      const rejected = UNSUPPORTED_OPTIONS.MeshStandardMaterial;
       for (const option of Object.keys(parameters)) {
         if (rejected[option]) throw unsupported(`${new.target.name} option "${option}"`, rejected[option]);
       }
@@ -459,6 +457,23 @@ export function createThreeCompat(core) {
     }
   }
 
+  // MeshLambertMaterial: a matte surface, so Crucible roughness 1 and no metal.
+  class MeshLambertMaterial extends MeshStandardMaterial {
+    constructor(parameters = {}) {
+      super({ ...parameters, metalness: 0, roughness: 1 });
+    }
+  }
+
+  // MeshPhongMaterial: shininess becomes roughness with the usual Blinn-Phong to GGX fit, alpha = sqrt(2 / (shininess + 2)) and Crucible roughness is perceptual (alpha = roughness squared), so roughness = (2 / (shininess + 2)) ** 0.25.
+  // The specular color has no Crucible field and is ignored.
+  class MeshPhongMaterial extends MeshStandardMaterial {
+    constructor(parameters = {}) {
+      const shininess = parameters.shininess ?? 30;
+      super({ ...parameters, metalness: 0, roughness: (2 / (shininess + 2)) ** 0.25 });
+      this.shininess = shininess;
+    }
+  }
+
   class Mesh extends Object3D {
     constructor(geometry, material = new MeshStandardMaterial()) {
       super();
@@ -466,7 +481,7 @@ export function createThreeCompat(core) {
         throw new CompatError('Mesh needs BoxGeometry, SphereGeometry, CylinderGeometry, TorusGeometry or PlaneGeometry (Crucible: box(), sphere(), cylinder(), torus()).');
       }
       if (!(material instanceof MeshStandardMaterial)) {
-        throw new CompatError('Mesh needs MeshStandardMaterial or MeshPhysicalMaterial (Crucible: a material { color, metallic, roughness }).');
+        throw new CompatError('Mesh needs MeshStandardMaterial, MeshPhysicalMaterial, MeshLambertMaterial or MeshPhongMaterial (Crucible: a material { color, metallic, roughness }).');
       }
       this.geometry = geometry;
       this.material = material;
@@ -834,7 +849,7 @@ export function createThreeCompat(core) {
   const exported = {
     Color, Vector2, Vector3, Euler, Object3D, Group, Scene, Mesh, Clock,
     BoxGeometry, PlaneGeometry, SphereGeometry, CylinderGeometry, TorusGeometry,
-    Texture, CanvasTexture, MeshStandardMaterial, MeshPhysicalMaterial,
+    Texture, CanvasTexture, MeshStandardMaterial, MeshPhysicalMaterial, MeshLambertMaterial, MeshPhongMaterial,
     PerspectiveCamera, OrthographicCamera,
     AmbientLight, HemisphereLight, DirectionalLight, PointLight, SpotLight, RectAreaLight,
     WebGLRenderer, OrbitControls, GLTFLoader,

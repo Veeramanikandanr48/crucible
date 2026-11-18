@@ -2,7 +2,7 @@ import { computeIrradianceCoefficients, evaluateIrradiance } from './environment
 import { createTracer } from './ray-query.js';
 import { isLiveGeometry } from './live-geometry.js';
 import {
-  MAX_BAKE_PARTS, MAX_GPU_BAKE_PARTS, averageMapColor, buildWorld, createDirectIrradiance, createGatherer, emittedRadiance, hitNormal, normalizeLights, sceneScale, validatePart, withReach,
+  averageMapColor, buildWorld, createDirectIrradiance, createGatherer, emittedRadiance, hitNormal, normalizeLights, sceneScale, validatePart, withReach,
 } from './light-bake.js';
 
 // The half of reflection probes that needs no GPU and no renderer: validating a probe list, placing the automatic probe
@@ -10,6 +10,9 @@ import {
 // into maps and gives parts their probe.
 
 export const MAXIMUM_PROBES = 4;
+// Probes and the irradiance grid trace on the CPU, and their work grows with the node count, samples and the time limit rather
+// than with the part count, so they take as many parts as the GPU lightmap bake does (#1218).
+export const MAX_PROBE_GRID_PARTS = 1024;
 export const PROBE_MAP_WIDTH = 64;
 // An automatic probe is only worth placing in a room: below this share of rays hitting a part the scene is open air.
 export const ENCLOSED_HIT_FRACTION = 0.9;
@@ -46,7 +49,7 @@ export function probeAlbedo(material) {
 export function traceProbeMaps(parts, lighting, positions, { width = 64, samples = 32, bounces = 2, rotation = 0, missRadiance = null, skyIrradiance = null, maxSeconds = 60 } = {}) {
   const height = width / 2;
   if (!Number.isInteger(width) || width < 8 || width % 2 !== 0 || width * height > MAX_PROBE_PIXELS) throw new RangeError(`Probe width must be an even integer from 8 whose map has at most ${MAX_PROBE_PIXELS} pixels.`);
-  if (!Array.isArray(parts) || parts.length === 0 || parts.length > MAX_BAKE_PARTS) throw new RangeError(`Probes take from 1 to ${MAX_BAKE_PARTS} parts: they trace on the CPU, and only lightmaps trace on the GPU (up to ${MAX_GPU_BAKE_PARTS} parts). Use fewer parts or drop bake.probes.`);
+  if (!Array.isArray(parts) || parts.length === 0 || parts.length > MAX_PROBE_GRID_PARTS) throw new RangeError(`Probes take from 1 to ${MAX_PROBE_GRID_PARTS} parts: they trace on the CPU. Use fewer parts or drop bake.probes.`);
   parts.forEach(validatePart);
   const lights = normalizeLights(lighting);
   const world = buildWorld(parts);
@@ -291,9 +294,9 @@ export function traceObjectProbes(parts, lighting, options = {}) {
     if (isReflectivePart(part.material)) reflective.push(index);
   });
   // Many small metal parts (lamp posts, spires) read as shapes and not as mirrors, and each probe costs a trace and a draw batch.
-  const tooManyOthers = parts.length - 1 > MAX_BAKE_PARTS;
+  const tooManyOthers = parts.length - 1 > MAX_PROBE_GRID_PARTS;
   const wanted = reflective.length > MAXIMUM_OBJECT_PROBES || tooManyOthers ? [] : reflective;
-  const skipped = wanted.length > 0 ? null : reflective.length > MAXIMUM_OBJECT_PROBES ? `more than ${MAXIMUM_OBJECT_PROBES} reflective parts` : tooManyOthers ? `more than ${MAX_BAKE_PARTS} other parts` : 'no reflective part';
+  const skipped = wanted.length > 0 ? null : reflective.length > MAXIMUM_OBJECT_PROBES ? `more than ${MAXIMUM_OBJECT_PROBES} reflective parts` : tooManyOthers ? `more than ${MAX_PROBE_GRID_PARTS} other parts` : 'no reflective part';
   if (wanted.length === 0 || parts.length < 2) {
     return { traced: [], automatic: true, requested: reflective.length, skipped, seconds: 0 };
   }

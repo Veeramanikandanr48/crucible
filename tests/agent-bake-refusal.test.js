@@ -2,25 +2,22 @@ import './support/load-agent-scene-modules.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createAgentScene } from '../src/agent-scene.js';
-import { MAX_BAKE_PARTS, MAX_GPU_BAKE_PARTS } from '../src/light-bake.js';
 import { traceIrradianceGrid } from '../src/irradiance-grid.js';
-import { traceProbeMaps } from '../src/probe-trace.js';
+import { MAX_PROBE_GRID_PARTS, traceProbeMaps } from '../src/probe-trace.js';
 import { growToOversizedOperations, shrinkFromOversizedOperations, largeRoom, oversizedRoom } from './support/agent-bake-rooms.mjs';
 
 const FITTING_BAKE = { samples: 8, bounces: 1, texelsPerUnit: 2 };
 const OVER_THE_PATH_WORK_LIMIT = { samples: 32, bounces: 2, texelsPerUnit: 3 };
 
 function tooManyParts() {
-  return Array.from({ length: MAX_BAKE_PARTS + 1 }, () => ({}));
+  return Array.from({ length: MAX_PROBE_GRID_PARTS + 1 }, () => ({}));
 }
 
-test('the irradiance grid and the probes say they trace on the CPU, so their part cap stays at the CPU cap', () => {
-  assert.ok(MAX_GPU_BAKE_PARTS > MAX_BAKE_PARTS);
+test('the irradiance grid and the probes say they trace on the CPU and name their own part cap', () => {
   for (const trace of [() => traceIrradianceGrid(tooManyParts(), {}), () => traceProbeMaps(tooManyParts(), {}, [[0, 0, 0]])]) {
     assert.throws(trace, error => error instanceof RangeError
-      && error.message.includes(`1 to ${MAX_BAKE_PARTS} parts`)
-      && /on the CPU/.test(error.message)
-      && error.message.includes(String(MAX_GPU_BAKE_PARTS)));
+      && error.message.includes(`1 to ${MAX_PROBE_GRID_PARTS} parts`)
+      && /on the CPU/.test(error.message));
   }
 });
 

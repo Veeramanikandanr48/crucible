@@ -90,7 +90,7 @@ function replaceColourShaders(replaceVertex) {
   };
 }
 
-window.measureScene = async function measureScene({ description, glbUrl, hdriUrl, frames = 200, capture = false, alternate = false, segmented = true, width = 1280, height = 720, rendererOverrides = {}, experiment = null, cameraDistanceScale = 1, lodRatios = [0.25, 0.0625] }) {
+window.measureScene = async function measureScene({ description, glbUrl, hdriUrl, frames = 200, capture = false, alternate = false, segmented = true, width = 1280, height = 720, rendererOverrides = {}, denseLods = false, experiment = null }) {
   const canvas = document.querySelector('#viewport');
   const experiments = new Set(String(experiment ?? '').split(','));
   if (experiments.has('no-invariant')) {
@@ -113,15 +113,6 @@ window.measureScene = async function measureScene({ description, glbUrl, hdriUrl
       return originalSource.call(this, shader, source);
     };
   }
-  const quarter = [...experiments].find(name => name.startsWith('index-fraction-'));
-  if (quarter) {
-    // Experiment only: draws the first part of every index range, to price a mesh with fewer triangles (the picture is wrong).
-    const fraction = Number(quarter.slice('index-fraction-'.length));
-    const original = WebGL2RenderingContext.prototype.drawElementsInstanced;
-    WebGL2RenderingContext.prototype.drawElementsInstanced = function drawElementsInstanced(mode, count, type, offset, instances) {
-      return original.call(this, mode, Math.max(3, Math.floor(count * fraction / 3) * 3), type, offset, instances);
-    };
-  }
   if (experiment === 'trivial-fragment') replaceColourShaders(false);
   if (experiment === 'trivial-both') replaceColourShaders(true);
   canvas.style.width = `${width}px`;
@@ -132,17 +123,9 @@ window.measureScene = async function measureScene({ description, glbUrl, hdriUrl
     loadHdri(hdriUrl, description.hdriOptions ?? {}),
   ]);
   const asset = await loadGltf(model, { baseUrl: new URL('.', new URL(glbUrl, location.href)).href, sharedTextures: createSharedTextures(), ...(description.gltfOptions ?? {}) });
-  let lodReport = null;
-  let parts = asset.parts;
-  if (experiments.has('lods')) {
-    // The shipped helper: levels for every dense, eligible part (canvas pixels as the renderer counts them).
-    const started = performance.now();
-    parts = addLodsToDenseParts(asset.parts, { pixels: width * height * (description.renderer?.pixelRatio ?? 1.5) ** 2, ratios: lodRatios });
-    lodReport = { milliseconds: Math.round(performance.now() - started), partsWithLevels: parts.filter(part => part.lods).length, levelErrors: [...new Set(parts.filter(part => part.lods).map(part => part.lods))].map(levels => levels.map(level => [level.triangles, Number(level.error.toPrecision(3))])) };
-  }
   const rendererOptions = description.renderer ?? {};
   const shadowCascades = rendererOptions.shadowCascades ? createCascadedShadows(rendererOptions.shadowCascades) : undefined;
-  const renderer = new CrucibleRenderer(canvas, parts, {
+  const renderer = new CrucibleRenderer(canvas, denseLods ? addLodsToDenseParts(asset.parts, { pixels: width * height }) : asset.parts, {
     ground: false, hdr: true, samples: 4, ...rendererOptions, shadowCascades,
     environment: { ...(rendererOptions.environment ?? {}), map },
   });
@@ -150,7 +133,7 @@ window.measureScene = async function measureScene({ description, glbUrl, hdriUrl
   const timer = createSegmentTimer(context);
   // The renderer's own timer would open a query inside ours, and WebGL allows one at a time.
   renderer.gpuTimer = null;
-  const frame = { exposure: description.exposure ?? 1, ...(description.frame ?? {}), eye: description.eye.map((value, axis) => description.target[axis] + (value - description.target[axis]) * cameraDistanceScale), target: description.target };
+  const frame = { exposure: description.exposure ?? 1, ...(description.frame ?? {}), eye: description.eye, target: description.target };
   if (experiment === 'discard') {
     // Vertex work only: the rasterizer throws every triangle away, so no pixel is shaded.
     const originalDraw = renderer.drawAlphaBatch.bind(renderer);
@@ -243,7 +226,6 @@ window.measureScene = async function measureScene({ description, glbUrl, hdriUrl
       segmentMedianMs: Object.fromEntries(Object.entries(alternatingSegments[mode]).map(([name, values]) => [name, Number(median(values).toFixed(3))])),
     }])) : undefined,
     pairedOnOverOffMedian: alternate ? Number(median(alternating.on.slice(0, alternating.off.length).map((value, index) => value / alternating.off[index])).toFixed(3)) : undefined,
-    lodReport: lodReport && { ...lodReport, perPart: undefined, selectedTriangles: renderer.batches.map(batch => batch.selection ? batch.selection.counts.slice() : null) },
     capturedFrame,
     centerPixel: Array.from(ONE_PIXEL),
     glError: context.getError(),

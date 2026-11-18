@@ -62,6 +62,20 @@ optional `Ready` expression the driver waits for, and `Drive`.
 - Source: `site/marketplace.html`, `src/marketplace.js`
 - Drive: `node scripts/drive.mjs shot marketplace`
 
+### `recipes`
+- Name: Recipes
+- Surface: Site
+- Reach: `/recipes.html`
+- Source: `site/recipes.html`, `site/recipe-*.html`, `public/recipes/`, `scripts/recipe-catalog.mjs`, `scripts/make-recipe-pages.mjs`, `src/recipes.js`
+- Drive: `node scripts/drive.mjs shot recipes`
+
+### `recipe-dolly-zoom`
+- Name: Recipe page, dolly zoom
+- Surface: Site
+- Reach: `/recipe-dolly-zoom.html`
+- Source: `site/recipe-dolly-zoom.html`, `public/recipes/dolly-zoom.json`
+- Drive: `node scripts/drive.mjs shot recipe-dolly-zoom`
+
 ### `object`
 - Name: Object studio
 - Surface: Site

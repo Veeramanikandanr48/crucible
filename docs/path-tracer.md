@@ -246,6 +246,7 @@ Files written: `<prefix>.png` (ACES tone map and gamma, the Crucible view transf
 The report holds everything `traceFrameNative` reports (adapter, kernel, samples, `tracedSeconds`, denoiser, `triangles`, `instances`, `ignored`) plus:
 
 - `loadSeconds` (Chrome loads the GLB and textures), `packSeconds` (the native tables), `setupSeconds` (both) and `samplingSeconds` (the trace). The tracer's own set-up time is `tracerSetupSeconds`.
+- Kernel compile, apart from trace time: Cook compiles one kernel per scene variant (a scene with no emitter is a different variant from a lit one), so the first trace of a variant in a process spends seconds in `compileSeconds` while `gpuTraceSeconds` stays the trace itself (`tracedSeconds` is the whole call, compile included). A compile over one second adds `kernelCompileNote`. On an RTX 3060 a new variant compiled in 5 to 26 s, against 0.02 s to trace it.
 - `triangleCount` (unique triangles) and `instanceCount` (`null` when the scene is flattened).
 - `lightCount`: the sun, point, spot and area lights packed for the kernel (emissive meshes are not counted), or `null` when the packer reports none.
 - `peakGpuMemoryMiB`: the highest `memory.used` that `nvidia-smi` showed, sampled every 250 ms during the trace. It is the whole card, so other programs count; it is `null` with `peakGpuMemoryNote` when `nvidia-smi` is missing.

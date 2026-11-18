@@ -1089,8 +1089,9 @@ The bridge is not exact. Cycles on the exported JSON has a mean radiance of 0.17
 | the same JSON, 3 bounces | 0.4065 / 0.3795 / 0.3391 |
 | the same JSON, 2 bounces | 0.3416 / 0.3190 / 0.2850 (0.91 / 0.96 / 0.92 of the original) |
 | the same JSON, 1 bounce | 0.2555 / 0.2386 / 0.2132 |
+| original `.blend`, every light's own bounce limit cleared (`--variant sun-only-unlimited-bounces`) | 0.6371 / 0.5605 / 0.5272 (the export at 8 bounces is 0.91 / 0.97 / 0.92 of it) |
 
-The gap is now the other way round: the export is 1.6 times brighter, not 10 times dimmer, so the sun fix is in and the sun-only gate is not met. The sun in the file has a per-light limit of 2 bounces (`cyclesSettings.max_bounces`), which the JSON format cannot carry, so the original's sun light stops at two bounces and the export's runs to eight. Capping the whole export at 2 bounces lands within 4 to 9 percent of the original `[inferred: it caps camera paths and every other light as well, which are off here, so only the sun matters; a run that clears the sun's limit in the original would settle it]`; the remainder is not explained. Cook was not measured: its native addon is not built on this machine. This does not affect the Cook against Cycles comparison above, which reads one file on both sides; it means the scene Cook was tested on is a faithful reading of the Classroom only in its camera, the 886 instances it exports, the sun and the world.
+The gap is now the other way round: the export is 1.6 times brighter, not 10 times dimmer, so the sun fix is in and the sun-only gate against the original as it stands is not met. The cause is shown, not only inferred: the original has per-light bounce limits (`cyclesSettings.max_bounces`: sun 2, corridor ceiling light 2, blackboard light 1, one point light 1) that the JSON format cannot carry, so the original's sun stops at two bounces and the export's runs to eight. Clearing those limits in the original (`classroom_bridge.py reference --variant sun-only-unlimited-bounces`, same 960x540, 256 spp, seed 1, 8 bounces) raises its sun-only mean from 0.3762 / 0.3310 / 0.3113 to 0.6371 / 0.5605 / 0.5272, and the export is then 0.91 / 0.97 / 0.92 of it, 3 to 9 percent dimmer. So the 1.6 times is the bounce limit, and a bridge that cannot carry the limit differs from the file by that limit; the 3 to 9 percent left, a little more in red and blue than in green, is not explained. Capping the whole export at 2 bounces lands within 4 to 9 percent of the original only because it applies the limit to every path. Cook was not measured: its native addon is not built on this machine. This does not affect the Cook against Cycles comparison above, which reads one file on both sides; it means the scene Cook was tested on is a faithful reading of the Classroom only in its camera, the 886 instances it exports, the sun and the world.
 
 ### Commands
 
@@ -1142,6 +1143,26 @@ uv run --no-project --with numpy --with pillow python bench/cycles-parity/make-d
 ```
 
 Not covered: the legacy kernel, the WebGPU and WebGL tracers, the raster renderer and glTF `KHR_materials_diffuse_transmission` import ignore the field; a base colour map or vertex colours with a transmitting sheet (Cook tints the far-side lobe by them; `render-cycles.py` refuses that case); a material that also has a specular lobe, coat or sheen, as above; metal, glass and subsurface (refused by the reference script).
+
+## Dispersion (#1714)
+
+A glass material with `dispersion` above 0 (`20 / Abbe number`, Blender 5.3's Principled BSDF `Dispersion`) is traced spectrally by the `cycles` kernel: one hero wavelength per path, refracted by a Cauchy index. The parity scenes live with the kernel in the Cook repository, in `tools/dispersion-scenes.mjs`, which both renderers read: Cook packs them, and `tools/dispersion-parity-cycles.py` builds the same meshes, materials and camera in Blender 5.3 Cycles from the JSON `tools/dispersion-parity.mjs` writes.
+
+| Scene | What it shows | Status |
+| :--- | :--- | :--- |
+| `prism-view` | a prism in front of a row of thin bright slits on black: each slit seen through the glass is a spectrum | measured |
+| `gem` | a round brilliant gem on black under four small lights | measured |
+| `prism-floor` | a prism lying under a small sun over a grey floor: the rainbow on the floor | not resolved: it is a caustic, which Cook does not trace smoothly yet (#1715) |
+
+`[measured]` on an RTX 3060 at 256 samples: the prism and gem views take Cook 3.1 to 4.5 s against Cycles 1.0 to 1.8 s, and with the signed spectral weights (codepawl/cook#53) the prism view's fringe saturation is 0.94 times Cycles' and its mean colour is within 0.2%. The numbers and the 1080p times (8.6 s at 64 samples, 34.1 s at 256, 138 s at 1024) are in [path-tracer.md](path-tracer.md#dispersion-issue-1714), and the pictures are in the pull request that landed the field (#1764).
+
+Commands, in a Cook checkout on a machine with Blender 5.3, Node, `uv`, a GPU and the built addon:
+
+```sh
+node tools/dispersion-parity.mjs gem artifacts/gem --samples 256
+blender -b --factory-startup --python tools/dispersion-parity-cycles.py -- artifacts/gem.scene.json artifacts/gem --samples 256
+uv run --no-project --with numpy python tools/dispersion-parity-compare.py artifacts/gem
+```
 
 ## Reproducible Commands
 

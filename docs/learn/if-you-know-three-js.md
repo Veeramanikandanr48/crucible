@@ -35,6 +35,8 @@ If you would rather write three.js-shaped code, the optional addon `packages/thr
 | three.js | Crucible |
 | --- | --- |
 | `new THREE.MeshStandardMaterial({ color, metalness, roughness })` | `material: { color, metallic, roughness }`. `color` is three linear numbers from 0 to 1, not a hex number. |
+| `new THREE.MeshLambertMaterial({ color })` | `material: { color, metallic: 0, roughness: 1 }`. |
+| `new THREE.MeshPhongMaterial({ color, shininess })` | `material: { color, metallic: 0, roughness }`. The addon turns `shininess` into `roughness` (the fourth root of 2 divided by shininess plus 2, so the default shininess 30 gives 0.5) and ignores `specular`. |
 | `emissive` and `emissiveIntensity` | `material.emission` and `material.emissiveColor`. |
 | `map`, `normalMap` | `material.map` and `material.normalMap`, each `{ image, colorSpace }`. |
 | `transparent` and `opacity` | `material.alphaMode` set to `'blend'`, and `material.opacity`. |
@@ -118,7 +120,7 @@ import { createThreeCompat } from '@codepawlhq/crucible-three-compat';
 const THREE = createThreeCompat({ ...core, loadGltf });
 ```
 
-It accepts `Scene`, `Group`, `Mesh`, the box, plane, sphere, cylinder and torus geometries, `MeshStandardMaterial`, `MeshPhysicalMaterial`, both cameras, the light classes, `GLTFLoader`, `OrbitControls` and `WebGLRenderer` with `setAnimationLoop`. For any other three.js name it throws an error that names the Crucible call to use. For example, `THREE.MeshBasicMaterial` tells you to use `MeshStandardMaterial` with `emissive`, which is `material.emission` in Crucible.
+It accepts `Scene`, `Group`, `Mesh`, the box, plane, sphere, cylinder and torus geometries, `MeshStandardMaterial`, `MeshPhysicalMaterial`, `MeshLambertMaterial`, `MeshPhongMaterial`, both cameras, the light classes, `GLTFLoader`, `OrbitControls` and `WebGLRenderer` with `setAnimationLoop`. For any other three.js name it throws an error that names the Crucible call to use. For example, `THREE.MeshBasicMaterial` tells you to use `MeshStandardMaterial` with `emissive`, which is `material.emission` in Crucible.
 
 To move a scene you already have, the [three.js bridge](../three-bridge.md) imports a three.js object tree as Crucible parts and builds three.js meshes from parts.
 

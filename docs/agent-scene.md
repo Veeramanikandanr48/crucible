@@ -83,7 +83,7 @@ The generators also enforce their existing numeric and modeling constraints.
 
 | Type | Fields | Defaults |
 | --- | --- | --- |
-| `box` | `bevel`, `subdivisions` | `0.08`, `6` |
+| `box` | `bevel`, `subdivisions` | `0.08`, `6` (walls, floors and ceilings that touch take `bevel: 0`: the rounded edges of two touching boxes leave a groove at the corner that lets sky light into a closed room, #2000) |
 | `cylinder` | `segments`, `bevel`, `bevelSegments` | `80`, `0.025`, `6` |
 | `sphere` | `segments`, `rings` | `64`, `40` |
 | `torus` | `tubeRadius`, `segments`, `sides`, `arc`, `start` | `0.08`, `96`, `24`, `2π`, `0` |

@@ -34,3 +34,16 @@ export function addLodsToDenseParts(parts, { pixels, minimumTrianglesPerPixel = 
     return { ...part, lods: levelsByGeometry.get(part.geometry) };
   });
 }
+
+/**
+ * The parts a scene file's renderer options ask for: `denseLods: true` runs addLodsToDenseParts at the canvas's size and
+ * pixel ratio (the default ratio of CrucibleRenderer is 1.5); absent or `false` returns `parts` itself, so a scene file
+ * without the option draws exactly as before.
+ */
+export function partsForRendererOptions(parts, canvas, rendererOptions = {}) {
+  const { denseLods = false, pixelRatio = 1.5 } = rendererOptions;
+  if (typeof denseLods !== 'boolean') throw new TypeError('renderer.denseLods must be true or false.');
+  if (!denseLods) return parts;
+  const pixels = Math.max(1, canvas.clientWidth) * Math.max(1, canvas.clientHeight) * pixelRatio * pixelRatio;
+  return addLodsToDenseParts(parts, { pixels });
+}

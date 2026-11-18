@@ -902,7 +902,7 @@ export class CrucibleRenderer {
 
   // The second half of construction, which reads the link results. Reading a result waits for the driver, so a page that
   // builds a heavy renderer passes deferProgramLink and awaits programsReady() instead of freezing for the whole compile.
-  finishConstruction() {
+  finishConstruction({ deferFrameTargets = false } = {}) {
     if (this.disposed || !this.pendingConstruction) return;
     const { pending, parts, environment } = this.pendingConstruction;
     this.pendingConstruction = null;
@@ -945,13 +945,23 @@ export class CrucibleRenderer {
     this.initializeEnvironment(environment.map);
     this.createShadowMap();
     if (this.reversedDepthMode !== false && !benchmark) installReversedDepth(this, this.reversedDepthMode);
+    if (!deferFrameTargets) this.allocateInitialTargets();
+  }
+
+  // The size plan and the frame targets: the largest driver calls of construction, so a page that awaits programsReady() takes them in a task of their own.
+  allocateInitialTargets() {
+    if (this.disposed) return;
     this.resize();
     if (!this.benchmark && !this.multisampleFramebuffer) this.allocateFrameTargets(this.canvas.width, this.canvas.height);
   }
 
   /** Resolves once every program started by the constructor has linked, polling without blocking the main thread, then finishes construction. Needs deferProgramLink. After dispose() it resolves at once without finishing construction. */
   async programsReady() {
-    if (this.disposed || !this.pendingConstruction) return;
+    if (this.disposed) return;
+    if (!this.pendingConstruction) {
+      await this.initialTargetsPending;
+      return;
+    }
     const context = this.context;
     const parallelCompile = context.getExtension('KHR_parallel_shader_compile');
     const { pending } = this.pendingConstruction;
@@ -960,7 +970,11 @@ export class CrucibleRenderer {
     while (!this.disposed && parallelCompile && programs.some(program => !context.getProgramParameter(program, parallelCompile.COMPLETION_STATUS_KHR))) {
       await new Promise(resolve => setTimeout(resolve, 8));
     }
-    this.finishConstruction();
+    if (this.pendingConstruction) {
+      this.finishConstruction({ deferFrameTargets: true });
+      this.initialTargetsPending = new Promise(resolve => setTimeout(resolve, 0)).then(() => this.allocateInitialTargets());
+    }
+    await this.initialTargetsPending;
   }
 
   /**
@@ -974,6 +988,12 @@ export class CrucibleRenderer {
   async prepareFrame(frame, { timeoutMilliseconds = 6000 } = {}) {
     await this.programsReady();
     if (this.disposed) return false;
+    // The bloom targets take the driver tens of milliseconds under load: a frame that blooms allocates them in a task of its own, not inside the draw.
+    if (!this.benchmark && !this.bloomTargets.length && resolveEffects(frame.effects).bloom.strength > 0) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (this.disposed) return false;
+      this.ensureBloomTargets();
+    }
     const context = this.context;
     const deadline = performance.now() + timeoutMilliseconds;
     setPreparing(context, true);

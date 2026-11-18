@@ -162,11 +162,11 @@ test('a scene with no reflective part, or too many, traces nothing', () => {
   assert.match(trace.skipped, /more than 8/);
   const largeScene = [
     placed('mirror', ball, [0, 0.5, 0], [0.5, 0.5, 0.5], { metallic: 1, roughness: 0.3 }),
-    ...Array.from({ length: 257 }, (item, index) => placed(`box-${index}`, cube, [index, 0.5, 0], [1, 1, 1])),
+    ...Array.from({ length: 1025 }, (item, index) => placed(`box-${index}`, cube, [index, 0.5, 0], [1, 1, 1])),
   ];
   const largeTrace = traceObjectProbes(largeScene, openAir);
   assert.equal(largeTrace.traced.length, 0);
-  assert.match(largeTrace.skipped, /more than 256 other parts/);
+  assert.match(largeTrace.skipped, /more than 1024 other parts/);
 });
 
 test('rough metal and plain surfaces are not reflective', () => {

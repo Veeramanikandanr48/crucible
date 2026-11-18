@@ -22,7 +22,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
-      - run: npm audit --audit-level=high
+      # Runtime dependencies fail on high. Dev-only ones fail on critical, so an unpatched high advisory in build tooling
+      # (picomatch through vite, #2009) does not block every pull request. Revisit when a patched release exists.
+      - name: Audit runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
+      - name: Audit all dependencies
+        run: npm audit --audit-level=critical
 
   # The cheap gates of `npm run preflight` that need no tests: protected files and the change note. The pre-push hook runs them
   # too, but `git push --no-verify` skips the hook, so CI is where they cannot be skipped. A release run has no base to compare.

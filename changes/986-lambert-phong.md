@@ -1,0 +1,1 @@
+- The three.js addon accepts `MeshLambertMaterial` and `MeshPhongMaterial` and maps them to matte Crucible materials (#986)

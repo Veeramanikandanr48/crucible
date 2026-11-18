@@ -52,6 +52,7 @@ on:
       - 'scripts/make-spark-spec.mjs'
       - 'scripts/native-bake-page.js'
       - 'scripts/native-capacity.mjs'
+      - 'scripts/native-export-delta.js'
       - 'scripts/native-png.mjs'
       - 'scripts/native-post-look.mjs'
       - 'scripts/render-engine.mjs'
@@ -368,6 +369,7 @@ on:
       - 'tests/native-dispatch-determinism.test.js'
       - 'tests/native-dispersion.test.js'
       - 'tests/native-exit-code.test.js'
+      - 'tests/native-export-delta.test.js'
       - 'tests/native-filter.test.js'
       - 'tests/native-glass-albedo.test.js'
       - 'tests/native-grid-volumes.test.js'
@@ -427,8 +429,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      # Six tests failed on Intel AVX-512 runners and passed on AMD (#1760). Keep lavapipe's JIT on 256-bit vectors so every runner
-      # compiles the Cook kernel the same way, as the AVX-512 path miscompiled it before (cook#45).
+      # Tests failed on Intel and AMD runners with AVX2 and AVX-512 and passed on others (#1760). lavapipe's JIT gives a different
+      # result for the Cook kernel on a CPU with AVX2 (a magnified mip read off by 8 to 80, the albedo sum 0.9 percent low, the light
+      # tree mean 0.7044 against 0.6905), and the same kernel is right with LLVM's optimisation passes off and right when the JIT
+      # is held to AVX. Limit lavapipe to AVX so every runner compiles the kernel the same way (cook#42 found it first on the flat
+      # light pick). On Xeon 6975P-C and EPYC 9V45, GALLIUM_OVERRIDE_CPU_CAPS=avx passed all 74 tests of the seven files that
+      # failed in the default JIT, and GALLIUM_OVERRIDE_CPU_CAPS=avx2 failed the same two tests as the default. Drop this once
+      # Mesa's LLVM stops doing that.
+      GALLIUM_OVERRIDE_CPU_CAPS: avx
       LP_NATIVE_VECTOR_WIDTH: '256'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -482,7 +490,7 @@ jobs:
             echo '### Vulkan adapter'
             echo '```'
             grep -m1 'model name' /proc/cpuinfo || true
-            echo "avx512f: $(grep -o -m1 avx512f /proc/cpuinfo | head -1 | grep . || echo no), LP_NATIVE_VECTOR_WIDTH=$LP_NATIVE_VECTOR_WIDTH"
+            echo "avx2: $(grep -o -m1 avx2 /proc/cpuinfo | head -1 | grep . || echo no), avx512f: $(grep -o -m1 avx512f /proc/cpuinfo | head -1 | grep . || echo no), GALLIUM_OVERRIDE_CPU_CAPS=$GALLIUM_OVERRIDE_CPU_CAPS, LP_NATIVE_VECTOR_WIDTH=$LP_NATIVE_VECTOR_WIDTH"
             vulkaninfo --summary 2>&1 | grep -E 'deviceName|driverInfo|apiVersion|deviceType' || true
             echo
             vulkaninfo 2>&1 | grep -E 'VK_KHR_(ray_query|acceleration_structure)' | sort -u || echo 'no VK_KHR_ray_query or VK_KHR_acceleration_structure'
@@ -509,22 +517,9 @@ jobs:
           # and with the default concurrency the light-tree file crashed (SIGSEGV) and byte-for-byte tests differed, while each
           # passed alone and two runs of one render were byte-identical on lavapipe (#1717).
           set +e
-          # With the vector width pinned, two files still failed on AMD EPYC 9V74 and 9V45 and on Intel Xeon 6975P-C and 8573C (#1760):
-          # the mip level 0 read (difference 8.6 to 80, expected 0) and the light tree mean. With LLVM's optimisation passes off
-          # (GALLIVM_PERF=nopt) both passed on 5 of 5 runners across those CPUs, and with them on both failed on 4 of 5 (a different
-          # CPU on each run), so an optimisation pass in lavapipe's JIT changes the kernel's result. Switching the passes off for
-          # every file made the first native job run past its 10 minute cap, so only these files run that way. The albedo reference
-          # (#1911) joined them: its sum matches an RTX 3060 within 0.1 percent with the passes off and is 0.9 percent low with them on.
-          # Drop the split once Mesa's LLVM stops doing that.
-          jit_sensitive_tests="tests/native-texture-mips.test.js tests/native-light-tree-kernel.test.js tests/native-albedo-reference.test.js"
-          other_tests=$(git grep -l "support/cook.js" -- tests | grep -vxF -e tests/native-texture-mips.test.js -e tests/native-light-tree-kernel.test.js -e tests/native-albedo-reference.test.js)
           test_options="--test-concurrency=2 --import ./scripts/test-hang-guard.mjs --test-timeout=300000 --test-reporter=tap"
-          node --test $test_options --test-reporter-destination=addon-tests.tap $other_tests
+          node --test $test_options --test-reporter-destination=addon-tests.tap $(git grep -l "support/cook.js" -- tests)
           status=$?
-          GALLIVM_PERF=nopt node --test $test_options --test-reporter-destination=addon-tests-jit-sensitive.tap $jit_sensitive_tests
-          sensitive_status=$?
-          cat addon-tests-jit-sensitive.tap >> addon-tests.tap
-          if [ "$sensitive_status" -ne 0 ]; then status=$sensitive_status; fi
           echo "test_seconds=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"
           echo "node --test exit code $status"
       - name: Write ran and skipped counts to the job summary, fail on a real failure

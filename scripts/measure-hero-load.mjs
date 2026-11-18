@@ -4,6 +4,7 @@
 //        [--viewports desktop,phone] [--out directory]
 //        [--cpu 4]            CPU slowdown factor (emulated by the DevTools protocol, not a slow device)
 //        [--watch-seconds N]  keep each page open N seconds after the swap (the loop changes worlds) and report the main-thread tasks over 50 ms after first paint
+//        [--profile]          sample the JavaScript stack (500 microsecond interval) and name the functions that ran inside each long task
 //        [--origin <url>]     measure a deployed site instead of serving --dist (it then needs no folder)
 //   node scripts/measure-hero-load.mjs --dist <folder> --stills <directory>      stills before and after the swap, with PSNR
 //   node scripts/measure-hero-load.mjs --dist <folder> --video <file.mp4>        CDP screencast of the first 8 s on Fast 4G
@@ -40,7 +41,7 @@ const CONTENT_TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 
 const TEXT_TYPES = new Set(['.html', '.js', '.css', '.json', '.svg']);
 
 function parseArguments(argv) {
-  const options = { dist: null, label: 'build', runs: 3, conditions: ['fast4g', 'slow', 'none'], viewports: ['desktop', 'phone'], out: null, cpu: 1, remoteOrigin: null, stills: null, video: null, timeoutSeconds: 120, watchSeconds: 0 };
+  const options = { dist: null, label: 'build', runs: 3, conditions: ['fast4g', 'slow', 'none'], viewports: ['desktop', 'phone'], out: null, cpu: 1, remoteOrigin: null, stills: null, video: null, timeoutSeconds: 120, watchSeconds: 0, profile: false };
   for (let index = 0; index < argv.length; index++) {
     const flag = argv[index];
     const value = () => argv[++index];
@@ -55,6 +56,7 @@ function parseArguments(argv) {
     else if (flag === '--stills') options.stills = resolve(value());
     else if (flag === '--video') options.video = resolve(value());
     else if (flag === '--timeout') options.timeoutSeconds = Number(value());
+    else if (flag === '--profile') options.profile = true;
     else if (flag === '--watch-seconds') options.watchSeconds = Number(value());
     else throw new Error(`Unknown argument ${flag}.`);
   }
@@ -110,6 +112,18 @@ function installFrameTimer(marker) {
   new PerformanceObserver(list => {
     for (const entry of list.getEntries()) window.__longTasks.push([Math.round(entry.startTime), Math.round(entry.duration)]);
   }).observe({ type: 'longtask', buffered: true });
+  // Long animation frames name the scripts that ran inside a long frame, which says what the main thread was busy with.
+  window.__longFrames = [];
+  try {
+    new PerformanceObserver(list => {
+      for (const entry of list.getEntries()) {
+        const scripts = entry.scripts.map(script => [script.invoker, script.sourceFunctionName, script.sourceURL.split('/').pop(), script.sourceCharPosition, Math.round(script.duration)]);
+        window.__longFrames.push({ start: Math.round(entry.startTime), duration: Math.round(entry.duration), blocking: Math.round(entry.blockingDuration), scripts });
+      }
+    }).observe({ type: 'long-animation-frame', buffered: true });
+  } catch {
+    // Chrome older than 123 has no long animation frames; the phases below still attribute the tasks.
+  }
   window.__frameGaps = [];
   let previousFrameAt = performance.now();
   const watchFrameGaps = now => {
@@ -164,12 +178,39 @@ function bytesAt(state, milliseconds) {
   return bytes;
 }
 
+// Functions with the most self time inside each long task, from a CDP sampling profile. The profile clock is the browser's monotonic clock;
+// `pageOriginMicroseconds` is the page's performance.now() zero on that clock, which aligns the two.
+function topFunctionsInTasks(profile, pageOriginMicroseconds, tasks) {
+  const nodes = new Map(profile.nodes.map(node => [node.id, node]));
+  let clock = profile.startTime;
+  const samples = profile.samples.map((nodeId, index) => {
+    clock += profile.timeDeltas[index];
+    return { nodeId, at: (clock - pageOriginMicroseconds) / 1000, weight: (profile.timeDeltas[index + 1] ?? 0) / 1000 };
+  });
+  return tasks.map(task => {
+    const selfByFunction = new Map();
+    for (const sample of samples) {
+      if (sample.at < task.start || sample.at > task.start + task.duration) continue;
+      const { functionName, url, lineNumber } = nodes.get(sample.nodeId).callFrame;
+      const key = `${functionName || '(anonymous)'} ${url.split('/').pop()}:${lineNumber + 1}`;
+      selfByFunction.set(key, (selfByFunction.get(key) ?? 0) + sample.weight);
+    }
+    return { ...task, topFunctions: [...selfByFunction].sort((first, second) => second[1] - first[1]).slice(0, 4).map(([key, milliseconds]) => `${key} ${Math.round(milliseconds)}ms`) };
+  });
+}
+
 async function measureOnce(browser, options, viewportName, conditionName) {
   const condition = CONDITIONS[conditionName];
   const { context, page, session } = await openPage(browser, VIEWPORTS[viewportName], condition, options.cpu);
   const bytes = watchBytes(session, page);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
+  if (options.profile) {
+    await session.send('Performance.enable');
+    await session.send('Profiler.enable');
+    await session.send('Profiler.setSamplingInterval', { interval: 500 });
+    await session.send('Profiler.start');
+  }
   await page.goto(`${options.origin}/`, { waitUntil: 'commit' });
   const finished = async () => page.evaluate(() => {
     const events = window.__loop?.events ?? [];
@@ -178,7 +219,14 @@ async function measureOnce(browser, options, viewportName, conditionName) {
     const swapEnd = detailed?.at ?? Infinity;
     const swapGaps = (window.__frameGaps ?? []).filter(([at, gap]) => at + gap > swapEnd - (detailed?.ms ?? 0) - 100 && at < swapEnd + 100);
     const longTasksAfterFirstPaint = (window.__longTasks ?? []).filter(([start]) => window.__firstWorldDraw !== null && start >= window.__firstWorldDraw);
-    return { longTaskCount: longTasksAfterFirstPaint.length, longestTaskMs: longTasksAfterFirstPaint.reduce((longest, [, duration]) => Math.max(longest, duration), 0), longTasks: longTasksAfterFirstPaint, lcp: window.__largestContentfulPaint, layoutShift: window.__layoutShift, first: window.__firstWorldDraw, detailed: detailed?.at ?? null, swapMs: detailed?.ms ?? null, swapHeldMs: (window.__phases ?? []).filter(phase => phase[0] === "swap").reduce((total, phase) => total + phase[3] - phase[2], 0), swapLongestGapMs: swapGaps.length ? Math.max(...swapGaps.map(([, gap]) => gap)) : 0, failed: failed?.message ?? null, state: window.__loop?.detail?.() ?? null, mode: window.__heroMode };
+    const overlaps = (start, duration) => ([phaseStart, phaseEnd]) => phaseStart < start + duration && phaseEnd > start;
+    const attributed = longTasksAfterFirstPaint.map(([start, duration]) => ({
+      start,
+      duration,
+      phases: (window.__phases ?? []).filter(phase => overlaps(start, duration)([phase[2], phase[3]])).map(phase => phase.slice(0, 2).join(':')),
+      scripts: (window.__longFrames ?? []).filter(frame => overlaps(start, duration)([frame.start, frame.start + frame.duration])).flatMap(frame => frame.scripts).sort((first, second) => second[4] - first[4]).slice(0, 3),
+    }));
+    return { attributedLongTasks: attributed, longTaskCount: longTasksAfterFirstPaint.length, longestTaskMs: longTasksAfterFirstPaint.reduce((longest, [, duration]) => Math.max(longest, duration), 0), longTasks: longTasksAfterFirstPaint, lcp: window.__largestContentfulPaint, layoutShift: window.__layoutShift, first: window.__firstWorldDraw, detailed: detailed?.at ?? null, swapMs: detailed?.ms ?? null, swapHeldMs: (window.__phases ?? []).filter(phase => phase[0] === "swap").reduce((total, phase) => total + phase[3] - phase[2], 0), swapLongestGapMs: swapGaps.length ? Math.max(...swapGaps.map(([, gap]) => gap)) : 0, failed: failed?.message ?? null, state: window.__loop?.detail?.() ?? null, mode: window.__heroMode };
   });
   const deadline = Date.now() + options.timeoutSeconds * 1000;
   let status = await finished();
@@ -189,6 +237,13 @@ async function measureOnce(browser, options, viewportName, conditionName) {
   if (options.watchSeconds > 0) {
     await new Promise(resolveWait => setTimeout(resolveWait, options.watchSeconds * 1000));
     status = await finished();
+  }
+  if (options.profile) {
+    const pageNowMs = await page.evaluate(() => performance.now());
+    const { metrics } = await session.send('Performance.getMetrics');
+    const { profile } = await session.send('Profiler.stop');
+    const monotonicNowMicroseconds = metrics.find(metric => metric.name === 'Timestamp').value * 1e6;
+    status.attributedLongTasks = topFunctionsInTasks(profile, monotonicNowMicroseconds - pageNowMs * 1000, status.attributedLongTasks);
   }
   const poster = await page.evaluate(() => {
     const entry = performance.getEntriesByType('resource').find(resource => resource.name.includes('poster-b-port'));
@@ -210,6 +265,7 @@ async function measureOnce(browser, options, viewportName, conditionName) {
     longTaskCount: status.longTaskCount,
     longestTaskMs: status.longestTaskMs,
     longTasks: status.longTasks,
+    attributedLongTasks: status.attributedLongTasks,
     swapHeldMs: status.swapHeldMs,
     bytesBeforeFirstFrame: bytes.atFirstFrame,
     bytesAtDetail: detailMs === null ? null : bytesAt(bytes, detailMs),
@@ -249,6 +305,7 @@ async function runMatrix(browser, options) {
         longTasksOver50AfterFirstPaint: runs.map(run => run.longTaskCount),
         longestTaskMs: Math.max(...runs.map(run => run.longestTaskMs)),
         longTasks: runs.map(run => run.longTasks),
+        attributedLongTasks: runs.map(run => run.attributedLongTasks),
         detailRangeMs: [Math.min(...runs.map(run => run.detailMs ?? Infinity)), Math.max(...runs.map(run => run.detailMs ?? 0))],
         bytesBeforeFirstFrame: median(runs.map(run => run.bytesBeforeFirstFrame)),
         bytesAtDetail: median(runs.map(run => run.bytesAtDetail)),

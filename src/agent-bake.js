@@ -154,7 +154,7 @@ export function bakeSkippedDiagnostic(reason) {
   return {
     kind: 'bake-skipped', severity: 'warning', target: 'bake',
     message: `The edit is applied but the light bake did not run, so the old bake was dropped and the scene is drawn without baked light. ${reason}`,
-    fix: 'Fit the bake to the scene: fewer parts, a lower bake.samples or bake.texelsPerUnit (scene_apply set-bake), or remove bake.irradianceGrid and bake.probes when the part limit is theirs (they trace on the CPU, 256 parts). The bake runs again on the next edit.',
+    fix: 'Fit the bake to the scene: fewer parts, a lower bake.samples or bake.texelsPerUnit (scene_apply set-bake), or remove bake.irradianceGrid and bake.probes when the part limit is theirs (they trace on the CPU, 1,024 parts). The bake runs again on the next edit.',
   };
 }
 

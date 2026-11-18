@@ -1,7 +1,13 @@
 import { exportNativeSceneTables, nativeTexelTracerIfAvailable, splitExportForChunks } from './native-bake-page.js';
+import { DELTA_MAXIMUM_BASELINE_BYTES, deltaPieces, planExportDelta } from './native-export-delta.js';
 
 // The byte tables of the last chunked native export, held until the job runner has read them (releaseNativeExport).
 let heldNativeExportTables = null;
+// The ranges of those tables the job runner still lacks (a delta against its baseline), or null when it reads them whole.
+let heldNativeExportRanges = null;
+// The tables of the last export a job asked to keep, so the next frame can send only what changed since (#1861).
+let nativeExportBaseline = null;
+let nativeExportCount = 0;
 import { buildWithKernels, kernelWorkersAvailable, kernelStats, resetKernelStats } from '../src/kernel-offload.js';
 import { createAgentScene, applyCameraFields, loadAllAgentSceneModules, allAgentSceneModulesLoaded, needsMeshBooleans, loadMeshBooleans, meshBooleansLoaded, setManifoldModuleLoader, needsPhysics, needsBuoyancy, loadPhysicsEngine, physicsEngineLoaded, setPhysicsModuleLoader } from '../src/agent-scene.js';
 import { CrucibleRenderer } from '../src/renderer.js';
@@ -1097,7 +1103,7 @@ window.__agentPreview = {
   // The scene at one instant packed into the tables the native ray query tracer reads (renderer.backend "native"). The job
   // runner traces them outside the page; each table comes back as base64 bytes. With `chunked` the answer holds a `chunks`
   // manifest instead of the tables, which stay here for nativeExportBlob, so no one message bounds the scene.
-  async exportNativeScene({ sessionId, animation, motionTime, options, chunked = false, maximumTriangles }) {
+  async exportNativeScene({ sessionId, animation, motionTime, options, chunked = false, maximumTriangles, deltaBase, keepBaseline = false }) {
     const record = requireSession(sessionId);
     if (record.asset && (animation !== undefined || motionTime !== undefined)) {
       record.scene.sampleFrame({ ...(animation === undefined ? {} : { animation }),
@@ -1114,6 +1120,9 @@ window.__agentPreview = {
     // The "cycles" kernel gets FORMAT-v2 tables with whole materials, and copies of one geometry stay instances; the legacy kernel reads flattened v1 triangles.
     const camera = createCamera(record.scene.camera, options.width, options.height);
     heldNativeExportTables = null;
+    heldNativeExportRanges = null;
+    const baseline = nativeExportBaseline;
+    nativeExportBaseline = null;
     const packed = exportNativeSceneTables({ parts: record.scene.parts, environment, camera, options: packOptions, kernel, instancing: instancing === true,
       transport: chunked ? 'chunks' : 'message', maximumTriangles,
       modules: { buildTraceScene, resolveTexture, buildNativeInput, buildJobNativeInput, buildFlattenedJobNativeInput, pack, gridVolumeInput } });
@@ -1122,6 +1131,17 @@ window.__agentPreview = {
       const split = splitExportForChunks(packed);
       heldNativeExportTables = split.tables;
       exported = split.manifest;
+      // With the baseline the job runner holds, send the ranges that changed since it. Any other baseline (a reloaded page, a
+      // job that asked for none) sends every table whole, so a frame never depends on a copy that is not there.
+      if (deltaBase !== undefined && baseline && baseline.id === deltaBase) {
+        heldNativeExportRanges = planExportDelta(baseline.tables, split.tables);
+        exported = { ...exported, chunks: { ...exported.chunks, delta: { base: deltaBase, ranges: heldNativeExportRanges } } };
+      }
+      const keptBytes = Object.values(split.tables).reduce((total, bytes) => total + bytes.byteLength, 0);
+      if (keepBaseline && keptBytes <= DELTA_MAXIMUM_BASELINE_BYTES) {
+        nativeExportBaseline = { id: `export-${++nativeExportCount}`, tables: split.tables };
+        exported = { ...exported, exportId: nativeExportBaseline.id };
+      }
     }
     return { ...exported, ignored: describeIgnoredFeatures(record.scene.parts, environment, 'cpu', { kernelMaterials: exported.wholeMaterials, clipStart: camera.clipStart }) };
   },
@@ -1131,11 +1151,12 @@ window.__agentPreview = {
     if (!heldNativeExportTables) {
       throw new Error('nativeExportBlob: no chunked native export is held. Call exportNativeScene with chunked: true first.');
     }
-    return new Blob(Object.values(heldNativeExportTables));
+    return new Blob(heldNativeExportRanges ? deltaPieces(heldNativeExportTables, heldNativeExportRanges) : Object.values(heldNativeExportTables));
   },
   // Lets go of the held export once the job runner has every table.
   releaseNativeExport() {
     heldNativeExportTables = null;
+    heldNativeExportRanges = null;
   },
   // The PNG of linear pixels (three floats each, base64) that a denoiser outside the page returned, or of the wavelet
   // filter over the kept features when none came back.

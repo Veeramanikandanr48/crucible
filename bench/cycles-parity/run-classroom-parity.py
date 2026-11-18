@@ -419,7 +419,7 @@ def stage_point_probe(blender, scene_json, options, summary):
 
 
 DIAGNOSTIC_SAMPLES = 256
-BLEND_VARIANTS = ("sun-only", "points-only", "areas-only", "spots-only")
+BLEND_VARIANTS = ("sun-only", "points-only", "areas-only", "spots-only", "sun-only-unlimited-bounces")
 LIGHT_SUBSETS = {
     "sun-only": {"pointLights": [], "areaLights": [], "spotLights": []},
     "points-only": {"keyColor": [0, 0, 0], "areaLights": [], "spotLights": []},

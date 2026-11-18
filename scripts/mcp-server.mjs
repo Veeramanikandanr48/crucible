@@ -590,6 +590,9 @@ const driver = z.strictObject({
   target: z.union([
     z.strictObject({ kind: z.literal('node'), id: identifier, property: z.enum(['translation', 'rotation', 'scale']), component: axisName }),
     z.strictObject({ kind: z.literal('material'), id: identifier, property: z.enum(['color', 'emissiveColor', 'emission', 'metallic', 'roughness']), component: axisName.optional() }),
+    z.strictObject({ kind: z.literal('light'), id: identifier.describe('point:N, spot:N or area:N'), property: z.enum(['intensity', 'color']), component: axisName.optional() }),
+    z.strictObject({ kind: z.literal('morph'), id: identifier, property: z.literal('weight') }),
+    z.strictObject({ kind: z.literal('camera'), property: z.enum(['eye', 'target', 'fov', 'roll']), component: axisName.optional() }),
   ]),
   expression,
 });
@@ -660,7 +663,7 @@ const motion = z.strictObject({
     motionTrack('camera', 'roll', finite, finite),
     motionTrack('geometry', 'oceanTime', finite.min(-1e6).max(1e6), finite),
     lookTrack,
-  ], { error: motionTrackUnionMessage })).max(128),
+  ], { error: motionTrackUnionMessage })).max(128).optional().describe('Keyframe tracks; leave out for a motion made only of drivers, ik or constraints.'),
 }).describe('One absolute-time procedural clip. Local node transforms propagate through parents. Cubic tangents are derivatives per second. Backend checks references, duplicate tracks, 2048 total keys and every sampled pose.');
 const physicsBody = z.strictObject({
   node: identifier.describe('Root node with a geometry; the collider is fitted to it and the body drives its pose.'),
