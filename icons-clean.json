@@ -1,0 +1,200 @@
+{
+  "version": 1,
+  "size": 256,
+  "style": "clean",
+  "scale": "fit",
+  "padding": 0.08,
+  "viewpoint": {
+    "azimuth": 35,
+    "elevation": 25
+  },
+  "atlas": {
+    "file": "atlas.png",
+    "width": 768,
+    "height": 768,
+    "columns": 3,
+    "rows": 3
+  },
+  "icons": [
+    {
+      "name": "AntiqueCamera",
+      "file": "icon-0.png",
+      "source": "AntiqueCamera.glb",
+      "asset": "ae89695479ad997f09ebea8060a5ad01312ad8fe7ffb92f73b4e895109feecd2",
+      "angle": 35,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 256,
+        "height": 256
+      },
+      "bounds": {
+        "x": 86,
+        "y": 21,
+        "width": 84,
+        "height": 215
+      },
+      "viewHeight": 9.080744
+    },
+    {
+      "name": "Avocado",
+      "file": "icon-1.png",
+      "source": "Avocado.glb",
+      "asset": "ccc9c3ce56423720b09399c2351537207cd5a65f859f9e6e2f30922762f3abd4",
+      "angle": 35,
+      "rect": {
+        "x": 256,
+        "y": 0,
+        "width": 256,
+        "height": 256
+      },
+      "bounds": {
+        "x": 55,
+        "y": 20,
+        "width": 146,
+        "height": 216
+      },
+      "viewHeight": 0.06839329
+    },
+    {
+      "name": "BoomBox",
+      "file": "icon-2.png",
+      "source": "BoomBox.glb",
+      "asset": "f8b918445ebdd006768232205a62f5182d2208ca57f84c6ccc084943c0bc8f15",
+      "angle": 35,
+      "rect": {
+        "x": 512,
+        "y": 0,
+        "width": 256,
+        "height": 256
+      },
+      "bounds": {
+        "x": 21,
+        "y": 29,
+        "width": 215,
+        "height": 198
+      },
+      "viewHeight": 0.0274965
+    },
+    {
+      "name": "Corset",
+      "file": "icon-3.png",
+      "source": "Corset.glb",
+      "asset": "9582c0dc0dee813be77f60e6ddf7213987c7e11497bf3cc66fd7b18957ae0d26",
+      "angle": 35,
+      "rect": {
+        "x": 0,
+        "y": 256,
+        "width": 256,
+        "height": 256
+      },
+      "bounds": {
+        "x": 60,
+        "y": 21,
+        "width": 136,
+        "height": 214
+      },
+      "viewHeight": 0.07317298
+    },
+    {
+      "name": "Lantern",
+      "file": "icon-4.png",
+      "source": "Lantern.glb",
+      "asset": "a79458c4b02d695187a952f23a63b8bf278e7bc3d316a3c2a314f2d6974181f1",
+      "angle": 35,
+      "rect": {
+        "x": 256,
+        "y": 256,
+        "width": 256,
+        "height": 256
+      },
+      "bounds": {
+        "x": 71,
+        "y": 21,
+        "width": 114,
+        "height": 214
+      },
+      "viewHeight": 29.904
+    },
+    {
+      "name": "RobotExpressive",
+      "file": "icon-5.png",
+      "source": "RobotExpressive.glb",
+      "asset": "047f5e5fb3bb6d378bd1df16ca6137f2a596c99b3a1b5690b4020c05aaf6f319",
+      "angle": 35,
+      "rect": {
+        "x": 512,
+        "y": 256,
+        "width": 256,
+        "height": 256
+      },
+      "bounds": {
+        "x": 57,
+        "y": 20,
+        "width": 143,
+        "height": 215
+      },
+      "viewHeight": 5.466087
+    },
+    {
+      "name": "SheenChair",
+      "file": "icon-6.png",
+      "source": "SheenChair.glb",
+      "asset": "f0af2a2b102d28d540236306ae19f8fb36842df76bd38cf76f063f9bd2853399",
+      "angle": 35,
+      "rect": {
+        "x": 0,
+        "y": 512,
+        "width": 256,
+        "height": 256
+      },
+      "bounds": {
+        "x": 28,
+        "y": 20,
+        "width": 200,
+        "height": 215
+      },
+      "viewHeight": 1.097276
+    },
+    {
+      "name": "WaterBottle",
+      "file": "icon-7.png",
+      "source": "WaterBottle.glb",
+      "asset": "b337e526fd6a162013c2984aeec163f5fbb4f717252724dfc3f3458bd51df94b",
+      "angle": 35,
+      "rect": {
+        "x": 256,
+        "y": 512,
+        "width": 256,
+        "height": 256
+      },
+      "bounds": {
+        "x": 84,
+        "y": 21,
+        "width": 88,
+        "height": 215
+      },
+      "viewHeight": 0.3165827
+    },
+    {
+      "name": "boat-fishing-small",
+      "file": "icon-8.png",
+      "source": "boat-fishing-small.glb",
+      "asset": "7b843fda78186c28d700b27916f387e9feaf1ff61ae24c1cae9e87eb15e27d18",
+      "angle": 35,
+      "rect": {
+        "x": 512,
+        "y": 512,
+        "width": 256,
+        "height": 256
+      },
+      "bounds": {
+        "x": 21,
+        "y": 33,
+        "width": 215,
+        "height": 190
+      },
+      "viewHeight": 4.062749
+    }
+  ]
+}
