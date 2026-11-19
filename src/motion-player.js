@@ -3,6 +3,7 @@ import './brand.js';
 import { CrucibleRenderer } from './renderer.js';
 import { createMotionScene, MOTION_DURATION } from './motion.js';
 import { EFFECT_PRESETS } from './effects.js';
+import { readWholeNumberOption } from './query-number-option.js';
 
 const query = new URLSearchParams(location.search);
 const exporting = query.get('export') === '1';
@@ -18,9 +19,7 @@ let scheduledFrame = 0;
 let playbackOrigin = 0;
 
 function option(name, fallback, minimum, maximum) {
-  const raw = query.get(name);
-  const value = raw === null ? fallback : Number(raw);
-  return Number.isFinite(value) ? Math.max(minimum, Math.min(maximum, value)) : fallback;
+  return readWholeNumberOption(query, name, fallback, minimum, maximum);
 }
 
 if (exporting) {

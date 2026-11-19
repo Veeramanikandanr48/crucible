@@ -998,7 +998,13 @@ export function sampleFilm(time, { aspect = 16 / 9 } = {}) {
       vec3.scale(direction, direction, 1 / authoredDistance);
       const center = bounds.minimum.map((value, axis) => (value + bounds.maximum[axis]) / 2);
       const fittingView = { ...camera, target: center, eye: center.map((value, axis) => value + direction[axis] * authoredDistance) };
-      const distance = Math.max(authoredDistance, fitPerspectiveDistance(bounds, fittingView, aspect, 1.1));
+      let fittedDistance;
+      try {
+        fittedDistance = fitPerspectiveDistance(bounds, fittingView, aspect, 1.1);
+      } catch {
+        throw new RangeError('Film aspect exceeds the supported lens range.');
+      }
+      const distance = Math.max(authoredDistance, fittedDistance);
       const framingAmount = Math.min(1, (16 / 9 - aspect) / (16 / 9 - 1));
       const framedDistance = authoredDistance + (distance - authoredDistance) * framingAmount;
       camera.target = camera.target.map((value, axis) => value + (center[axis] - value) * framingAmount);

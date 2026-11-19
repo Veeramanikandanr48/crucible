@@ -2,19 +2,15 @@ import './film-style.css';
 import './brand.js';
 import { CrucibleRenderer } from './renderer.js';
 import './explosion-shader.js';
+import { readWholeNumberOption } from './query-number-option.js';
 import { createFilmScenes, FILM_DURATION, sampleFilm } from './film.js';
 
 const query = new URLSearchParams(window.location.search);
 const exporting = query.get('export') === '1';
-function numberOption(name, fallback, minimum, maximum) {
-  const raw = query.get(name);
-  const value = raw === null || raw.trim() === '' ? fallback : Number(raw);
-  return Number.isFinite(value) ? Math.round(Math.max(minimum, Math.min(maximum, value))) : fallback;
-}
-const width = numberOption('width', 1280, 320, 7680);
-const height = numberOption('height', 720, 240, 4320);
-const samples = numberOption('samples', 4, 1, 8);
-const memoryBudgetMiB = numberOption('memory', 384, 64, 1024);
+const width = readWholeNumberOption(query, 'width', 1280, 320, 7680);
+const height = readWholeNumberOption(query, 'height', 720, 240, 4320);
+const samples = readWholeNumberOption(query, 'samples', 4, 1, 8);
+const memoryBudgetMiB = readWholeNumberOption(query, 'memory', 384, 64, 1024);
 const canvas = document.querySelector('#film-canvas');
 const stage = document.querySelector('.film-stage');
 const slider = document.querySelector('#film-time');

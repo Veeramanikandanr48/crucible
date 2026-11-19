@@ -408,3 +408,8 @@ test('open and closed lids retain smooth surface normals throughout the brow ran
   }
   console.log(JSON.stringify({ eyelidNormalAgreement: minima }));
 });
+
+test('a film aspect the portrait shots cannot frame is refused as a film aspect, not as a fit-bounds failure', () => {
+  const portraitShot = FILM_SHOTS.find(shot => shot.scene === 'portrait');
+  assert.throws(() => sampleFilm(portraitShot.start, { aspect: 0.0001 }), error => error instanceof RangeError && /Film aspect/.test(error.message));
+});
