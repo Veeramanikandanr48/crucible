@@ -4,6 +4,7 @@ import guide from '../docs/guide.md?raw';
 import { highlightCode } from './code-highlight.js';
 import { createLiveExample, autoRunVisibleExamples } from './docs-live.js';
 import { createApiReference } from './docs-api.js';
+import { parseDocumentHash, parseFigure } from './documentation-parse.js';
 import { topicAliases, topicSlug, guideTopics, learnTopics, orderTopics } from './documentation-topics.js';
 
 const learnSources = import.meta.glob('../docs/learn/*.md', { query: '?raw', import: 'default', eager: true });
@@ -223,9 +224,7 @@ function renderFence(block, section) {
   }
 }
 
-function figure(paragraph) {
-  const match = paragraph.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)$/);
-  const [, alt, source, caption] = match;
+function figure({ alt, source, caption }) {
   const element = document.createElement('figure');
   element.className = 'doc-figure';
   if (/\.(webm|mp4)$/.test(source)) {
@@ -287,8 +286,8 @@ function renderParagraph(paragraph, section) {
     scroll.className = 'table-scroll';
     scroll.append(table);
     section.append(scroll);
-  } else if (/^!\[[^\]]*\]\([^)]+\)$/.test(paragraph)) {
-    section.append(figure(paragraph));
+  } else if (parseFigure(paragraph)) {
+    section.append(figure(parseFigure(paragraph)));
   } else if (paragraph.startsWith('>')) {
     section.append(callout(paragraph));
   } else if (/^\d+\.\s/.test(paragraph)) {
@@ -348,7 +347,7 @@ function renderOutline(section) {
 }
 
 function parseHash() {
-  const [requestedTopic = '', requestedSection = ''] = decodeURIComponent(location.hash.slice(1)).split('/');
+  const { topic: requestedTopic, section: requestedSection } = parseDocumentHash(location.hash);
   return { hashTopic: requestedTopic, requestedTopic: topicAliases[requestedTopic] ?? requestedTopic, requestedSection };
 }
 

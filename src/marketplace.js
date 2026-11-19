@@ -1,7 +1,7 @@
 import './site.css';
 import './brand.js';
 import './marketplace.css';
-import { firstPartyPackages, npmManifestPath } from './marketplace-npm.js';
+import { addonEntries, firstPartyPackages, npmManifestPath } from './marketplace-npm.js';
 
 const NPM_SEARCH_URL = 'https://registry.npmjs.org/-/v1/search?text=keywords:crucible-addon&size=50';
 const NPM_MANIFEST_URL = 'https://registry.npmjs.org/';
@@ -189,7 +189,7 @@ async function loadAddons(container) {
     const response = await fetch(NPM_SEARCH_URL);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const { objects } = await response.json();
-    const addons = (objects ?? []).map(({ package: entry }) => ({ name: entry.name, version: entry.version, description: entry.description ?? '', range: null }));
+    const addons = addonEntries(objects);
     if (addons.length === 0) {
       showState(container, 'empty', 'No addons are published yet.', link('Write the first one', ADDONS_DOC_URL));
       return;

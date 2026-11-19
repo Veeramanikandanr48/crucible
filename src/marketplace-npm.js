@@ -7,6 +7,15 @@ export function npmManifestPath(name) {
   return `${encodeURIComponent(name).replace(/^%40/, '@')}/latest`;
 }
 
+/** Addons from an npm search result: entries without a valid npm name are skipped, so one bad entry cannot hide the rest. */
+export function addonEntries(searchObjects) {
+  if (!Array.isArray(searchObjects)) return [];
+  return searchObjects
+    .map((object) => object?.package)
+    .filter((entry) => npmManifestPath(entry?.name) !== null)
+    .map((entry) => ({ name: entry.name, version: String(entry.version ?? ''), description: String(entry.description ?? ''), range: null }));
+}
+
 export const FIRST_PARTY_PREFIX = '@codepawlhq/crucible-';
 const ADDON_KEYWORD = 'crucible-addon';
 
