@@ -65,7 +65,7 @@ export function volumeGridUses(value) {
     if (Array.isArray(node.localVolumes)) {
       node.localVolumes.forEach((volume, index) => {
         if (!volume || typeof volume !== 'object' || volume.shape !== 'grid') return;
-        uses.push({ names: Array.isArray(volume.frames) ? volume.frames : [volume.grid], label: `environment.localVolumes[${index}]` });
+        uses.push({ names: Array.isArray(volume.frames) ? volume.frames : [volume.frames ?? volume.grid], label: `environment.localVolumes[${index}]` });
       });
     }
     Object.values(node).forEach(child => visit(child, depth + 1));

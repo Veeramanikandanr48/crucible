@@ -197,3 +197,9 @@ test('scene_apply refuses distinct add-explosion operations over the combined li
   assert.match(refused.content.find(item => item.type === 'text').text, /67108864/);
   assert.equal(bakeAttempts, 0, 'no explosion was baked before the refusal');
 });
+
+test('a localVolume whose frames is not a list names the frames value, not an undefined grid', async () => {
+  const { readVolumeGridFiles } = await import('../src/mcp-volume-grids.js');
+  const recipe = { environment: { localVolumes: [{ shape: 'grid', frames: 5 }] } };
+  assert.throws(() => readVolumeGridFiles(recipe), error => /names the grid 5;/.test(error.message) && !/undefined/.test(error.message));
+});

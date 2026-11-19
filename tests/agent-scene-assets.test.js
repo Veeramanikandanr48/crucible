@@ -231,3 +231,9 @@ test('an empty motion on a scene that places a clip says how to play the clip', 
   const scene = createAgentScene(recipe(nodes), {}, { assets: await loadedAssets(2) });
   assert.throws(() => scene.apply([{ type: 'set-motion', motion: { duration: 1, tracks: [] } }], { expectedRevision: 0 }), /needs no motion: leave motion out/);
 });
+
+test('reading the assets a malformed recipe needs never throws a raw TypeError, so validation can name the field', () => {
+  assert.deepEqual(recipeAssetNeeds({ nodes: {} }), []);
+  assert.deepEqual(recipeAssetNeeds({ nodes: [null, { id: 'a', asset: { id: ASSET_ID } }] }), [{ id: ASSET_ID, copies: 1 }]);
+  assert.deepEqual(recipeAssetNeeds({ nodes: [], game: { npcs: {} } }), []);
+});
