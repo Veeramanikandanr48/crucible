@@ -744,7 +744,7 @@ function createClient(settings, stats) {
 
   // Moves the drawing clock on with real time, nudged by at most a tenth toward "newest snapshot minus the delay".
   function advanceRenderTime(deltaSeconds) {
-    if (renderTime === null) return;
+    if (renderTime === null || !(deltaSeconds >= 0 && deltaSeconds < Infinity)) return;
     const target = latestTick * stepSeconds - settings.interpolationDelaySeconds;
     const error = target - renderTime;
     if (Math.abs(error) > 1) {
@@ -847,7 +847,7 @@ function createPeerSide(settings, stats) {
     entity.owner = peerId;
     entity.term = raw.m;
     entity.tag = delta.t ?? null;
-    entity.state = dequantizeEntity(delta, steps);
+    entity.state = dequantizeEntity(applyEntityDelta(null, delta), steps);
     entity.samples.push({ time: clock, state: cloneState(entity.state) });
     if (entity.samples.length > NETCODE_LIMITS.maximumSamplesPerEntity) entity.samples.shift();
     entities.set(id, entity);
@@ -879,6 +879,10 @@ function createPeerSide(settings, stats) {
 
   function dropEntitiesOfGonePeers() {
     const present = new Set(transport.peers());
+    // A sender that left frees its slot, or the first maximumPeers peers ever heard would lock out every later one.
+    for (const peerId of senders.keys()) {
+      if (!present.has(peerId)) senders.delete(peerId);
+    }
     for (const [id, entity] of entities) {
       if (!isLocal(entity) && !present.has(entity.owner)) entities.delete(id);
     }
@@ -1355,7 +1359,7 @@ export function createDataChannelTransport(options = {}) {
       }
       if (!channels.has(peerId) && channels.size >= NETCODE_LIMITS.maximumPeers) pruneClosedChannels();
       if (!channels.has(peerId) && channels.size >= NETCODE_LIMITS.maximumPeers) {
-        throw new RangeError(`addChannel: at most ${NETCODE_LIMITS.maximumPeers} peers are supported; remove one with removeChannel(peerId) first.`);
+        throw new RangeError(`addChannel: at most 32 peers are supported; remove one with removeChannel(peerId) first.`);
       }
       const previous = channels.get(peerId);
       if (previous) detach(previous);
