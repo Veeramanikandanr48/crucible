@@ -65,6 +65,13 @@ export function formatFeatureList(features, surface = null) {
 
 const VALUE_FLAGS = new Set(['out', 'origin', 'width', 'height', 'surface', 'settle']);
 const BOOLEAN_FLAGS = new Set(['no-gpu-lock', 'full-page']);
+const NUMBER_FLAGS = { width: 1, height: 1, settle: 0 };
+
+function checkFlagValue(name, value) {
+  if (value === undefined || value.startsWith('--')) throw new Error(`--${name} needs a value, not ${value ?? 'the end of the command'}.`);
+  const minimum = NUMBER_FLAGS[name];
+  if (minimum !== undefined && !(Number.isFinite(Number(value)) && Number(value) >= minimum)) throw new Error(`--${name} must be a number of at least ${minimum}; pass e.g. --${name} ${Math.max(minimum, 1000)}.`);
+}
 
 export function parseCommandLine(argv) {
   const [command, ...rest] = argv;
@@ -81,7 +88,7 @@ export function parseCommandLine(argv) {
       flags[name] = true;
     } else if (VALUE_FLAGS.has(name)) {
       const value = rest[++index];
-      if (value === undefined) throw new Error(`--${name} needs a value.`);
+      checkFlagValue(name, value);
       flags[name] = value;
     } else {
       throw new Error(`Unknown flag --${name}.`);

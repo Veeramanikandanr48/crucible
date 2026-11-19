@@ -26,13 +26,16 @@ export async function listRegisteredTools() {
 }
 
 // First sentence of the description, cut at a word boundary. A full stop only ends
-// a sentence when a letter or digit precedes it and a space follows it.
+// a sentence when a letter or digit precedes it and a space follows it, and "e.g." and "i.e." do not end one.
+// A cut inside a `code span` drops the span, so the list line never keeps an unclosed backtick.
 export function summarize(description) {
   const flat = description.replace(/\s+/g, ' ').trim();
-  const firstSentence = flat.match(/^.*?[a-z0-9)`]\.(?=\s|$)/i)?.[0] ?? flat;
+  const firstSentence = flat.match(/^.*?(?<=[a-z0-9)`])(?<!\b(?:e\.g|i\.e))\.(?=\s|$)/i)?.[0] ?? flat;
   if (firstSentence.length <= maximumSummaryLength) return firstSentence;
   const cut = firstSentence.slice(0, maximumSummaryLength - 3);
-  return `${cut.slice(0, cut.lastIndexOf(' '))}...`;
+  const atWord = cut.slice(0, cut.lastIndexOf(' '));
+  const insideCodeSpan = atWord.split('`').length % 2 === 0;
+  return `${insideCodeSpan ? atWord.slice(0, atWord.lastIndexOf('`')).trimEnd() : atWord}...`;
 }
 
 const page = name => `${siteOrigin}/${name}`;
