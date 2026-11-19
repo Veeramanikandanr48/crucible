@@ -159,6 +159,12 @@ button:hover { background:var(--border); }
 .package-logo-yarn { mask-image:url('/logos/yarn.svg'); }
 .package-logo-bun { mask-image:url('/logos/bun.svg'); }
 body:has(.navigation) { --navigation-height:80px; }
+@media (max-width:960px) {
+  body:has(.navigation) { --navigation-height:120px; }
+  .navigation { display:grid; grid-template-columns:1fr auto; gap:12px; }
+  .navigation nav { grid-column:1 / -1; justify-content:center; width:100%; margin:0; flex-wrap:wrap; gap:4px; }
+  .navigation nav a { padding:10px 12px; font-size:13px; }
+}
 @media (max-width:760px) {
   body:has(.navigation) { --navigation-height:120px; }
   .navigation nav { grid-column:1 / -1; justify-content:center; width:100%; margin:0; gap:4px; }

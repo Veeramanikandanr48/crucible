@@ -313,7 +313,7 @@ body.site > main > section { scroll-margin-top: 96px; }
   .site .site-nav-cta { width: 36px; padding: 0; }
   .site .site-nav-cta-label { display: none; }
 }
-@media (max-width: 600px) {
+@media (max-width: 650px) {
   .site .navigation nav { gap: clamp(4px, 1.5vw, 9px); }
   .site .navigation nav a { font-size: clamp(8px, 2.6vw, 11px); }
   .site .navigation nav a .icon { display: none; }

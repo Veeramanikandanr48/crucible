@@ -2,7 +2,7 @@ export const siteNavLinks = [
   { href: './studio.html', label: 'Studio' },
   { href: './docs.html', label: 'Docs' },
   { href: './recipes.html', label: 'Recipes' },
-  { href: './index.html#examples', label: 'Showcase' },
+  { href: './showcase.html', label: 'Showcase' },
   { href: './marketplace.html', label: 'Marketplace' },
   { href: './changelog.html', label: 'Changelog' },
 ];

@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const origin = process.argv[2] ?? 'http://127.0.0.1:5173';
@@ -53,6 +55,34 @@ try {
     }
   }
   console.log(`Navigation contrast passed: ${checks} page/theme/viewport combinations.`);
+  const layoutChecks = [];
+  const siteFolder = fileURLToPath(new URL('../site/', import.meta.url));
+  const pages = readdirSync(siteFolder).filter(file => file.endsWith('.html') && file !== 'file.html' && file !== 'downloads.html' && file !== 'getting-started.html');
+  for (const fileName of pages) {
+    await page.goto(`${origin}/${fileName}`, { waitUntil: 'load' });
+    await page.evaluate(() => document.fonts.ready);
+    await page.locator('nav[aria-label="Site"] a').first().waitFor();
+    for (const width of [1440, 1152, 960, 900, 820, 768, 650, 620, 600, 390, 320]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const layout = await page.evaluate(() => ({
+        innerWidth: window.innerWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+        items: [...document.querySelectorAll('nav[aria-label="Site"] a, .toolbar-actions button, .site-nav-cta, #save-image, .brand')].map(item => ({
+          text: item.textContent.trim() || item.getAttribute('aria-label'),
+          left: item.getBoundingClientRect().left,
+          right: item.getBoundingClientRect().right,
+          width: item.getBoundingClientRect().width,
+        })),
+      }));
+      assert.ok(layout.scrollWidth <= layout.innerWidth + 1, `${fileName} ${width}: horizontal overflow`);
+      for (const item of layout.items) {
+        if (!item.width) continue;
+        assert.ok(item.left >= -1 && item.right <= layout.innerWidth + 1, `${fileName} ${width}: ${item.text} is clipped`);
+      }
+      layoutChecks.push(`${fileName} ${width}`);
+    }
+  }
+  console.log(`Navigation layout passed: ${layoutChecks.length} page/viewport combinations.`);
 } finally {
   await browser.close();
 }

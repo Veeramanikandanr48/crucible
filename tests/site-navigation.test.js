@@ -27,7 +27,7 @@ function currentHref(fileName) {
   if (fileName === 'recipes.html' || fileName.startsWith('recipe-')) return './recipes.html';
   if (fileName === 'changelog.html') return './changelog.html';
   if (fileName === 'marketplace.html') return './marketplace.html';
-  if (fileName === 'showcase.html') return './index.html#examples';
+  if (fileName === 'showcase.html') return './showcase.html';
   return null;
 }
 
@@ -52,9 +52,24 @@ test('the shared navigation has icons for Studio and Recipes', () => {
 
 test('the shared navigation fits a phone without wrapping', () => {
   const css = read('src/site.css');
-  assert.match(css, /\.site \.navigation nav \{ gap: clamp\(4px, 1\.5vw, 9px\); \}/);
+  assert.match(css, /@media \(max-width: 650px\) \{\s+\.site \.navigation nav \{ gap: clamp\(4px, 1\.5vw, 9px\); \}/);
   assert.match(css, /\.site \.navigation nav a \{ font-size: clamp\(8px, 2\.6vw, 11px\); \}/);
   assert.match(css, /\.site \.navigation nav a \.icon \{ display: none; \}/);
+});
+
+test('the nature demo header wraps before the links crowd the actions', () => {
+  const css = read('src/nature-style.css');
+  assert.match(css, /@media \(max-width: 1100px\) \{[\s\S]*?\.world-header nav \{ order: 3; width: 100%; flex-wrap: wrap; \}/);
+});
+
+test('the modeling header wraps before the links crowd the actions', () => {
+  const css = read('src/home.css');
+  assert.match(css, /@media \(max-width:960px\) \{[\s\S]*?\.navigation nav \{ grid-column:1 \/ -1; justify-content:center; width:100%; margin:0; flex-wrap:wrap; gap:4px; \}/);
+});
+
+test('the object demo header wraps before the links crowd the actions', () => {
+  const css = read('src/style.css');
+  assert.match(css, /@media \(max-width: 1200px\) \{[\s\S]*?\.studio-nav \{ order: 3; width: 100%; flex-wrap: wrap; \}/);
 });
 
 test('the standalone view navigation wraps on phones', () => {
