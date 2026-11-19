@@ -20,6 +20,13 @@ const desktopTopics = matchMedia('(min-width: 1051px)');
 topicMenu.open = desktopTopics.matches;
 desktopTopics.addEventListener('change', () => { topicMenu.open = desktopTopics.matches; });
 
+const siteNavigation = document.querySelector('header.navigation');
+function syncNavigationHeight() {
+  document.body.style.setProperty('--navigation-height', `${Math.ceil(siteNavigation.getBoundingClientRect().height)}px`);
+}
+syncNavigationHeight();
+new ResizeObserver(syncNavigationHeight).observe(siteNavigation);
+
 const iconPaths = {
   start: '<path d="m9 5 10 7-10 7V5Z"/>',
   cube: '<path d="m12 3 9 5v8l-9 5-9-5V8l9-5Z M3 8l9 5 9-5 M12 13v8"/>',

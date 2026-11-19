@@ -57,6 +57,13 @@ test('the shared navigation fits a phone without wrapping', () => {
   assert.match(css, /\.site \.navigation nav a \.icon \{ display: none; \}/);
 });
 
+test('documentation anchors follow the measured shared navigation height', () => {
+  const script = read('src/documentation.js');
+  assert.match(script, /document\.querySelector\('header\.navigation'\)/);
+  assert.match(script, /setProperty\('--navigation-height'/);
+  assert.match(script, /new ResizeObserver\(syncNavigationHeight\)\.observe\(siteNavigation\)/);
+});
+
 test('the nature demo header wraps before the links crowd the actions', () => {
   const css = read('src/nature-style.css');
   assert.match(css, /@media \(max-width: 1100px\) \{[\s\S]*?\.world-header nav \{ order: 3; width: 100%; flex-wrap: wrap; \}/);
