@@ -68,7 +68,7 @@ export function sampleWorldMatrices(parts) {
  */
 export function packObjectMotion(renderer, current, previous) {
   for (const [name, matrices] of [['current', current], ['previous', previous]]) {
-    if (!(matrices instanceof Map)) throw new TypeError(`${name} must be a Map from sampleWorldMatrices(parts).`);
+    if (!(matrices instanceof Map)) throw new TypeError(`${name} must be a Map from sampleWorldMatrices(parts), got ${typeof matrices}.`);
   }
   const drawnParts = renderer.batches.filter(batch => renderer.drawsInOpaqueLoop(batch)).flatMap(batch => batch.parts);
   const rows = Math.max(1, Math.ceil(drawnParts.length / MATRICES_PER_ROW));

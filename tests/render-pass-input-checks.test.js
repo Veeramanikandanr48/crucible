@@ -31,7 +31,7 @@ function createPassRenderer() {
 
 test('the velocity pass names a previous camera without an eye or a malformed previous view projection', () => {
   const renderer = createPassRenderer();
-  assert.throws(() => renderer.passSupport.prepare({ pass: 'velocity', previousCamera: { target: [0, 0, 0] } }), /previousCamera\.eye must be 3 finite/);
+  assert.throws(() => renderer.passSupport.prepare({ pass: 'velocity', previousCamera: { target: [0, 0, 0] } }), /previousCamera\.eye must be 3 finite numbers, got undefined/);
   assert.throws(() => renderer.passSupport.prepare({ pass: 'velocity', previousCamera: { eye: [1, NaN, 3] } }), /previousCamera\.eye/);
   assert.throws(() => renderer.passSupport.prepare({ pass: 'velocity', previousViewProjection: [1, 2, 3] }), /previousViewProjection must be 16 finite/);
   assert.throws(() => renderer.passSupport.prepare({ pass: 'velocity', previousViewProjection: new Float32Array(16).fill(NaN) }), /previousViewProjection/);
@@ -48,7 +48,7 @@ test('the velocity pass names object motion whose matrices are not a Float32Arra
 test('packing object motion names a matrix set that did not come from sampleWorldMatrices', () => {
   const part = { name: 'hero', matrix: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]) };
   const renderer = { batches: [{ parts: [part] }], drawsInOpaqueLoop: () => true };
-  assert.throws(() => packObjectMotion(renderer, {}, new Map()), /current must be a Map from sampleWorldMatrices/);
+  assert.throws(() => packObjectMotion(renderer, {}, new Map()), /current must be a Map from sampleWorldMatrices\(parts\), got object/);
   assert.throws(() => packObjectMotion(renderer, new Map(), [[1]]), /previous must be a Map from sampleWorldMatrices/);
   assert.equal(packObjectMotion(renderer, new Map(), new Map()).count, 1);
 });

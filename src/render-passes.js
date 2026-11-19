@@ -71,16 +71,16 @@ function createPassTarget(context, width, height, float = false, floatDepth = fa
   return { texture, depth, framebuffer, float, floatDepth };
 }
 
-function requireVelocityInput(name, valid, expected) {
-  if (!valid) throw new RangeError(`${name} must be ${expected}.`);
+function requireVelocityInput(name, value, valid, expected) {
+  if (!valid) throw new RangeError(`${name} must be ${expected}, got ${String(value).slice(0, 40)}.`);
 }
 
 // Only the velocity pass reads the earlier camera and the object motion; a bad one is named up front, not inside gl-matrix or the upload.
 function requireVelocityInputs({ previousViewProjection, previousCamera, objectMotion }) {
   const finite = (list, length) => list?.length === length && Array.from(list).every(Number.isFinite);
-  if (previousViewProjection !== undefined) requireVelocityInput('previousViewProjection', finite(previousViewProjection, 16), '16 finite numbers');
-  else if (previousCamera !== undefined) requireVelocityInput('previousCamera.eye', finite(previousCamera?.eye, 3), '3 finite numbers');
-  if (objectMotion?.matrices !== undefined) requireVelocityInput('objectMotion.matrices', objectMotion.matrices instanceof Float32Array, 'a Float32Array');
+  if (previousViewProjection !== undefined) requireVelocityInput('previousViewProjection', previousViewProjection, finite(previousViewProjection, 16), '16 finite numbers');
+  else if (previousCamera !== undefined) requireVelocityInput('previousCamera.eye', previousCamera?.eye, finite(previousCamera?.eye, 3), '3 finite numbers');
+  if (objectMotion?.matrices !== undefined) requireVelocityInput('objectMotion.matrices', objectMotion.matrices, objectMotion.matrices instanceof Float32Array, 'a Float32Array');
 }
 
 /**
