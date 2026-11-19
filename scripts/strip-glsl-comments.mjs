@@ -10,21 +10,49 @@ function countBackticks(line) {
   return (line.match(/(?<!\\)`/g) ?? []).length;
 }
 
-function stripLine(line) {
-  if (/^\s*\/\/.*$/.test(line)) return null;
-  if (line.includes('${') || line.includes('`')) return line;
-  return line.replace(/\s+\/\/.*$/, '');
+// Finds where the line comment of one line starts (-1 when it has none) and whether a block comment is still open at its end.
+// A "//" inside a block comment is text: cutting it would remove the "*/" that closes the block.
+function scanLine(line, startsInsideBlock) {
+  let insideBlock = startsInsideBlock;
+  for (let index = 0; index < line.length; index++) {
+    const pair = line.slice(index, index + 2);
+    if (insideBlock && pair === '*/') {
+      insideBlock = false;
+      index++;
+    } else if (!insideBlock && pair === '/*') {
+      insideBlock = true;
+      index++;
+    } else if (!insideBlock && pair === '//') {
+      return { commentStart: index, insideBlock };
+    }
+  }
+  return { commentStart: -1, insideBlock };
+}
+
+// Returns the line without its comment (null when only a comment was on it) and whether a block comment is open after it.
+function stripLine(line, startsInsideBlock) {
+  const { commentStart, insideBlock } = scanLine(line, startsInsideBlock);
+  if (commentStart === -1 || line.includes('${') || line.includes('`')) return { text: line, insideBlock };
+  const code = line.slice(0, commentStart);
+  if (code.trim() === '') return { text: null, insideBlock };
+  return { text: /\s$/.test(code) ? code.replace(/\s+$/, '') : line, insideBlock };
 }
 
 export function stripGlslComments(source) {
   if (!GLSL_MARKER.test(source)) return source;
   let insideTemplate = false;
+  let insideBlock = false;
   const kept = [];
   for (const line of source.split(/\r?\n/)) {
     const startedInside = insideTemplate;
     if (countBackticks(line) % 2 === 1) insideTemplate = !insideTemplate;
-    const stripped = startedInside ? stripLine(line) : line;
-    if (stripped !== null) kept.push(stripped);
+    if (!startedInside) {
+      kept.push(line);
+      continue;
+    }
+    const stripped = stripLine(line, insideBlock);
+    insideBlock = insideTemplate && stripped.insideBlock;
+    if (stripped.text !== null) kept.push(stripped.text);
   }
   return kept.join('\n');
 }

@@ -86,3 +86,19 @@ test('the initial total follows static imports into shared chunks and skips lazy
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('initialOutputPaths skips an external package the entry imports statically', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'size-external-'));
+  try {
+    writeFileSync(join(directory, 'lazy.js'), 'export const lazy = 2;\n');
+    const result = await build({
+      stdin: { contents: "import 'outside-package'; import('./lazy.js'); export const entry = 1;", resolveDir: directory, loader: 'js' },
+      bundle: true, write: false, metafile: true, splitting: true, format: 'esm', outdir: join(directory, 'out'), external: ['outside-package'],
+    });
+    const initial = [...initialOutputPaths(result.metafile)];
+    assert.equal(initial.length, 1, 'only the entry chunk is loaded at start');
+    assert.ok(initial.every(path => path in result.metafile.outputs), 'every initial path is a chunk the build wrote');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
