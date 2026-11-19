@@ -48,8 +48,8 @@ output { font-variant-numeric: tabular-nums; color: #bec9cc; min-width: 98px; fo
   select { padding: 8px; max-width: 130px; }
   .toolbar-actions { margin-left: 0; }
   nav { order: 2; flex: 1; }
-  .toolbar .studio-nav { order: 3; flex: 1 1 100%; }
-  .toolbar .studio-nav a { padding: 8px 10px; }
+  .toolbar .studio-nav { order: 3; flex: 1 1 100%; flex-wrap: wrap; }
+  .toolbar .studio-nav a { padding: 6px 8px; font-size: 12px; }
   nav button { padding: 9px 11px; font-size: 12px; }
   .toolbar-actions button { padding: 9px 12px; font-size: 12px; }
   .stage { min-height: 310px; }

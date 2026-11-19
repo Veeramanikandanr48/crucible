@@ -27,7 +27,8 @@ test('every public site page has the same navigation and theme color', () => {
     const nav = html.match(/<nav[^>]*aria-label="Site"[^>]*>(.*?)<\/nav>/s);
     assert.ok(nav, `${fileName} has no shared navigation`);
     assert.equal(nav[1], expectedLinks(currentHref(fileName)), `${fileName} navigation differs`);
-    assert.match(html, /<meta name="theme-color" content="#f8f7f1" \/>/, `${fileName} theme color differs`);
+    const themeColor = fileName === 'studio.html' ? '#1b1f23' : '#f8f7f1';
+    assert.match(html, new RegExp(`<meta name="theme-color" content="${themeColor}" \\/>`), `${fileName} theme color differs`);
   }
 });
 
@@ -44,4 +45,10 @@ test('the shared navigation fits a phone without wrapping', () => {
   assert.match(css, /\.site \.navigation nav \{ gap: clamp\(4px, 1\.5vw, 9px\); \}/);
   assert.match(css, /\.site \.navigation nav a \{ font-size: clamp\(8px, 2\.6vw, 11px\); \}/);
   assert.match(css, /\.site \.navigation nav a \.icon \{ display: none; \}/);
+});
+
+test('the standalone view navigation wraps on phones', () => {
+  const css = read('src/view2d.css');
+  assert.match(css, /\.toolbar \.studio-nav \{ order: 3; flex: 1 1 100%; flex-wrap: wrap; \}/);
+  assert.match(css, /\.toolbar \.studio-nav a \{ padding: 6px 8px; font-size: 12px; \}/);
 });
