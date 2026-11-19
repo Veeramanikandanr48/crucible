@@ -367,9 +367,32 @@ async function compileModule(device, label, code) {
   return module;
 }
 
-const storage = (device, label, bytes, extraUsage = 0) => device.createBuffer({ label, size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | extraUsage });
-const uniform = (device, label, bytes) => device.createBuffer({ label, size: bytes, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-const bind = (device, pipeline, buffers) => device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })) });
+// The buffers one pass makes, so a setup that throws part way (an allocation or a bind group refused) can destroy them.
+function createBufferOwner(device) {
+  const buffers = [];
+  const add = descriptor => {
+    const buffer = device.createBuffer(descriptor);
+    buffers.push(buffer);
+    return buffer;
+  };
+  return {
+    buffers,
+    storage: (label, bytes, extraUsage = 0) => add({ label, size: Math.max(16, bytes), usage: GPUBufferUsage.STORAGE | extraUsage }),
+    uniform: (label, bytes) => add({ label, size: bytes, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }),
+    destroy: () => buffers.forEach(buffer => buffer.destroy()),
+  };
+}
+
+function buildOrDestroy(owner, build) {
+  try {
+    return build();
+  } catch (error) {
+    owner.destroy();
+    throw error;
+  }
+}
+
+const bind =(device, pipeline, buffers) => device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: buffers.map((buffer, binding) => ({ binding, resource: { buffer } })) });
 
 /**
  * The cache table (CACHE_SLOT_COUNT vec4: mean radiance and the number of records behind it) and the pass that folds the
@@ -378,9 +401,12 @@ const bind = (device, pipeline, buffers) => device.createBindGroup({ layout: pip
 export async function createWebGpuRadianceCache(device) {
   const module = await compileModule(device, 'radiance cache', CACHE_SOURCE);
   const [scatterPipeline, resolvePipeline] = await Promise.all([createPipeline(device, module, 'scatterRecords'), createPipeline(device, module, 'resolveCells')]);
-  const table = storage(device, 'radiance cache', CACHE_SLOT_COUNT * 16, GPUBufferUsage.COPY_DST);
-  const sums = storage(device, 'radiance cache sums', CACHE_SLOT_COUNT * 16);
-  const recordCountBuffer = uniform(device, 'record count', CACHE_PARAMETER_BYTES);
+  const owner = createBufferOwner(device);
+  const [table, sums, recordCountBuffer] = buildOrDestroy(owner, () => [
+    owner.storage('radiance cache', CACHE_SLOT_COUNT * 16, GPUBufferUsage.COPY_DST),
+    owner.storage('radiance cache sums', CACHE_SLOT_COUNT * 16),
+    owner.uniform('record count', CACHE_PARAMETER_BYTES),
+  ]);
   let scatterGroup = null;
   let resolveGroup = null;
   return {
@@ -400,9 +426,7 @@ export async function createWebGpuRadianceCache(device) {
       pass.setBindGroup(0, resolveGroup);
       pass.dispatchWorkgroups(4096, CACHE_SLOT_COUNT / CACHE_WORKGROUP_SIZE / 4096);
     },
-    dispose() {
-      for (const buffer of [table, sums, recordCountBuffer]) buffer.destroy();
-    },
+    dispose: owner.destroy,
   };
 }
 
@@ -439,19 +463,23 @@ export async function createWebGpuDenoiser(device, { traceWidth, traceHeight, ou
   const plane = traceWidth * traceHeight * 16;
   const rowWords = outputRowWords(outputWidth);
   const sizes = [traceWidth, traceHeight, outputWidth, outputHeight];
-  const histories = [0, 1].map(index => storage(device, `history ${index}`, plane * 3));
-  const filters = [0, 1].map(index => storage(device, `filter ${index}`, plane));
-  const outputBuffer = storage(device, 'output pixels', rowWords * 4 * outputHeight, GPUBufferUsage.COPY_SRC);
-  const accumulateParameters = uniform(device, 'accumulate parameters', DENOISE_PARAMETER_BYTES);
-  const atrousParameters = Array.from({ length: filterIterations }, () => uniform(device, 'a-trous parameters', DENOISE_PARAMETER_BYTES));
-  const presentParameters = uniform(device, 'present parameters', DENOISE_PARAMETER_BYTES);
-  const finalFilter = filters[filterIterations % 2];
+  const owner = createBufferOwner(device);
+  const { outputBuffer, accumulateParameters, atrousParameters, presentParameters, sets } = buildOrDestroy(owner, () => {
+    const histories = [0, 1].map(index => owner.storage(`history ${index}`, plane * 3));
+    const filters = [0, 1].map(index => owner.storage(`filter ${index}`, plane));
+    const outputBuffer = owner.storage('output pixels', rowWords * 4 * outputHeight, GPUBufferUsage.COPY_SRC);
+    const accumulateParameters = owner.uniform('accumulate parameters', DENOISE_PARAMETER_BYTES);
+    const atrousParameters = Array.from({ length: filterIterations }, () => owner.uniform('a-trous parameters', DENOISE_PARAMETER_BYTES));
+    const presentParameters = owner.uniform('present parameters', DENOISE_PARAMETER_BYTES);
+    const finalFilter = filters[filterIterations % 2];
+    const sets = [0, 1].map(set => ({
+      accumulate: bind(device, accumulatePipeline, [accumulateParameters, tracedBuffers[set], tracedBuffers[1 - set], histories[1 - set], histories[set], filters[0], motionBuffer]),
+      atrous: atrousParameters.map((parameters, iteration) => bind(device, atrousPipeline, [parameters, tracedBuffers[set], filters[iteration % 2], filters[1 - iteration % 2]])),
+      present: bind(device, presentPipeline, [presentParameters, tracedBuffers[set], finalFilter, histories[set], outputBuffer]),
+    }));
+    return { outputBuffer, accumulateParameters, atrousParameters, presentParameters, sets };
+  });
   const groupsFor = (width, height) => [Math.ceil(width / 8), Math.ceil(height / 8)];
-  const sets = [0, 1].map(set => ({
-    accumulate: bind(device, accumulatePipeline, [accumulateParameters, tracedBuffers[set], tracedBuffers[1 - set], histories[1 - set], histories[set], filters[0], motionBuffer]),
-    atrous: atrousParameters.map((parameters, iteration) => bind(device, atrousPipeline, [parameters, tracedBuffers[set], filters[iteration % 2], filters[1 - iteration % 2]])),
-    present: bind(device, presentPipeline, [presentParameters, tracedBuffers[set], finalFilter, histories[set], outputBuffer]),
-  }));
 
   return {
     outputBuffer,
@@ -473,8 +501,6 @@ export async function createWebGpuDenoiser(device, { traceWidth, traceHeight, ou
       pass.setBindGroup(0, sets[set].present);
       pass.dispatchWorkgroups(...groupsFor(outputWidth, outputHeight));
     },
-    dispose() {
-      for (const buffer of [...histories, ...filters, outputBuffer, accumulateParameters, presentParameters, ...atrousParameters]) buffer.destroy();
-    },
+    dispose: owner.destroy,
   };
 }
