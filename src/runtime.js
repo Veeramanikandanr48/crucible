@@ -52,9 +52,9 @@ function validateSystem(system, existingNames) {
 // An Error keeps its identity with a prefixed message; a thrown string, null or frozen error is wrapped, so the system is still named.
 function describeHookFailure(system, hook, error) {
   const message = `Runtime system "${system.name}" ${hook} failed: ${error?.message ?? error}`;
-  if (!(error instanceof Error) || Object.isFrozen(error)) return new Error(message, { cause: error });
-  error.message = message;
-  return error;
+  const failure = error instanceof Error && !Object.isFrozen(error) ? error : new Error(message, { cause: error });
+  failure.message = message;
+  return failure;
 }
 
 function defaultClock() {
