@@ -49,6 +49,14 @@ function validateSystem(system, existingNames) {
   }
 }
 
+// An Error keeps its identity with a prefixed message; a thrown string, null or frozen error is wrapped, so the system is still named.
+function describeHookFailure(system, hook, error) {
+  const message = `Runtime system "${system.name}" ${hook} failed: ${error?.message ?? error}`;
+  if (!(error instanceof Error) || Object.isFrozen(error)) return new Error(message, { cause: error });
+  error.message = message;
+  return error;
+}
+
 function defaultClock() {
   return () => performance.now();
 }
@@ -71,6 +79,9 @@ function validateOptions(target, options) {
   positiveNumber(fixedStepSeconds, 'fixedStepSeconds', RUNTIME_LIMITS.minimumFixedStepSeconds, RUNTIME_LIMITS.maximumFixedStepSeconds);
   const maximumFrameSeconds = positiveNumber(options.maximumFrameSeconds ?? RUNTIME_LIMITS.defaultMaximumFrameSeconds, 'maximumFrameSeconds', 0.001, 10);
   const maximumStepsPerFrame = positiveNumber(options.maximumStepsPerFrame ?? RUNTIME_LIMITS.defaultMaximumStepsPerFrame, 'maximumStepsPerFrame', 1, RUNTIME_LIMITS.maximumStepsPerFrameLimit);
+  if (options.clock !== undefined && typeof options.clock !== 'function') {
+    throw new TypeError('createRuntime clock must be a function () => milliseconds.');
+  }
   if (options.frame !== undefined && typeof options.frame !== 'function') {
     throw new TypeError('createRuntime frame must be a function (context) => frame for target.render, or left out.');
   }
@@ -123,8 +134,7 @@ export function createRuntime(target, options = {}) {
     try {
       system[hook](...args, context);
     } catch (error) {
-      error.message = `Runtime system "${system.name}" ${hook} failed: ${error.message}`;
-      throw error;
+      throw describeHookFailure(system, hook, error);
     }
   }
 
@@ -332,8 +342,16 @@ export function createRuntime(target, options = {}) {
       stopLoop();
       governor.dispose();
       disposed = true;
-      for (const system of [...systems].reverse()) disposeSystem(system);
+      let firstFailure;
+      for (const system of [...systems].reverse()) {
+        try {
+          disposeSystem(system);
+        } catch (error) {
+          firstFailure ??= error;
+        }
+      }
       systems.length = 0;
+      if (firstFailure) throw firstFailure;
     },
   };
 

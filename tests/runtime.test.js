@@ -272,3 +272,37 @@ test('one NaN reading from the clock does not stop time for good', () => {
   assert.ok(Number.isFinite(harness.runtime.stats.elapsedSeconds));
   assert.ok(harness.runtime.stats.elapsedSeconds > 0.01);
 });
+
+test('a hook that throws a string, null or a frozen error still names the system and the cause (#2615)', () => {
+  const failures = [
+    { thrown: 'boom', pattern: /Runtime system "bad" update failed: boom/ },
+    { thrown: null, pattern: /Runtime system "bad" update failed: null/ },
+    { thrown: Object.freeze(new Error('frozen')), pattern: /Runtime system "bad" update failed: frozen/ },
+  ];
+  for (const { thrown, pattern } of failures) {
+    const { runtime } = createHarness({ systems: [{ name: 'bad', update() { throw thrown; } }] });
+    assert.throws(() => runtime.step(10), error => error instanceof Error && pattern.test(error.message) && error.cause === thrown);
+  }
+});
+
+test('a hook that throws an ordinary error keeps that error object with the prefixed message (#2615)', () => {
+  const original = new RangeError('plain');
+  const { runtime } = createHarness({ systems: [{ name: 'bad', update() { throw original; } }] });
+  assert.throws(() => runtime.step(10), error => error === original && error.message === 'Runtime system "bad" update failed: plain');
+});
+
+test('dispose runs every system dispose even when one throws, clears the list and reports the first failure (#2617)', () => {
+  const disposed = [];
+  const make = (name, fails) => ({ name, dispose() { disposed.push(name); if (fails) throw new Error(`${name} failed`); } });
+  const { runtime } = createHarness({ systems: [make('first', false), make('second', true), make('third', false)] });
+  runtime.step(10);
+  assert.throws(() => runtime.dispose(), /Runtime system "second" dispose failed: second failed/);
+  assert.deepEqual(disposed, ['third', 'second', 'first']);
+  assert.deepEqual(runtime.systems, []);
+});
+
+test('createRuntime refuses a clock that is not a function and names the option (#2619)', () => {
+  const target = { render() {} };
+  for (const clock of ['x', 5, null]) assert.throws(() => createRuntime(target, { clock }), /createRuntime clock must be a function/);
+  assert.doesNotThrow(() => createRuntime(target, { clock: undefined, scheduler: { request: () => 1, cancel() {} } }));
+});

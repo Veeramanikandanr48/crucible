@@ -47,7 +47,7 @@ Two guards stop a slow frame from spiralling. A frame longer than `maximumFrameS
 | `element` | none | The canvas or its container, watched for `pauseWhenOffscreen` |
 | `isIdle` | none | `context => boolean`, true when nothing changed: no system is moving anything and no temporal accumulation is converging. The loop then draws no frame and schedules none, so it costs no GPU and no CPU, until `wake()`. Without it the loop never sleeps, because a runtime cannot know whether its systems change the picture. |
 | `idleSleep` | `true` | `false` keeps drawing every frame even when `isIdle` says idle |
-| `scheduler`, `clock`, `visibility`, `observe` | browser | `{ request(callback), cancel(handle) }`, `() => milliseconds`, `{ hidden, subscribe(callback) }` and `(element, callback(onscreen)) => stop`, injected by tests and headless runs |
+| `scheduler`, `clock`, `visibility`, `observe` | browser | `{ request(callback), cancel(handle) }`, `() => milliseconds` (a function, or left out), `{ hidden, subscribe(callback) }` and `(element, callback(onscreen)) => stop`, injected by tests and headless runs |
 
 The first argument is any object with `render(frame)`, such as `CrucibleRenderer`.
 
@@ -58,7 +58,7 @@ The first argument is any object with `render(frame)`, such as `CrucibleRenderer
 - `wake()` draws the next frame after input or a state change when the loop sleeps because of `isIdle`; `sleeping` is true while it waits. Call it from your input handlers and whenever a system changes something. A frame that follows a sleep, a hidden tab or an offscreen pause starts with a zero time step, so the sleep is never simulated.
 - `step(milliseconds)` runs one frame without a scheduler, for tests and for stepping while paused.
 - `addSystem(system, index)`, `replaceSystem(name, system)`, `removeSystem(name)`, `getSystem(name)` and `systems` (the names, in order). A system added to a started runtime is initialised at once; a replaced or removed one is disposed.
-- `dispose()` stops the loop and disposes every system in reverse order. The runtime cannot start again.
+- `dispose()` stops the loop and disposes every system in reverse order, even when one throws, then reports the first failure. The runtime cannot start again.
 - `stats` is the frame-time readout: `frames`, `frameMilliseconds` (last), `averageFrameMilliseconds` and `maximumFrameMilliseconds` (last 120 frames), `framesPerSecond`, `updateMilliseconds` and `renderMilliseconds` (the last frame's split; the renderer call returns when it has submitted its work, so GPU time needs a timer query), `fixedSteps`, `lastFixedSteps`, `droppedSeconds`, `alpha` and `elapsedSeconds`.
 
 ## System interface
