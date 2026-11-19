@@ -162,6 +162,7 @@ export const SKY_OPENNESS_RAYS = 32;
  * spiral, so the same scene gives the same share.
  */
 export function skyOpenness(parts, point) {
+  if (!(point?.length === 3 && Array.prototype.every.call(point, Number.isFinite))) throw new RangeError('skyOpenness point must be [x, y, z] numbers, e.g. [0, 1, 0].');
   const worldMatrices = partMatrixLookup(parts);
   const triangles = worldTriangles(parts.filter(part => !['blend', 'add'].includes(part.material?.alphaMode)), worldMatrices);
   if (!triangles) {

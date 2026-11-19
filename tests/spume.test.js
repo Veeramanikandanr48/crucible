@@ -191,3 +191,16 @@ test('partsForFrame clamps an out-of-range or non-integer frame index instead of
   assert.equal(player.partsForFrame(99), player.partsForFrame(1));
   assert.equal(player.partsForFrame(-3), player.partsForFrame(0));
 });
+
+test('loadSpumeCache refuses spray index entries that are not whole non-negative [first, count] pairs', async () => {
+  const read = syntheticCache();
+  for (const entry of [['a', 2], [0, -1], [0.5, 1], [0], null, [0, Infinity]]) {
+    const brokenRead = async (name) => {
+      if (name !== 'meta.json') return read(name);
+      const meta = JSON.parse(new TextDecoder().decode(await read(name)));
+      meta.spray.index = [[0, 0], entry];
+      return new TextEncoder().encode(JSON.stringify(meta)).buffer;
+    };
+    await assert.rejects(loadSpumeCache(brokenRead), /spray\.index/, `entry ${JSON.stringify(entry)}`);
+  }
+});

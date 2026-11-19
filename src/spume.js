@@ -1,5 +1,6 @@
 import { mat4 } from 'gl-matrix';
 import './liquid-shader.js';
+import { requireFiniteInRange } from './modeling-limits.js';
 
 // Plays back a liquid bake from Spume (https://github.com/codepawl/spume).
 // Spume bakes offline on an NVIDIA GPU; this addon only reads its cache folder:
@@ -15,6 +16,7 @@ const COMPONENT_SHORT = 5122;
 const COMPONENT_BYTE = 5120;
 const SPRAY_FLOATS_PER_POINT = 6;
 const MAX_FRAMES = 100000;
+const MAX_SPRAY_POINTS = 2 ** 32;
 
 export const SPRAY_KINDS = Object.freeze({ spray: 0, foam: 1, bubble: 2 });
 
@@ -135,6 +137,9 @@ function validateMeta(meta) {
   if (typeof meta.frameFile !== 'string' || !meta.frameFile.includes('%04d')) throw new TypeError('Spume meta.frameFile must contain %04d.');
   const sprayIndex = meta.spray?.index;
   if (meta.spray && (!Array.isArray(sprayIndex) || sprayIndex.length !== meta.frameCount)) throw new RangeError('Spume spray index must list every frame.');
+  if (meta.spray) {
+    sprayIndex.forEach((entry, frame) => requireFiniteInRange('Spume', `spray.index[${frame}]`, Array.isArray(entry) && entry.length === 2 ? entry : NaN, 0, MAX_SPRAY_POINTS, true));
+  }
   if (meta.spray && meta.spray.floatsPerPoint !== SPRAY_FLOATS_PER_POINT) throw new RangeError('Spume spray must store six floats per point.');
 }
 

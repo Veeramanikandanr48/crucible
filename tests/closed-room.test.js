@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createAgentScene } from '../src/agent-scene.js';
 import { loadAgentSceneModules } from '../src/agent-scene-modules.js';
-import { closedRoomShare, CLOSED_ROOM_SHARE, CLOSED_ROOM_MAXIMUM_TRIANGLES, skyGridSize, skyVisibilityGrid } from '../src/closed-room.js';
+import { closedRoomShare, CLOSED_ROOM_SHARE, CLOSED_ROOM_MAXIMUM_TRIANGLES, skyGridSize, skyOpenness, skyVisibilityGrid } from '../src/closed-room.js';
 import { fittedClosedRoomShare } from '../src/fitted-closed-room.js';
 
 const WALL = 0.2;
@@ -179,4 +179,21 @@ test('skyVisibilityGrid returns data that matches its size for a zero-size box',
   const grid = skyVisibilityGrid([part], [0, 0, 0], [0, 0, 0]);
   assert.deepEqual(grid.size, [2, 2, 2]);
   assert.equal(grid.data.length, 8);
+});
+
+function ceilingPart() {
+  return {
+    name: 'ceiling',
+    geometry: { positions: new Float32Array([-1, 2, -1, 1, 2, -1, 1, 2, 1, -1, 2, 1]), indices: new Uint32Array([0, 1, 2, 0, 2, 3]) },
+    matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
+    material: {},
+  };
+}
+
+test('skyOpenness refuses a point that is not three finite numbers instead of reporting open sky', () => {
+  const parts = [ceilingPart()];
+  assert.ok(skyOpenness(parts, [0, 0, 0]) < 1, 'a point under the ceiling is partly covered');
+  for (const point of [[Number.NaN, 0, 0], [0, Infinity, 0], [0, 0], undefined, 'origin']) {
+    assert.throws(() => skyOpenness(parts, point), /skyOpenness point/, `point ${point}`);
+  }
 });

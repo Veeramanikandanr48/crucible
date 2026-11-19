@@ -37,7 +37,7 @@ Spume's README lists inflows, obstacles, outflow boxes and every solver option.
 ## Loading
 
 `loadSpumeCache(source)` accepts a folder URL or an `async (fileName) => ArrayBuffer | null` reader, so the same cache loads from a server, from disk in Node or from a dropped folder.
-It validates `meta.json`, reads every frame file and keeps frames int16-packed until they are played, which is about a fifth of the decoded size.
+It validates `meta.json`, reads every frame file and keeps frames int16-packed until they are played, which is about a fifth of the decoded size. Each `spray.index` entry must be two whole numbers, `[first, count]`.
 Caches from Spume 0.1 have no `spray_kinds.bin`; their points count as spray.
 
 The frame files are not general glTF. Positions are int16 spread over each frame's own min..max box, so standard loaders, including `crucible/addons/gltf`, read them at the wrong scale. Use `decodeSpumeFrame(bytes)` for one frame: it returns `{ positions, normals, indices }` as `Float32Array`, `Float32Array` and `Uint32Array` in metres.
