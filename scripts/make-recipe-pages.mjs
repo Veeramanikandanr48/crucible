@@ -5,16 +5,10 @@
 import { writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { beforeSource, RECIPES, recipeSource } from './recipe-catalog.mjs';
+import { renderSiteNav } from './site-nav.mjs';
 
 const siteFolder = fileURLToPath(new URL('../site/', import.meta.url));
 const ORIGIN = 'https://crucible.codepawl.com';
-
-const NAVIGATION_LINKS = [
-  { href: '/docs.html', label: 'Docs' },
-  { href: '/recipes.html', label: 'Recipes' },
-  { href: '/marketplace.html', label: 'Marketplace' },
-  { href: '/changelog.html', label: 'Changelog' },
-];
 
 export function pageFileName(slug) {
   return `recipe-${slug}.html`;
@@ -25,9 +19,8 @@ export function escapeHtml(text) {
 }
 
 function navigation(currentHref) {
-  const links = NAVIGATION_LINKS.map(link => `<a href="${link.href}"${link.href === currentHref ? ' aria-current="page"' : ''}>${link.label}</a>`).join('');
   return `<a class="brand" href="/" aria-label="Crucible home">Crucible</a>
-      <nav aria-label="Library">${links}</nav>
+      ${renderSiteNav(currentHref)}
       <a class="site-nav-cta" href="https://github.com/codepawl/crucible" aria-label="GitHub"><span class="package-logo package-logo-github" aria-hidden="true"></span><span class="site-nav-cta-label">GitHub</span></a>`;
 }
 
@@ -37,6 +30,7 @@ function pageShell({ title, description, path, currentHref, body }) {
   <head>
     <meta charset="UTF-8" /><script>try{var saved=localStorage.getItem("crucible-color");if(saved==="light"||saved==="dark")document.documentElement.dataset.color=saved}catch(error){}</script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f8f7f1" />
     <meta name="description" content="${escapeHtml(description)}" />
     <link rel="canonical" href="${ORIGIN}${path}" />
     <title>${escapeHtml(title)} · Crucible</title>
@@ -92,7 +86,7 @@ ${mediaSection(recipe)}
       <div class="recipe-why">${whyLines}</div>
 ${blocks.join('\n')}
       <p class="recipe-file"><a href="/recipes/${recipe.slug}.json" download>Download ${recipe.slug}.json</a><span>Paste it into <code>scene_create</code> as <code>recipe</code>.</span></p>`;
-  return pageShell({ title: recipe.title, description: recipe.summary, path, currentHref: '/recipes.html', body });
+  return pageShell({ title: recipe.title, description: recipe.summary, path, currentHref: './recipes.html', body });
 }
 
 export function renderIndexPage() {
@@ -105,7 +99,7 @@ export function renderIndexPage() {
       <div class="recipe-list">
 ${cards}
       </div>`;
-  return pageShell({ title: 'Recipes', description: 'One rendering technique per page: a before and after picture, why it matters and the scene code that made it.', path: '/recipes.html', currentHref: '/recipes.html', body });
+  return pageShell({ title: 'Recipes', description: 'One rendering technique per page: a before and after picture, why it matters and the scene code that made it.', path: '/recipes.html', currentHref: './recipes.html', body });
 }
 
 export function renderRecipePages() {

@@ -53,7 +53,7 @@ test('the dolly zoom keeps the figure the same size from FOV 75 to FOV 20', () =
 });
 
 test('the site navigation and the build list the recipe pages', () => {
-  for (const page of ['docs', 'changelog', 'marketplace', 'index', 'showcase']) assert.ok(read(`site/${page}.html`).includes('<a href="/recipes.html">Recipes</a>'), `${page} nav`);
+  for (const page of ['docs', 'changelog', 'marketplace', 'index', 'showcase']) assert.ok(read(`site/${page}.html`).includes('<a href="./recipes.html">Recipes</a>'), `${page} nav`);
   const viteConfig = read('vite.config.js');
   for (const fileName of Object.keys(renderRecipePages())) assert.ok(viteConfig.includes(`site/${fileName}`), `${fileName} missing from vite.config.js input`);
 });

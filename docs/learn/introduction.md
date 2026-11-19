@@ -65,11 +65,13 @@ To move something, change the part and call `renderer.updateParts(parts)`. Then 
 
 ## What Crucible is not
 
-Crucible does not copy the three.js API. If you know three.js, [If you know three.js](#if-you-know-three-js) maps its common calls to Crucible, and the optional `three-compat` addon builds Crucible parts from the common three.js names. It supports a subset, so code that uses other three.js names needs changes. Crucible also has no mouse editor like Blender. You build scenes in code, or an AI agent builds them through the MCP server.
+Crucible does not copy the three.js API. If you know three.js, [If you know three.js](#if-you-know-three-js) maps its common calls to Crucible, and the optional `three-compat` addon builds Crucible parts from the common three.js names. It supports a subset, so code that uses other three.js names needs changes. Crucible is not a general modeling package like Blender. You build scenes in code, an AI agent builds them through MCP, or you shape the same recipe by hand in [Web Studio](#studio).
+
+![Web Studio selected part with a transform gizmo](https://raw.githubusercontent.com/codepawl/crucible/evidence-pr-2191/studio-node.png)
 
 ## How these docs are organized
 
-- **Start here** takes you from an empty folder to an animated scene. Read these three pages in order.
+- **Start here** takes you from an empty folder to an animated scene, then shows the browser Studio. Read these pages in order.
 - **Build a scene**, **Worlds** and **Animate and interact** explain one subject each, with the options and limits.
 - **Reference and workflows** lists the renderer options, the exports, the memory rules and the work with AI agents.
 
