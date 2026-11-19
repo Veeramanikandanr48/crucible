@@ -19,7 +19,7 @@ const { geometry } = extractRender(back);   // positions, normals, uvs, indices 
 
 ## MeshData
 
-`createMeshData({ positions, faceOffsets, cornerVertices, attributes })` returns a frozen mesh in the layout Blender
+`createMeshData({ positions, faceOffsets, cornerVertices, attributes })` (attribute keys: `point`, `edge`, `face`, `corner`; `edgeVertices` and `cornerEdges` go together) returns a frozen mesh in the layout Blender
 uses for evaluated meshes:
 
 | Field | Type | Meaning |

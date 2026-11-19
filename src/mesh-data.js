@@ -41,6 +41,13 @@ function validateAttribute(name, attribute, expectedCount) {
   return Object.freeze({ data, size });
 }
 
+function validateAttributeDomains(attributes) {
+  if (!attributes || typeof attributes !== 'object') throw new TypeError(`attributes must be an object.`);
+  for (const domain of Object.keys(attributes)) {
+    if (!DOMAINS.includes(domain)) throw new RangeError(`Unknown attribute domain ${domain}; use ${DOMAINS.join(', ')}.`);
+  }
+}
+
 function validateFaces(vertexCount, faceOffsets, cornerVertices) {
   if (!(faceOffsets instanceof Uint32Array) || faceOffsets.length < 2 || faceOffsets[0] !== 0) {
     throw new TypeError('faceOffsets must be a Uint32Array that starts at 0 and has faceCount + 1 entries.');
@@ -128,7 +135,9 @@ export function deriveEdges(vertexCount, faceOffsets, cornerVertices) {
  * attributes: { point: { name: { data, size } }, edge: {...}, face: {...}, corner: {...} }.
  * Edge attributes are only accepted together with edgeVertices and cornerEdges, because derived edge order is internal.
  */
-export function createMeshData({ positions, faceOffsets, cornerVertices, edgeVertices, cornerEdges, attributes = {} }) {
+export function createMeshData({ positions, faceOffsets, cornerVertices, edgeVertices, cornerEdges, attributes = {} } = {}) {
+  validateAttributeDomains(attributes);
+  if (Boolean(edgeVertices) !== Boolean(cornerEdges)) throw new TypeError('Pass edgeVertices with cornerEdges, or neither.');
   if (!(positions instanceof Float32Array) || positions.length % 3 !== 0 || positions.length === 0) {
     throw new TypeError('positions must be a nonempty Float32Array of XYZ triples.');
   }
