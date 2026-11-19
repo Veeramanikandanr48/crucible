@@ -119,3 +119,5 @@ runtime.replaceSystem('player', createCharacterController({ input, position: [..
 Speeds up to 100, acceleration up to 1000, gravity up to 200, 256 obstacles, 64 sub-steps per move (`PLAYER_LIMITS`). Errors name the option and say what to pass, for example `createCharacterController walkSpeed must be a number from 0 to 100, got -1.`
 
 A runnable sample is `bench/runtime-loop/index.html`: WASD walks a box over a wall and steps, Shift runs, Space jumps, and the buttons switch between a fixed view, follow, first-person and top-down cameras.
+
+A NaN or Infinity axis sample counts as a released axis, and a camera rig waits out a step in which its subject reports a non-finite position. `teleport` checks position and yaw before it moves anything.
