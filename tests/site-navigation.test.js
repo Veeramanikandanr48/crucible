@@ -18,6 +18,7 @@ const standaloneThemeColors = {
   'motion.html': '#171c20',
   'film.html': '#080909',
   'view2d.html': '#1e2327',
+  'assets.html': '#1e2327',
 };
 
 function currentHref(fileName) {
