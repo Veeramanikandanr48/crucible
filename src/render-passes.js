@@ -71,6 +71,18 @@ function createPassTarget(context, width, height, float = false, floatDepth = fa
   return { texture, depth, framebuffer, float, floatDepth };
 }
 
+function requireVelocityInput(name, valid, expected) {
+  if (!valid) throw new RangeError(`${name} must be ${expected}.`);
+}
+
+// Only the velocity pass reads the earlier camera and the object motion; a bad one is named up front, not inside gl-matrix or the upload.
+function requireVelocityInputs({ previousViewProjection, previousCamera, objectMotion }) {
+  const finite = (list, length) => list?.length === length && Array.from(list).every(Number.isFinite);
+  if (previousViewProjection !== undefined) requireVelocityInput('previousViewProjection', finite(previousViewProjection, 16), '16 finite numbers');
+  else if (previousCamera !== undefined) requireVelocityInput('previousCamera.eye', finite(previousCamera?.eye, 3), '3 finite numbers');
+  if (objectMotion?.matrices !== undefined) requireVelocityInput('objectMotion.matrices', objectMotion.matrices instanceof Float32Array, 'a Float32Array');
+}
+
 /**
  * Lets `renderer.render({ ...camera, pass })` draw one pass. Passes draw without multisampling into their own target,
  * so object IDs and normals stay exact at silhouettes. Only opaque and cutout parts appear (plus transmissive parts in
@@ -127,6 +139,7 @@ export function installRenderPasses(renderer) {
     const mode = RENDER_PASS_MODES[COMPOSED_PASSES[frame.pass] ?? frame.pass];
     if (!mode) throw new RangeError(`Unknown render pass: ${frame.pass}. Use ${[...Object.keys(RENDER_PASS_MODES), ...Object.keys(COMPOSED_PASSES)].join(', ')}.`);
     if (renderer.benchmark) throw new Error('Render passes are unavailable in benchmark mode.');
+    if (mode === RENDER_PASS_MODES.velocity) requireVelocityInputs(frame);
     const depthRange = frame.passDepthRange ?? 1;
     if (!Number.isFinite(depthRange) || depthRange <= 0) throw new RangeError('Pass depth range must be positive and finite.');
     const context = renderer.context;

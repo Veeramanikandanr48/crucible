@@ -67,6 +67,9 @@ export function sampleWorldMatrices(parts) {
  * A part with no matrix in `previous` or one that did not move keeps the identity, and so does a pixel of no object.
  */
 export function packObjectMotion(renderer, current, previous) {
+  for (const [name, matrices] of [['current', current], ['previous', previous]]) {
+    if (!(matrices instanceof Map)) throw new TypeError(`${name} must be a Map from sampleWorldMatrices(parts).`);
+  }
   const drawnParts = renderer.batches.filter(batch => renderer.drawsInOpaqueLoop(batch)).flatMap(batch => batch.parts);
   const rows = Math.max(1, Math.ceil(drawnParts.length / MATRICES_PER_ROW));
   const matrices = new Float32Array(TEXTURE_WIDTH * rows * 4);
