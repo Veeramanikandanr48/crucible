@@ -23,6 +23,13 @@ function buildUpDirections() {
   return directions;
 }
 
+// A NaN or infinite position would turn every visibility of the crown into NaN without a word.
+function requireVertexPositions(positions) {
+  if (!(positions?.length > 0) || positions.length % 3 !== 0 || !Array.prototype.every.call(positions, Number.isFinite)) {
+    throw new RangeError('Pass at least one vertex position (a multiple of 3 finite floats).');
+  }
+}
+
 function boundsOfPositions(positions) {
   const minimum = [Infinity, Infinity, Infinity];
   const maximum = [-Infinity, -Infinity, -Infinity];
@@ -42,9 +49,7 @@ function boundsOfPositions(positions) {
  * put them in cells that looked solid and left the far crown near black.
  */
 export function createCrownSkyField(positions) {
-  if (positions.length === 0 || positions.length % 3 !== 0) {
-    throw new RangeError('Pass at least one vertex position (a multiple of 3 floats).');
-  }
+  requireVertexPositions(positions);
   const { minimum, maximum } = boundsOfPositions(positions);
   const longest = Math.max(maximum[0] - minimum[0], maximum[1] - minimum[1], maximum[2] - minimum[2], 1e-6);
   const cell = longest / GRID_CELLS_ALONG_LONGEST_SIDE;
@@ -97,6 +102,10 @@ export function createCrownSkyField(positions) {
 // How much leaf each vertex stands for: a third of the area of every triangle it belongs to. A level of large clumps has few
 // vertices that each stand for a lot of leaf, so a plain mean over vertices does not say how much sky the leaf sees.
 export function vertexCoverage(positions, indices) {
+  const vertexCount = positions.length / 3;
+  if (indices.length % 3 !== 0 || !Array.prototype.every.call(indices, index => index >= 0 && index < vertexCount)) {
+    throw new RangeError(`Pass triangle indices below ${vertexCount} (a multiple of 3).`);
+  }
   const coverage = new Float32Array(positions.length / 3);
   for (let corner = 0; corner < indices.length; corner += 3) {
     const [first, second, third] = [indices[corner], indices[corner + 1], indices[corner + 2]];
