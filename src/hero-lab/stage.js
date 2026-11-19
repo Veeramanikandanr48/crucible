@@ -58,6 +58,7 @@ export function startLoop(stage, draw) {
   let lastTimestamp = 0;
   let visible = true;
   let firstDrawn = false;
+  let stopped = false;
 
   const step = timestamp => {
     frameRequest = 0;
@@ -80,14 +81,25 @@ export function startLoop(stage, draw) {
   };
 
   function wake() {
-    if (!frameRequest && visible && !document.hidden) frameRequest = requestAnimationFrame(step);
+    if (!stopped && !frameRequest && visible && !document.hidden) frameRequest = requestAnimationFrame(step);
   }
 
-  new IntersectionObserver(entries => {
-    visible = entries[0].isIntersecting;
+  // One callback can carry several entries for the stage, oldest first: the last one is where the stage is now.
+  const observer = new IntersectionObserver(entries => {
+    visible = entries[entries.length - 1].isIntersecting;
     wake();
-  }).observe(stage);
+  });
+  observer.observe(stage);
   document.addEventListener('visibilitychange', wake);
+
+  function stop() {
+    stopped = true;
+    observer.disconnect();
+    document.removeEventListener('visibilitychange', wake);
+    if (frameRequest) cancelAnimationFrame(frameRequest);
+    frameRequest = 0;
+  }
+
   wake();
-  return { wake };
+  return { wake, stop };
 }

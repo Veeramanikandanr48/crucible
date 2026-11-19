@@ -11,7 +11,15 @@ function blendVectors(before, from, to, after, amount) {
   return from.map((value, axis) => catmullRom(before[axis], value, to[axis], after[axis], amount));
 }
 
+function requireRoute(keys) {
+  if (!Array.isArray(keys) || keys.length < 2) throw new Error('Camera spline needs at least 2 keys; pass keys with `at` rising from 0 to 1');
+  keys.forEach((key, index) => {
+    if (index > 0 && !(key.at > keys[index - 1].at)) throw new Error(`Camera key ${index} must have an "at" above the key before it; pass rising values`);
+  });
+}
+
 export function createCameraSpline(keys) {
+  requireRoute(keys);
   return function sample(progress) {
     const bounded = Math.max(0, Math.min(1, progress));
     let index = 0;
