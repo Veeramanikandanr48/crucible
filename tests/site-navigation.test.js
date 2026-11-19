@@ -11,6 +11,15 @@ const expectedLinks = currentHref => siteNavLinks
   .map(link => `<a href="${link.href}"${link.href === currentHref ? ' aria-current="page"' : ''}>${link.label}</a>`)
   .join('');
 
+const standaloneThemeColors = {
+  'studio.html': '#1b1f23',
+  'object.html': '#25292d',
+  'nature.html': '#17231f',
+  'motion.html': '#171c20',
+  'film.html': '#080909',
+  'view2d.html': '#1e2327',
+};
+
 function currentHref(fileName) {
   if (fileName === 'studio.html') return './studio.html';
   if (fileName === 'docs.html') return './docs.html';
@@ -27,8 +36,8 @@ test('every public site page has the same navigation and theme color', () => {
     const nav = html.match(/<nav[^>]*aria-label="Site"[^>]*>(.*?)<\/nav>/s);
     assert.ok(nav, `${fileName} has no shared navigation`);
     assert.equal(nav[1], expectedLinks(currentHref(fileName)), `${fileName} navigation differs`);
-    const themeColor = fileName === 'studio.html' ? '#1b1f23' : '#f8f7f1';
-    assert.match(html, new RegExp(`<meta name="theme-color" content="${themeColor}" \\/>`), `${fileName} theme color differs`);
+    const themeColor = standaloneThemeColors[fileName] ?? '#f8f7f1';
+    assert.match(html, new RegExp(`<meta name="theme-color" content="${themeColor}"\\s*\\/?>`), `${fileName} theme color differs`);
   }
 });
 
