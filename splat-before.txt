@@ -1,0 +1,2 @@
+renderer failure: A renderer draws at most 3 layer textures and none beside splat layers, got .
+gl.getError after the frame: 0
