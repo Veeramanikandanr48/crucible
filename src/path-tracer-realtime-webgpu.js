@@ -106,12 +106,10 @@ export async function createWebGpuRealtimeTracer(scene, resolved, suppliedCanvas
   // tells the denoiser where each part was (path-tracer-reprojection.js, partMotionTable).
   const loadScene = async (parts, environment, motion = null) => {
     const keepHistory = motion !== null;
-    pendingMotion = motion;
-    currentParts = parts;
-    currentEnvironment = environment;
-    traceScene = await buildTraceSceneForDevice(parts, environment, webGpuTracer);
-    refuseLocalVolumes(traceScene, 'the WebGPU realtime path tracer');
-    const next = await webGpuTracer.prepareRealtimeKernel(traceScene, options, REALTIME_KERNEL_PIECES);
+    // The scene state changes only once the new kernel is in place, so a failed update leaves the previous scene current.
+    const nextTraceScene = await buildTraceSceneForDevice(parts, environment, webGpuTracer);
+    refuseLocalVolumes(nextTraceScene, 'the WebGPU realtime path tracer');
+    const next = await webGpuTracer.prepareRealtimeKernel(nextTraceScene, options, REALTIME_KERNEL_PIECES);
     reportDeviceErrors(next.device);
     try {
       if (!traced) await createFirstTimeResources(next.device);
@@ -125,6 +123,10 @@ export async function createWebGpuRealtimeTracer(scene, resolved, suppliedCanvas
     kernel = next;
     device = next.device;
     previousKernel?.uploaded.buffers.forEach(buffer => buffer.destroy());
+    traceScene = nextTraceScene;
+    currentParts = parts;
+    currentEnvironment = environment;
+    pendingMotion = motion;
     cellSizes = cacheCellSizes(traceScene, cacheCellSize);
     if (!keepHistory) {
       view = null;

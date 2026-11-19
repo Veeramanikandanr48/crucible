@@ -13,6 +13,7 @@ globalThis.GPUMapMode = { READ: 1 };
 
 const liveBuffers = new Set();
 const failures = { bindGroupAfter: Infinity, bindGroupCalls: 0 };
+const writtenLabels = [];
 
 function createFakeBuffer(descriptor) {
   const buffer = {
@@ -47,7 +48,7 @@ const fakeDevice = {
     copyBufferToBuffer() {},
     finish: () => ({}),
   }),
-  queue: { writeBuffer() {}, submit() {}, onSubmittedWorkDone: async () => {} },
+  queue: { writeBuffer(buffer) { writtenLabels.push(buffer.label); }, submit() {}, onSubmittedWorkDone: async () => {} },
 };
 
 const fakeAdapter = {
@@ -103,4 +104,21 @@ test('a failed scene update keeps the previous kernel working and frees the new 
   assert.doesNotThrow(() => tracer.frame(camera));
   tracer.dispose();
   assert.equal(liveBuffers.size, 0);
+});
+
+test('a failed scene update leaves the previous scene current, so a later move is still followed', async () => {
+  resetFailures();
+  const tracer = await createWebGpuRealtimeTracer(scene, resolved, fakeCanvas);
+  tracer.frame(camera);
+
+  resetFailures(0);
+  await assert.rejects(() => tracer.update({ parts: [scene.parts[0], { ...scene.parts[0], name: 'second' }] }), /bind group failed/);
+
+  resetFailures();
+  const moved = { ...scene.parts[0], matrix: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.5, 0, 0, 1]) };
+  await tracer.update({ parts: [moved] });
+  writtenLabels.length = 0;
+  tracer.frame(camera);
+  assert.ok(writtenLabels.includes('part motion'), 'the moved part is compared with the scene before the failed update');
+  tracer.dispose();
 });
