@@ -47,6 +47,9 @@ export function decodePfm(bytes, width, height) {
     throw new Error('OIDN wrote a PFM that is not the expected little-endian colour image.');
   }
   const rowFloats = width * 3;
+  if (bytes.length - cursor < rowFloats * height * 4) {
+    throw new Error(`OIDN wrote a PFM with ${bytes.length - cursor} bytes of pixels, but ${width} x ${height} need ${rowFloats * height * 4}.`);
+  }
   const pixels = new Float32Array(rowFloats * height);
   for (let row = 0; row < height; row++) {
     const start = bytes.byteOffset + cursor + row * rowFloats * 4;

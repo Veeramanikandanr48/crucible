@@ -271,6 +271,9 @@ function instanceCount(object, state) {
 function importMesh(object, limits, state) {
   checkMesh(object, state);
   const materials = Array.isArray(object.material) ? object.material : [object.material];
+  if (materials.some(material => !material || typeof material !== 'object')) {
+    throw new ThreeBridgeError(`${describe(object)} has no material. Assign a MeshStandardMaterial, or pass skipUnsupported: true to leave the object out.`);
+  }
   const groups = Array.isArray(object.material) ? object.geometry.groups : [{ start: 0, count: Infinity, materialIndex: 0 }];
   if (!groups?.length) {
     throw new ThreeBridgeError(`${describe(object)} has a material array but geometry.groups is empty. Add groups with geometry.addGroup(start, count, materialIndex), or pass one material.`);
@@ -413,7 +416,7 @@ function buildTexture(THREE, descriptor, label, state) {
   return state.textures.get(descriptor);
 }
 
-function buildMaterial(THREE, source, label, state) {
+function buildMaterial(THREE, source, label, state, vertexColors) {
   const usesLayers = LAYER_FIELDS.some(([, field]) => source[field] !== undefined);
   const MaterialClass = usesLayers && typeof THREE.MeshPhysicalMaterial === 'function' ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial;
   if (usesLayers && MaterialClass === THREE.MeshStandardMaterial) state.warnings.push(`${label}: the THREE namespace has no MeshPhysicalMaterial, so clearcoat, transmission and ior are dropped.`);
@@ -448,6 +451,7 @@ function buildMaterial(THREE, source, label, state) {
   }
   if (source.opacity !== undefined) material.opacity = source.opacity;
   if (source.doubleSided) material.side = THREE.DoubleSide ?? DOUBLE_SIDE;
+  if (vertexColors) material.vertexColors = true;
   return material;
 }
 
@@ -469,14 +473,18 @@ export function toThreeObject(parts, THREE, options = {}) {
   const state = { warnings: [], textures: new Map() };
   const geometries = new Map();
   const materials = new Map();
+  const coloredMaterials = new Map();
   const group = new THREE.Group();
   group.name = name;
   parts.forEach((part, index) => {
     const label = checkPart(part, index, limits);
     if (part.skin || part.morph) state.warnings.push(`${label}: skin and morph targets are not exported to three.js objects.`);
     if (!geometries.has(part.geometry)) geometries.set(part.geometry, buildGeometry(THREE, part.geometry));
-    if (!materials.has(part.material)) materials.set(part.material, buildMaterial(THREE, part.material, label, state));
-    const mesh = new THREE.Mesh(geometries.get(part.geometry), materials.get(part.material));
+    // three.js reads the colour attribute only when the material asks for it, and one material may serve parts with and without colours.
+    const vertexColors = Boolean(part.geometry.colors);
+    const materialsOfKind = vertexColors ? coloredMaterials : materials;
+    if (!materialsOfKind.has(part.material)) materialsOfKind.set(part.material, buildMaterial(THREE, part.material, label, state, vertexColors));
+    const mesh = new THREE.Mesh(geometries.get(part.geometry), materialsOfKind.get(part.material));
     mesh.name = part.name ?? `part-${index}`;
     mesh.matrixAutoUpdate = false;
     mesh.matrix.fromArray(Array.from(part.matrix));
